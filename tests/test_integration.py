@@ -1,0 +1,280 @@
+"""Real window, filesystem signals, key dispatch, shells and user packaging."""
+import configparser
+import os
+from pathlib import Path
+import shutil
+import signal
+import subprocess
+import tempfile
+import time
+import unittest
+import warnings
+from unittest.mock import patch
+
+import gi
+
+gi.require_version('Gtk', '3.0')
+gi.require_version('Gdk', '3.0')
+gi.require_version('Vte', '2.91')
+from gi.repository import Gdk, Gio, GLib, Gtk, Vte
+
+from idgent.window import MainWindow
+
+
+def setUpModule():
+    warnings.filterwarnings("ignore", category=DeprecationWarning, module=r"gi\.events")
+
+
+def poll(predicate, timeout=5):
+    deadline = time.monotonic() + timeout
+    context = GLib.MainContext.default()
+    while time.monotonic() < deadline:
+        while context.pending():
+            context.iteration(False)
+        if predicate():
+            return True
+        time.sleep(.01)
+    return bool(predicate())
+
+
+def alive(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+class WindowIntegrationTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.application = Gtk.Application.get_default() or Gtk.Application(
+            application_id="dev.idgent.Tests",
+                                          flags=Gio.ApplicationFlags.NON_UNIQUE)
+        if not cls.application.get_is_registered():
+            assert cls.application.register(None)
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory(prefix='idgent-integration-')
+        self.addCleanup(self.directory.cleanup)
+        self.root = Path(self.directory.name)
+        # A predictable shell avoids user bash startup files and prompt hooks.
+        self.environment = patch.dict(os.environ, {'SHELL': '/bin/sh', 'PS1': '$ '})
+        self.environment.start()
+        self.addCleanup(self.environment.stop)
+        self.window = MainWindow(self.application, str(self.root))
+        self.pids = set()
+        self.addCleanup(self.destroy_window)
+        self.window.show_all()
+        self.spawn(self.window.terminal._tabs[0])
+
+    def spawn(self, tab):
+        self.assertTrue(poll(lambda: tab.pid is not None), 'shell did not spawn')
+        self.pids.add(tab.pid)
+        self.assertTrue(poll(lambda: "$" in self.text(tab)), "shell prompt did not appear")
+        return tab
+
+    def destroy_window(self):
+        self.window.destroy()
+        stopped = poll(lambda: all(not alive(pid) for pid in self.pids))
+        for pid in self.pids:
+            if alive(pid):
+                os.kill(pid, signal.SIGKILL)
+        self.assertTrue(stopped, 'shell survived window destruction')
+
+    def open_file(self, name='file.py', content='original\n'):
+        path = self.root / name
+        path.write_text(content)
+        self.window.explorer.refresh()
+        self.window.explorer.tree.expand_row(Gtk.TreePath.new_from_string('0'), False)
+        row = self.window.explorer._find(str(path))
+        self.assertIsNotNone(row)
+        tree = self.window.explorer.tree
+        tree.row_activated(self.window.explorer.store.get_path(row), tree.get_column(0))
+        return path, self.window.editor._current()
+
+    def test_explorer_activation_edit_and_save(self):
+        path, tab = self.open_file()
+        self.assertEqual(tab.path, str(path))
+        tab.buffer.set_text('edited\n')
+        self.assertTrue(self.window.editor.save_current())
+        self.assertEqual(path.read_text(), 'edited\n')
+        self.assertFalse(self.window.editor.has_unsaved())
+
+    def test_explorer_mutations_retarget_and_mark_deleted(self):
+        explorer, editor = self.window.explorer, self.window.editor
+        folder = explorer._create(str(self.root), 'folder', True)
+        path = explorer._create(folder, 'created.py')
+        self.assertTrue(Path(path).is_file())
+        explorer.emit('file-activated', path)
+        tab = editor._current()
+        path = explorer._rename(path, 'renamed.py')
+        self.assertEqual(tab.path, path)
+        folder = explorer._rename(folder, 'renamed-folder')
+        self.assertEqual(tab.path, str(Path(folder) / 'renamed.py'))
+        tab.buffer.set_text('after rename\n')
+        self.assertTrue(editor.save_current())
+        self.assertEqual(Path(tab.path).read_text(), 'after rename\n')
+        explorer._delete(tab.path)
+        self.assertTrue(tab.deleted)
+        self.assertTrue(tab.buffer.get_modified())
+        other = explorer._create(folder, 'other.py')
+        explorer.emit('file-activated', other)
+        other_tab = editor._current()
+        explorer._delete(folder)
+        self.assertTrue(other_tab.deleted)
+        self.assertTrue(other_tab.buffer.get_modified())
+        self.assertIn('(deleted)', other_tab.label.get_text())
+        self.assertFalse(Path(folder).exists())
+
+    @staticmethod
+    def text(tab):
+        return tab.terminal.get_text_format(Vte.Format.TEXT) or ''
+
+    def test_dock_moves_keep_live_shell(self):
+        panel = self.window.terminal
+        tab = panel._tabs[0]
+        pid = tab.pid
+        for expected in ('right', 'bottom'):
+            self.window.toggle_terminal_position()
+            self.assertEqual(self.window.terminal_position, expected)
+            self.assertIs(self.window.terminal, panel)
+            self.assertIs(panel._tabs[0], tab)
+            self.assertEqual(tab.pid, pid)
+        tab.terminal.feed_child(b'echo integ_ok\n')
+        self.assertTrue(poll(lambda: 'integ_ok' in self.text(tab).splitlines()), repr(self.text(tab)))
+        self.assertTrue(alive(pid))
+
+    def test_folder_change_only_affects_new_shells(self):
+        old = self.window.terminal._tabs[0]
+        new_root = self.root / 'new-project'
+        new_root.mkdir()
+        self.window.set_root(str(new_root))
+        self.assertEqual(self.window.explorer.root, str(new_root))
+        self.assertEqual(self.window.get_title(), 'IDgent - new-project')
+        self.window.terminal.new_terminal()
+        new = self.spawn(self.window.terminal._tabs[-1])
+        for tab, expected in ((old, self.root), (new, new_root)):
+            tab.terminal.feed_child(b'pwd\n')
+            self.assertTrue(poll(lambda: str(expected) in self.text(tab).splitlines()), repr(self.text(tab)))
+
+    def test_unsaved_quit_decisions(self):
+        path, tab = self.open_file()
+        self.assertFalse(self.window._on_delete(self.window, None))
+        tab.buffer.set_text('unsaved\n')
+        with patch.object(self.window, '_ask_quit', return_value=Gtk.ResponseType.CANCEL):
+            self.assertTrue(self.window._on_delete(self.window, None))
+        with patch.object(self.window, '_ask_quit', return_value=Gtk.ResponseType.REJECT):
+            self.assertFalse(self.window._on_delete(self.window, None))
+            self.assertTrue(self.window.editor.has_unsaved())
+        with patch.object(self.window, '_ask_quit', return_value=Gtk.ResponseType.ACCEPT):
+            with patch.object(self.window.editor, 'save_all', return_value=False):
+                self.assertTrue(self.window._on_delete(self.window, None))
+            self.assertFalse(self.window._on_delete(self.window, None))
+        self.assertEqual(path.read_text(), 'unsaved\n')
+
+    def accelerate(self, shortcut):
+        key, modifiers = Gtk.accelerator_parse(shortcut)
+        self.assertTrue(Gtk.accel_groups_activate(self.window, key, modifiers), shortcut)
+
+    def key(self, shortcut):
+        key, modifiers = Gtk.accelerator_parse(shortcut)
+        event = Gdk.Event.new(Gdk.EventType.KEY_PRESS)
+        event.window = self.window.get_window()
+        event.set_device(Gdk.Display.get_default().get_default_seat().get_keyboard())
+        event.send_event = True
+        event.time = Gdk.CURRENT_TIME
+        event.keyval, event.state = key, modifiers
+        return self.window.emit('key-press-event', event)
+
+    def test_readme_menu_actions_and_accelerators(self):
+        self.accelerate('<Control>grave')
+        self.assertFalse(self.window.terminal.get_visible())
+        self.accelerate('<Control>grave')
+        self.assertTrue(self.window.terminal.get_visible())
+        self.accelerate('<Control>b')
+        self.assertFalse(self.window.explorer.get_visible())
+        self.accelerate('<Control>b')
+        self.assertTrue(self.window.explorer.get_visible())
+        self.window.move_terminal_item.activate()
+        self.assertEqual(self.window.terminal_position, 'right')
+        self.window.move_terminal_item.activate()
+        self.assertEqual(self.window.terminal_position, 'bottom')
+        path, tab = self.open_file()
+        tab.buffer.set_text('saved through menu\n')
+        self.accelerate('<Control>s')
+        self.assertEqual(path.read_text(), 'saved through menu\n')
+        tab.buffer.set_text('saved all\n')
+        self.accelerate('<Control><Shift>s')
+        self.assertEqual(path.read_text(), 'saved all\n')
+        tab.buffer.set_text('quit cancelled\n')
+        with patch.object(self.window, '_ask_quit', return_value=Gtk.ResponseType.CANCEL) as ask:
+            self.accelerate('<Control>q')
+            self.assertTrue(poll(lambda: ask.called))
+            self.assertTrue(self.window.get_visible())
+
+    def test_editor_focus_receives_commands_before_menu(self):
+        path, tab = self.open_file(content='value = 1\n')
+        # Finish initial terminal focus idles before assigning editor focus.
+        self.assertTrue(poll(lambda: self.window.terminal._tabs[0].pid is not None))
+        tab.view.grab_focus()
+        self.assertIs(self.window.get_focus(), tab.view)
+        tab.buffer.set_text('value = 2\n')
+        seen = []
+        handler = tab.view.connect('key-press-event', lambda _, e: seen.append(e.keyval) or False)
+        with patch.object(self.window.editor, 'save_current', wraps=self.window.editor.save_current) as save:
+            self.assertTrue(self.key('<Control>s'))
+            save.assert_called_once_with()
+        tab.view.disconnect(handler)
+        self.assertIn(Gdk.KEY_s, seen)
+        self.assertEqual(path.read_text(), 'value = 2\n')
+        tab.buffer.place_cursor(tab.buffer.get_start_iter())
+        self.assertTrue(self.key('<Control>slash'))
+        self.assertEqual(tab.buffer.get_text(*tab.buffer.get_bounds(), True), '# value = 2\n')
+        self.window.editor.save_current()
+        self.assertTrue(self.key('<Control>w'))
+        self.assertEqual(self.window.editor.tabs, [])
+
+
+class PackagingTests(unittest.TestCase):
+    def test_desktop_and_isolated_install_uninstall(self):
+        repo = Path(__file__).resolve().parents[1]
+        desktop = repo / 'packaging/idgent.desktop'
+        validator = shutil.which('desktop-file-validate')
+        if validator:
+            subprocess.run([validator, str(desktop)], check=True)
+        config = configparser.ConfigParser(interpolation=None)
+        config.read(desktop)
+        entry = config['Desktop Entry']
+        for key, value in {'Name': 'IDgent', 'Exec': 'idgent', 'Icon': 'idgent',
+                           'Terminal': 'false', 'Type': 'Application',
+                           'Categories': 'Development;IDE;TextEditor;'}.items():
+            self.assertEqual(entry[key], value)
+        self.assertTrue(entry['Comment'])
+        with tempfile.TemporaryDirectory(prefix='idgent-home-') as home:
+            env = dict(os.environ, HOME=home)
+            script = ['bash', str(repo / 'packaging/install.sh')]
+            launcher = Path(home) / '.local/bin/idgent'
+            assets = [launcher, Path(home) / '.local/share/applications/idgent.desktop',
+                      Path(home) / '.local/share/icons/hicolor/scalable/apps/idgent.svg']
+            for _ in range(2):
+                subprocess.run(script, env=env, check=True)
+                self.assertTrue(all(path.is_file() for path in assets))
+            result = subprocess.run([str(launcher), '--help'], env=env, cwd=home,
+                                    capture_output=True, text=True, check=True)
+            self.assertIn('usage:', result.stdout)
+            # A fake python records exact argv and PYTHONPATH without opening GTK.
+            fakebin = Path(home) / 'fakebin'
+            fakebin.mkdir()
+            fake = fakebin / 'python3'
+            fake.write_text('#!/bin/bash\nprintf "%s\\n" "$PYTHONPATH" "$@"\n')
+            fake.chmod(0o755)
+            result = subprocess.run([str(launcher), 'folder with spaces'],
+                                    env=dict(env, PATH=f'{fakebin}:/usr/bin:/bin'),
+                                    capture_output=True, text=True, check=True)
+            lines = result.stdout.splitlines()
+            self.assertEqual(lines[0].split(':')[0], str(repo))
+            self.assertEqual(lines[1:], ['-m', 'idgent', 'folder with spaces'])
+            for _ in range(2):
+                subprocess.run(script + ['--uninstall'], env=env, check=True)
+                self.assertTrue(all(not path.exists() for path in assets))

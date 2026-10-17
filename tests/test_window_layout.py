@@ -1,6 +1,9 @@
 """Window layout and command wiring against real panels."""
 
 from pathlib import Path
+import os
+import signal
+import time
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -8,7 +11,7 @@ from unittest.mock import patch
 import gi
 
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gio, Gtk
+from gi.repository import Gio, GLib, Gtk
 
 from idgent.window import MainWindow
 
@@ -16,16 +19,50 @@ from idgent.window import MainWindow
 class WindowLayoutTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls.application = Gtk.Application(application_id="dev.idgent.LayoutTests",
+        cls.application = Gtk.Application.get_default() or Gtk.Application(
+            application_id="dev.idgent.Tests",
                                           flags=Gio.ApplicationFlags.NON_UNIQUE)
-        cls.application.register(None)
+        if not cls.application.get_is_registered():
+            assert cls.application.register(None)
 
     def setUp(self) -> None:
         self.folder = tempfile.TemporaryDirectory(prefix="idgent-layout-")
         self.addCleanup(self.folder.cleanup)
         self.window = MainWindow(self.application, self.folder.name)
         self.window.show_all()
-        self.addCleanup(self.window.destroy)
+        self.addCleanup(self.destroy_window)
+        self.assertTrue(self.poll(lambda: self.window.terminal._tabs[0].pid is not None))
+        self.shell_pid = self.window.terminal._tabs[0].pid
+
+    @staticmethod
+    def poll(predicate):
+        deadline = time.monotonic() + 5
+        context = GLib.MainContext.default()
+        while time.monotonic() < deadline:
+            while context.pending():
+                context.iteration(False)
+            if predicate():
+                return True
+            time.sleep(.01)
+        return bool(predicate())
+
+    def destroy_window(self):
+        self.window.destroy()
+        pid = getattr(self, "shell_pid", None)
+        if pid is None:
+            return
+
+        def stopped():
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                return True
+            return False
+
+        exited = self.poll(stopped)
+        if not exited:
+            os.kill(pid, signal.SIGKILL)
+        self.assertTrue(exited, "shell survived window destruction")
 
     def test_default_layout_and_title(self) -> None:
         self.assertEqual(self.window.terminal_position, "bottom")
