@@ -20,6 +20,8 @@ HOVER = '#2a2d2e'
 TAB_INACTIVE_BG = '#2d2d2d'
 EDITOR_FOREGROUND = '#d4d4d4'
 EDITOR_SELECTION = '#264f78'
+WARNING = '#cca700'
+LIMIT_TINT = '#7d6f2a'
 
 CSS = f'''
 window, dialog, messagedialog {{ background-color: {EDITOR_BG}; color: {FOREGROUND}; }}
@@ -90,6 +92,24 @@ paned.vertical > separator {{ border-top: 2px solid transparent; border-bottom: 
 .idgent-terminal {{ background: {PANEL_BG}; color: {FOREGROUND}; }}
 .idgent-terminal-sep {{ background: {BORDER}; min-width: 1px; min-height: 1px; border: 0; }}
 .idgent-vte {{ padding: 6px; }}
+.idgent-terminal-bar {{ background: {PANEL_BG}; color: {MUTED}; border: 0;
+    border-bottom: 1px solid {BORDER}; box-shadow: none; min-height: 29px; padding: 0 4px; }}
+.idgent-terminal-bar button {{ background: transparent; color: {MUTED}; border: 0; border-radius: 2px;
+    box-shadow: none; text-shadow: none; min-height: 22px; min-width: 22px; padding: 0; }}
+.idgent-terminal-bar button:hover {{ background: {HOVER}; color: {FOREGROUND}; }}
+.idgent-terminal-chip {{ background: transparent; color: {MUTED}; border: 0;
+    border-bottom: 2px solid transparent; margin: 0 2px 0 0; padding: 0 2px 0 4px;
+    transition: background 120ms ease-in-out, color 120ms ease-in-out; }}
+.idgent-terminal-chip:hover {{ background: {HOVER}; color: {FOREGROUND}; }}
+.idgent-terminal-chip.active {{ color: {FOREGROUND}; border-bottom-color: {ACCENT}; }}
+.idgent-terminal-chip.active button {{ color: {FOREGROUND}; }}
+.idgent-terminal-chip button:hover {{ background: #3a3d3e; }}
+.idgent-terminal-chip .idgent-terminal-chip-label {{ min-width: 0; padding: 0 6px 0 2px; font-size: 12px; }}
+.idgent-terminal-chip .idgent-terminal-chip-label:hover {{ background: transparent; }}
+.idgent-terminal-add {{ margin: 0 2px; }}
+.idgent-terminal-add.limit {{ color: {LIMIT_TINT}; }}
+.idgent-terminal-add.limit:hover {{ color: {WARNING}; }}
+.idgent-terminal-notice {{ color: {WARNING}; font-size: 12px; padding: 0 8px; }}
 '''
 
 _provider = None

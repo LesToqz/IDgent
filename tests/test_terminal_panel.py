@@ -20,7 +20,8 @@ gi.require_version("Gdk", "3.0")
 gi.require_version("Vte", "2.91")
 from gi.repository import Gdk, GLib, Gtk, Vte
 
-from idgent.terminal import TerminalPanel, pick_shell, safe_cwd
+from idgent.terminal import MAX_TERMINALS, TerminalPanel, pick_shell, safe_cwd
+from idgent.terminal_bar import TerminalBar
 
 def setUpModule() -> None:
     # PyGObject emits these Python 3.14 deprecations on every GLib iteration.
@@ -132,6 +133,7 @@ class TerminalPanelTest(unittest.TestCase):
         self.assertTrue(poll(lambda: not alive(pid)))
 
     def test_close_last_emits_once_without_respawn(self):
+        self.panel.ANIMATION_MS = 0
         events = []
         self.panel.connect("last-closed", lambda _: events.append(True))
         pid = self.panel._panes[0].pid
@@ -142,18 +144,22 @@ class TerminalPanelTest(unittest.TestCase):
         self.assertEqual(events, [True])
         self.assertTrue(poll(lambda: not alive(pid)))
 
-    def test_empty_panel_has_no_header_or_notebook(self):
+    def test_empty_panel_has_only_bar_and_no_notebook(self):
         empty = TerminalPanel(self.directory.name, autostart=False)
         self.assertEqual(empty.terminal_count(), 0)
-        self.assertEqual(empty.get_children(), [])
+        bar, body = empty.get_children()
+        self.assertIsInstance(bar, TerminalBar)
+        self.assertEqual(body.get_children(), [])
+        self.assertEqual(bar.chip_labels(), [])
         empty.destroy()
         def descendants(widget):
             yield widget
             if isinstance(widget, Gtk.Container):
                 for child in widget.get_children():
                     yield from descendants(child)
-        self.assertFalse(any(isinstance(w, (Gtk.Notebook, Gtk.Label, Gtk.Button))
-                             for w in descendants(self.panel)))
+        self.assertFalse(any(isinstance(w, Gtk.Notebook) for w in descendants(self.panel)))
+        self.assertEqual(self.panel.get_orientation(), Gtk.Orientation.VERTICAL)
+        self.assertEqual(self.panel.get_children()[0], self.panel.bar)
 
     def test_equal_horizontal_panes_and_insertion(self):
         first = self.panel._panes[0]
@@ -166,11 +172,13 @@ class TerminalPanelTest(unittest.TestCase):
         middle = self.panel._panes[1]
         self.wait_spawn(middle)
         self.assertIs(self.panel._panes[2], second)
+        self.assertTrue(poll(lambda: all(p.slot.get_child_revealed() for p in self.panel._panes)))
         self.assertTrue(poll(lambda: middle.page.get_allocated_width() > 1))
-        allocations = [p.page.get_allocation() for p in self.panel._panes]
+        allocations = [p.slot.get_allocation() for p in self.panel._panes]
+        xs = [p.slot.translate_coordinates(self.panel, 0, 0)[0] for p in self.panel._panes]
         self.assertEqual(len({a.y for a in allocations}), 1)
-        self.assertLess(allocations[0].x, allocations[1].x)
-        self.assertLess(allocations[1].x, allocations[2].x)
+        self.assertLess(xs[0], xs[1])
+        self.assertLess(xs[1], xs[2])
         self.assertLessEqual(max(a.width for a in allocations) - min(a.width for a in allocations), 1)
         self.panel.close_current()
         self.assertTrue(poll(lambda: first.page.get_allocated_width() > allocations[0].width))
@@ -194,6 +202,7 @@ class TerminalPanelTest(unittest.TestCase):
         self.assertTrue(poll(lambda: str(Path.home()) in self.text(terminal).splitlines()))
 
     def test_shell_exit_removes_panes_and_emits_only_for_last(self):
+        self.panel.ANIMATION_MS = 0
         events = []
         self.panel.connect("last-closed", lambda _: events.append(True))
         self.panel.new_terminal()
