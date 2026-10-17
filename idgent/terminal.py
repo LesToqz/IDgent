@@ -90,8 +90,17 @@ class TerminalPanel(Gtk.Box):
         self._configure(terminal)
         page = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
         page.pack_start(terminal, True, True, 0)
-        page.pack_start(Gtk.Scrollbar(orientation=Gtk.Orientation.VERTICAL,
-                                   adjustment=terminal.get_vadjustment()), False, False, 0)
+        adjustment = terminal.get_vadjustment()
+        scrollbar = Gtk.Scrollbar(orientation=Gtk.Orientation.VERTICAL,
+                                  adjustment=adjustment)
+        # show_all() must not reveal a scrollbar for a screen without history.
+        scrollbar.set_no_show_all(True)
+        def update_scrollbar(adjustment):
+            scrollbar.set_visible(adjustment.get_upper() > adjustment.get_page_size())
+        adjustment.connect("changed", update_scrollbar)
+        adjustment.connect("value-changed", update_scrollbar)
+        update_scrollbar(adjustment)
+        page.pack_start(scrollbar, False, False, 0)
         pane = _Pane(page, terminal, Gio.Cancellable())
         active = self._current_pane()
         index = self._panes.index(active) + 1 if active else len(self._panes)
