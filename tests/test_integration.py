@@ -333,7 +333,7 @@ class WindowIntegrationTests(unittest.TestCase):
                 self.assertTrue(tab.label.get_text().startswith('● '))
 
         # Activate File > Save itself with the terminal still focused.
-        menu_bar = self.window.get_child().get_children()[0]
+        menu_bar = self.window.titlebar.menu_bar
         file_menu = menu_bar.get_children()[0].get_submenu()
         with patch.object(editor, 'atomic_write', wraps=editor.atomic_write) as write, \
              patch.object(self.window.editor, '_save', wraps=self.window.editor._save) as save:

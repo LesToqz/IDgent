@@ -12,6 +12,7 @@ from gi.repository import Gdk, Gtk
 from idgent.explorer import ExplorerPanel
 from idgent.editor import EditorPanel
 from idgent.terminal import TerminalPanel
+from idgent.titlebar import TitleBar
 
 
 class MainWindow(Gtk.ApplicationWindow):
@@ -46,8 +47,9 @@ class MainWindow(Gtk.ApplicationWindow):
         self.sidebar.pack2(self.dock, resize=True, shrink=False)
         self.sidebar.set_position(260)
 
+        self.titlebar = TitleBar(self._build_menu())
+        self.set_titlebar(self.titlebar)
         layout = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        layout.pack_start(self._build_menu(), False, False, 0)
         layout.pack_start(self.sidebar, True, True, 0)
         self.add(layout)
         self._update_title()
@@ -150,6 +152,7 @@ class MainWindow(Gtk.ApplicationWindow):
     def _update_title(self) -> None:
         folder = Path(self.root)
         self.set_title(f"IDgent - {folder.name or str(folder)}")
+        self.titlebar.set_folder(self.root)
 
     def set_root(self, path: str) -> None:
         root = Path(path).expanduser().resolve()
