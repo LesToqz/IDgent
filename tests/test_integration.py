@@ -5,6 +5,7 @@ from pathlib import Path
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -21,7 +22,8 @@ gi.require_version('Gdk', '3.0')
 gi.require_version('Vte', '2.91')
 from gi.repository import Gdk, Gio, GLib, Gtk, Vte
 
-from idgent import editor
+from idgent import editor, highlight, style
+from idgent.themes import THEMES
 from idgent.window import MainWindow
 
 
@@ -63,7 +65,8 @@ class WindowIntegrationTests(unittest.TestCase):
         self.addCleanup(self.directory.cleanup)
         self.root = Path(self.directory.name)
         # A predictable shell avoids user bash startup files and prompt hooks.
-        self.environment = patch.dict(os.environ, {'SHELL': '/bin/sh', 'PS1': '$ '})
+        self.environment = patch.dict(os.environ, {'SHELL': '/bin/sh', 'PS1': '$ ',
+                                                   'XDG_CONFIG_HOME': str(self.root / 'config')})
         self.environment.start()
         self.addCleanup(self.environment.stop)
         self.window = MainWindow(self.application, str(self.root))
@@ -96,6 +99,117 @@ class WindowIntegrationTests(unittest.TestCase):
         tree = self.window.explorer.tree
         tree.row_activated(self.window.explorer.store.get_path(row), tree.get_column(0))
         return path, self.window.editor._current()
+
+    def assert_color(self, actual, expected):
+        rgba = Gdk.RGBA()
+        self.assertTrue(rgba.parse(expected))
+        for component in ('red', 'green', 'blue', 'alpha'):
+            self.assertAlmostEqual(getattr(actual, component), getattr(rgba, component), places=4)
+
+    def assert_tab_theme(self, tab, theme):
+        self.assertEqual(tab.chrome.colors, theme.chrome)
+        self.assert_color(tab.chrome.line_tag.get_property('paragraph-background-rgba'),
+                          theme.chrome['current_line_bg'])
+        self.assert_color(tab.chrome.bracket_tag.get_property('background-rgba'),
+                          theme.chrome['bracket_bg'])
+        if highlight.AVAILABLE:
+            self.assertTrue(poll(lambda: not tab.highlighter.pending))
+            tag = tab.buffer.get_tag_table().lookup('hl-keyword')
+            self.assert_color(tag.get_property('foreground-rgba'), theme.syntax['keyword'].foreground)
+            self.assertIn(tag, tab.buffer.get_iter_at_offset(0).get_tags())
+
+    def test_live_theme_recolours_real_widgets_and_preserves_shells(self):
+        applied = {}
+        original = Vte.Terminal.set_colors
+
+        def record_colors(terminal, foreground, background, ansi):
+            applied[terminal] = (foreground, background, ansi)
+            return original(terminal, foreground, background, ansi)
+
+        palette_calls = patch.object(Vte.Terminal, 'set_colors', record_colors)
+        palette_calls.start()
+        self.addCleanup(palette_calls.stop)
+
+        def assert_palette(pane, theme):
+            foreground, background, ansi = applied[pane.terminal]
+            self.assert_color(foreground, theme.terminal.foreground)
+            self.assert_color(background, theme.terminal.background)
+            self.assertEqual(len(ansi), 16)
+            for actual, expected in zip(ansi, theme.terminal.ansi):
+                self.assert_color(actual, expected)
+            self.assert_color(pane.terminal.get_color_background_for_draw(), theme.terminal.background)
+
+        _, tab = self.open_file(content='def example(value):\n    return [value, 42]\n')
+        self.window.toggle_terminal_right()
+        panels = (self.window.terminal_bottom, self.window.terminal_right)
+        old = [(panel._panes[0], self.spawn(panel._panes[0]).pid) for panel in panels]
+        for theme in (THEMES[1], THEMES[3]):
+            self.window.set_theme(theme.id)
+            self.assertIs(style.current_theme(), theme)
+            # GTK CSS transitions must finish before reading realized style values.
+            deadline = time.monotonic() + .25
+            self.assertTrue(poll(lambda: time.monotonic() >= deadline))
+            for widget, key in ((self.window, 'bg'), (self.window.explorer, 'sidebar_bg'),
+                                (self.window.editor.status, 'status_bg')):
+                self.assertTrue(widget.get_realized())
+                self.assert_color(widget.get_style_context().get_background_color(Gtk.StateFlags.NORMAL),
+                                  theme.ui[key])
+            self.assert_tab_theme(tab, theme)
+            for panel in panels:
+                colors = theme.terminal
+                self.assertEqual(panel._palette,
+                                 (colors.foreground, colors.background, list(colors.ansi), colors.cursor))
+                assert_palette(panel._panes[0], theme)
+            for pane, pid in old:
+                self.assertEqual(pane.pid, pid)
+                self.assertTrue(alive(pid))
+                pane.terminal.feed_child(b"printf '%s%s\\n' 'theme_' 'alive'\n")
+                self.assertTrue(poll(lambda: 'theme_alive' in self.text(pane).splitlines()))
+        theme = self.window.theme
+        for panel in panels:
+            panel.new_terminal()
+            pane = self.spawn(panel._panes[-1])
+            assert_palette(pane, theme)
+        _, new_tab = self.open_file('after.py', 'def later():\n    return (1, 2)\n')
+        self.assert_tab_theme(new_tab, theme)
+
+    def test_application_startup_uses_saved_theme_before_show(self):
+        script = """
+from idgent.app import Application
+from idgent import settings, style
+app = Application('.')
+assert app.register(None)
+assert style.current_theme().id == EXPECTED
+app.do_activate()
+window = app.get_active_window()
+assert window.theme.id == EXPECTED
+assert window.editor.chrome == window.theme.chrome
+window.set_theme('dracula')
+window.destroy()
+app.do_activate()
+window = app.get_active_window()
+assert window.theme.id == settings.get_theme_id()
+window.destroy()
+print('startup-ok')
+"""
+        target = Path(os.environ['XDG_CONFIG_HOME']) / 'idgent/settings.json'
+        target.parent.mkdir(parents=True, exist_ok=True)
+        for payload, expected in (('{"theme": "nord"}', 'nord'),
+                                  ('{"theme": "unknown"}', 'dark-plus'),
+                                  ('{broken', 'dark-plus')):
+            with self.subTest(payload=payload):
+                target.write_text(payload)
+                result = subprocess.run([sys.executable, '-c',
+                                         'EXPECTED = ' + repr(expected) + '\n' + script],
+                                        capture_output=True, text=True, timeout=15)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn('startup-ok', result.stdout)
+        target.unlink()
+        target.mkdir()  # Reading a directory raises OSError even when tests run as root.
+        result = subprocess.run([sys.executable, '-c',
+                                 "EXPECTED = 'dark-plus'\n" + script],
+                                capture_output=True, text=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_explorer_activation_edit_and_save(self):
         path, tab = self.open_file()

@@ -8,6 +8,8 @@ import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk
 
+from idgent import settings
+from idgent.themes import get_theme
 from idgent.style import apply_style
 from idgent.window import MainWindow
 
@@ -19,12 +21,14 @@ class Application(Gtk.Application):
 
     def do_startup(self) -> None:
         Gtk.Application.do_startup(self)
-        apply_style()
+        self.theme = get_theme(settings.get_theme_id())
+        apply_style(self.theme)
 
     def do_activate(self) -> None:
         window = self.get_active_window()
         if window is None:
-            window = MainWindow(self, self.root)
+            self.theme = get_theme(settings.get_theme_id())
+            window = MainWindow(self, self.root, theme=self.theme)
             window.show_all()
         window.present()
 
