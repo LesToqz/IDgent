@@ -330,6 +330,19 @@ class WidgetTests(FilesFixture):
         self.assertTrue(self.panel.entry.emit('key-press-event', event))
         self.assertEqual(self.panel.tree.get_cursor()[0].to_string(), '0')
 
+    def test_font_size_and_escaped_signal(self):
+        self.panel.set_font_size(15)
+        self.assertEqual([c.get_property('size-points') for c in self.panel._cells], [15, 15])
+        escaped = []
+        self.panel.connect('escaped', lambda *_: escaped.append(1))
+        event = Gdk.Event.new(Gdk.EventType.KEY_PRESS)
+        event.keyval = Gdk.KEY_Escape
+        self.panel.search_now('needle')
+        self.panel.entry.emit('key-press-event', event)
+        self.panel.tree.emit('key-press-event', event)
+        self.assertEqual(escaped, [1, 1])
+
+
     def test_css_uses_all_theme_roles_and_parses(self):
         self.assertIn('.idgent-search-entry', SEARCH_CSS)
         for theme in THEMES:

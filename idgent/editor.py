@@ -542,6 +542,19 @@ class EditorPanel(Gtk.Box):
         buffer.select_range(start, end)
         tab.view.scroll_to_iter(start, 0, True, 0, .5)
         tab.view.grab_focus()
+        # A freshly shown tab has no layout yet and GTK drops the request above;
+        # repeat it once the view has been allocated and validated.
+        mark = buffer.create_mark(None, start, True)
+
+        def centre() -> bool:
+            if mark.get_deleted():
+                return False
+            if tab in self.tabs and tab.md_mode == 'source' and tab.view.get_buffer() is buffer:
+                tab.view.scroll_to_mark(mark, 0, True, 0, .5)
+            buffer.delete_mark(mark)
+            return False
+
+        GLib.idle_add(centre, priority=GLib.PRIORITY_LOW)
 
     def open_file(self, path: str) -> None:
         path = os.path.abspath(path)
