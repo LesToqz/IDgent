@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=IDgent
+Comment=Edit project files with an integrated terminal
+Exec=idgent
+Icon=idgent
+Terminal=false
+Type=Application
+Categories=Development;IDE;TextEditor;
