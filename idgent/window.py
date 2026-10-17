@@ -181,14 +181,21 @@ class MainWindow(Gtk.ApplicationWindow):
                 and event.keyval in (Gdk.KEY_5, Gdk.KEY_percent)):
             self.split_terminal()
             return True
+        if (modifiers == Gdk.ModifierType.CONTROL_MASK
+                and event.keyval == Gdk.KEY_s):
+            if focus is not None and any(focus.is_ancestor(panel) for panel in
+                                         (self.terminal_bottom, self.terminal_right)):
+                # Preserve the terminal's XOFF binding, bypassing the Save accelerator.
+                return self.propagate_key_event(event)
+            # A TextView's input method can consume this key without saving.
+            # Handle it once here, before either propagation or menu activation.
+            self.editor.save_current()
+            return True
         if (focus is not None and focus.is_ancestor(self.editor)
                 and modifiers == Gdk.ModifierType.CONTROL_MASK
-                and event.keyval in (Gdk.KEY_s, Gdk.KEY_w, Gdk.KEY_slash)):
+                and event.keyval in (Gdk.KEY_w, Gdk.KEY_slash)):
             # Let the focused editor handle its commands before menu accelerators.
             if self.propagate_key_event(event):
-                return True
-            if event.keyval == Gdk.KEY_s:
-                self.editor.save_current()
                 return True
         return Gtk.ApplicationWindow.do_key_press_event(self, event)
 
