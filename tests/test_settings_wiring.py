@@ -11,7 +11,7 @@ import gi
 
 gi.require_version('Gtk', '3.0')
 gi.require_version('Gdk', '3.0')
-from gi.repository import Gdk, Gtk, Pango
+from gi.repository import Gdk, Gio, Gtk, Pango
 
 from idgent import settings
 from idgent.window import MainWindow
@@ -20,8 +20,10 @@ from idgent.window import MainWindow
 class SettingsWiringTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.app = Gtk.Application(application_id='dev.idgent.SettingsTests')
-        cls.app.register(None)
+        cls.app = Gtk.Application.get_default() or Gtk.Application(
+            application_id='dev.idgent.SettingsTests', flags=Gio.ApplicationFlags.NON_UNIQUE)
+        if not cls.app.get_is_registered():
+            assert cls.app.register(None)
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
