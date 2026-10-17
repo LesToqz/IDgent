@@ -17,7 +17,7 @@ gi.require_version("Gdk", "3.0")
 gi.require_version("Vte", "2.91")
 from gi.repository import Gdk, GLib, Gtk, Vte
 
-from idgent.terminal import TerminalPanel, pick_shell, safe_cwd, tab_title
+from idgent.terminal import TerminalPanel, pick_shell, safe_cwd
 
 def setUpModule() -> None:
     # PyGObject emits these Python 3.14 deprecations on every GLib iteration.
@@ -63,9 +63,6 @@ class HelpersTest(unittest.TestCase):
         with patch.dict(os.environ, {"HOME": "/does/not/exist"}):
             self.assertEqual(safe_cwd("/missing"), "/")
 
-    def test_tab_title(self):
-        self.assertEqual(tab_title("/bin/bash", 1), "bash 1")
-        self.assertEqual(tab_title("/usr/bin/zsh", 12), "zsh 12")
 
 
 class TerminalPanelTest(unittest.TestCase):
@@ -79,7 +76,7 @@ class TerminalPanelTest(unittest.TestCase):
         self.window.add(self.panel)
         self.window.show_all()
         self.pids: set[int] = set()
-        self.wait_spawn(self.panel._tabs[0])
+        self.wait_spawn(self.panel._panes[0])
 
     def tearDown(self):
         self.window.destroy()
@@ -108,9 +105,9 @@ class TerminalPanelTest(unittest.TestCase):
     def expect(self, terminal, value):
         self.assertTrue(poll(lambda: value in self.text(terminal)), repr(self.text(terminal)))
 
-    def test_initial_tab_and_appearance(self):
-        self.assertEqual(self.panel.notebook.get_n_pages(), 1)
-        tab = self.panel._tabs[0]
+    def test_initial_pane_and_appearance(self):
+        self.assertEqual(self.panel.terminal_count(), 1)
+        tab = self.panel._panes[0]
         self.assertEqual(tab.terminal.get_scrollback_lines(), 10000)
         self.assertEqual(tab.terminal.get_font().to_string(), "Monospace 11")
         scrollbar = tab.page.get_children()[1]
@@ -120,32 +117,67 @@ class TerminalPanelTest(unittest.TestCase):
         self.expect(tab.terminal, "xterm-256color:truecolor")
 
     def test_new_and_close_current(self):
-        first = self.panel._tabs[0]
+        first = self.panel._panes[0]
         self.panel.new_terminal()
-        second = self.panel._tabs[1]
+        second = self.panel._panes[1]
         self.wait_spawn(second)
-        self.assertEqual(self.panel.notebook.get_n_pages(), 2)
+        self.assertEqual(self.panel.terminal_count(), 2)
         pid = second.pid
         self.panel.close_current()
-        self.assertEqual(self.panel.notebook.get_n_pages(), 1)
-        self.assertIs(self.panel._tabs[0], first)
+        self.assertEqual(self.panel.terminal_count(), 1)
+        self.assertIs(self.panel._panes[0], first)
         self.assertTrue(poll(lambda: not alive(pid)))
 
-    def test_close_last_replaces_shell(self):
-        previous = self.panel._tabs[0]
-        pid = previous.pid
+    def test_close_last_emits_once_without_respawn(self):
+        events = []
+        self.panel.connect("last-closed", lambda _: events.append(True))
+        pid = self.panel._panes[0].pid
         self.panel.close_current()
-        self.assertEqual(self.panel.notebook.get_n_pages(), 1)
-        self.assertIsNot(self.panel._tabs[0], previous)
-        self.wait_spawn(self.panel._tabs[0])
+        self.assertEqual(self.panel.terminal_count(), 0)
+        self.assertEqual(events, [True])
+        self.panel.close_current()
+        self.assertEqual(events, [True])
         self.assertTrue(poll(lambda: not alive(pid)))
+
+    def test_empty_panel_has_no_header_or_notebook(self):
+        empty = TerminalPanel(self.directory.name, autostart=False)
+        self.assertEqual(empty.terminal_count(), 0)
+        self.assertEqual(empty.get_children(), [])
+        empty.destroy()
+        def descendants(widget):
+            yield widget
+            if isinstance(widget, Gtk.Container):
+                for child in widget.get_children():
+                    yield from descendants(child)
+        self.assertFalse(any(isinstance(w, (Gtk.Notebook, Gtk.Label, Gtk.Button))
+                             for w in descendants(self.panel)))
+
+    def test_equal_horizontal_panes_and_insertion(self):
+        first = self.panel._panes[0]
+        self.panel.new_terminal()
+        second = self.panel._panes[1]
+        self.wait_spawn(second)
+        first.terminal.grab_focus()
+        self.assertTrue(poll(lambda: self.window.get_focus() == first.terminal))
+        self.panel.new_terminal()
+        middle = self.panel._panes[1]
+        self.wait_spawn(middle)
+        self.assertIs(self.panel._panes[2], second)
+        self.assertTrue(poll(lambda: middle.page.get_allocated_width() > 1))
+        allocations = [p.page.get_allocation() for p in self.panel._panes]
+        self.assertEqual(len({a.y for a in allocations}), 1)
+        self.assertLess(allocations[0].x, allocations[1].x)
+        self.assertLess(allocations[1].x, allocations[2].x)
+        self.assertLessEqual(max(a.width for a in allocations) - min(a.width for a in allocations), 1)
+        self.panel.close_current()
+        self.assertTrue(poll(lambda: first.page.get_allocated_width() > allocations[0].width))
 
     def test_set_cwd_only_changes_new_shells(self):
-        first = self.panel._tabs[0]
+        first = self.panel._panes[0]
         with tempfile.TemporaryDirectory() as new_directory:
             self.panel.set_cwd(new_directory)
             self.panel.new_terminal()
-            second = self.panel._tabs[1]
+            second = self.panel._panes[1]
             self.wait_spawn(second)
             for tab, expected in ((first, self.directory.name), (second, new_directory)):
                 self.send(tab.terminal, "pwd")
@@ -154,24 +186,27 @@ class TerminalPanelTest(unittest.TestCase):
     def test_invalid_cwd_uses_home(self):
         self.panel.set_cwd("/does/not/exist")
         self.panel.new_terminal()
-        terminal = self.wait_spawn(self.panel._tabs[1])
+        terminal = self.wait_spawn(self.panel._panes[1])
         self.send(terminal, "pwd")
         self.assertTrue(poll(lambda: str(Path.home()) in self.text(terminal).splitlines()))
 
-    def test_shell_exit_removes_tab_and_replaces_last(self):
+    def test_shell_exit_removes_panes_and_emits_only_for_last(self):
+        events = []
+        self.panel.connect("last-closed", lambda _: events.append(True))
         self.panel.new_terminal()
-        second = self.panel._tabs[1]
+        second = self.panel._panes[1]
         self.wait_spawn(second)
         self.send(second.terminal, "exit")
-        self.assertTrue(poll(lambda: self.panel.notebook.get_n_pages() == 1))
-        first = self.panel._tabs[0]
+        self.assertTrue(poll(lambda: self.panel.terminal_count() == 1))
+        self.assertEqual(events, [])
+        first = self.panel._panes[0]
         self.send(first.terminal, "exit")
-        self.assertTrue(poll(lambda: first not in self.panel._tabs))
-        self.assertEqual(self.panel.notebook.get_n_pages(), 1)
-        self.wait_spawn(self.panel._tabs[0])
+        self.assertTrue(poll(lambda: first not in self.panel._panes))
+        self.assertEqual(self.panel.terminal_count(), 0)
+        self.assertEqual(events, [True])
 
     def test_reparent_keeps_shell_and_output(self):
-        tab = self.panel._tabs[0]
+        tab = self.panel._panes[0]
         pid = tab.pid
         self.window.remove(self.panel)
         vertical = Gtk.Paned(orientation=Gtk.Orientation.VERTICAL)
@@ -189,10 +224,10 @@ class TerminalPanelTest(unittest.TestCase):
         self.assertGreater(tab.terminal.get_allocated_width(), 0)
 
     def test_switch_focus_and_zoom_shortcuts(self):
-        first = self.panel._tabs[0]
+        first = self.panel._panes[0]
         self.panel.new_terminal()
-        self.wait_spawn(self.panel._tabs[1])
-        self.panel.notebook.set_current_page(0)
+        self.wait_spawn(self.panel._panes[1])
+        first.terminal.grab_focus()
         self.assertTrue(poll(lambda: self.window.get_focus() == first.terminal))
         event = Gdk.Event.new(Gdk.EventType.KEY_PRESS)
         event.state = Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.SHIFT_MASK
@@ -206,20 +241,42 @@ class TerminalPanelTest(unittest.TestCase):
                 self.panel._key_press(first.terminal, event)
             self.assertAlmostEqual(first.terminal.get_font_scale(), expected)
 
+    def test_focus_navigation_and_split_close_keys(self):
+        first = self.panel._panes[0]
+        event = Gdk.Event.new(Gdk.EventType.KEY_PRESS)
+        event.state = Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.SHIFT_MASK
+        for key in (Gdk.KEY_t, Gdk.KEY_percent):
+            event.keyval = key
+            self.assertTrue(self.panel._key_press(self.panel._active.terminal, event))
+            self.wait_spawn(self.panel._active)
+        self.assertEqual(self.panel.terminal_count(), 3)
+        event.state = Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.MOD1_MASK
+        event.keyval = Gdk.KEY_Right
+        self.assertTrue(self.panel._key_press(self.panel._active.terminal, event))
+        self.assertTrue(poll(lambda: self.window.get_focus() == first.terminal))
+        self.assertTrue(first.terminal.get_style_context().has_class("focused"))
+        event.keyval = Gdk.KEY_Left
+        self.panel._key_press(first.terminal, event)
+        self.assertTrue(poll(lambda: self.window.get_focus() == self.panel._panes[-1].terminal))
+        event.state = Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.SHIFT_MASK
+        event.keyval = Gdk.KEY_w
+        self.panel._key_press(self.panel._active.terminal, event)
+        self.assertEqual(self.panel.terminal_count(), 2)
+
     def test_destroy_terminates_children(self):
         self.panel.new_terminal()
-        self.wait_spawn(self.panel._tabs[1])
+        self.wait_spawn(self.panel._panes[1])
         self.panel.destroy()
         self.assertTrue(poll(lambda: all(not alive(pid) for pid in self.pids)))
-        self.assertEqual(self.panel._tabs, [])
+        self.assertEqual(self.panel._panes, [])
 
     def test_destroy_during_spawn(self):
         self.panel.new_terminal()
-        pending = self.panel._tabs[-1]
+        pending = self.panel._panes[-1]
         self.panel.destroy()
         self.assertTrue(poll(lambda: pending.cancellable.is_cancelled()))
         # Let the async cancellation callback run as well.
-        self.assertTrue(poll(lambda: not self.panel._tabs))
+        self.assertTrue(poll(lambda: not self.panel._panes))
 
 
 if __name__ == "__main__":

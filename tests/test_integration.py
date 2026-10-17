@@ -66,7 +66,7 @@ class WindowIntegrationTests(unittest.TestCase):
         self.pids = set()
         self.addCleanup(self.destroy_window)
         self.window.show_all()
-        self.spawn(self.window.terminal._tabs[0])
+        self.spawn(self.window.terminal_bottom._panes[0])
 
     def spawn(self, tab):
         self.assertTrue(poll(lambda: tab.pid is not None), 'shell did not spawn')
@@ -131,30 +131,61 @@ class WindowIntegrationTests(unittest.TestCase):
     def text(tab):
         return tab.terminal.get_text_format(Vte.Format.TEXT) or ''
 
-    def test_dock_moves_keep_live_shell(self):
-        panel = self.window.terminal
-        tab = panel._tabs[0]
-        pid = tab.pid
-        for expected in ('right', 'bottom'):
-            self.window.toggle_terminal_position()
-            self.assertEqual(self.window.terminal_position, expected)
-            self.assertIs(self.window.terminal, panel)
-            self.assertIs(panel._tabs[0], tab)
-            self.assertEqual(tab.pid, pid)
-        tab.terminal.feed_child(b'echo integ_ok\n')
-        self.assertTrue(poll(lambda: 'integ_ok' in self.text(tab).splitlines()), repr(self.text(tab)))
-        self.assertTrue(alive(pid))
+    def test_hide_show_both_docks_keeps_live_shells(self):
+        self.window.toggle_terminal_right()
+        self.spawn(self.window.terminal_right._panes[0])
+        for panel, toggle in ((self.window.terminal_bottom, self.window.toggle_terminal_bottom),
+                              (self.window.terminal_right, self.window.toggle_terminal_right)):
+            pane = panel._panes[0]
+            pid = pane.pid
+            toggle()
+            self.assertFalse(panel.get_visible())
+            toggle()
+            self.assertTrue(panel.get_visible())
+            self.assertIs(panel._panes[0], pane)
+            self.assertEqual(pane.pid, pid)
+            pane.terminal.feed_child(b"printf '%s%s\\n' 'integ_' 'ok'\n")
+            self.assertTrue(poll(lambda: 'integ_ok' in self.text(pane).splitlines()), repr(self.text(pane)))
+            self.assertTrue(alive(pid))
+
+    def test_split_targets_focused_dock_and_defaults_to_bottom(self):
+        self.accelerate('<Control><Alt>grave')
+        right = self.window.terminal_right
+        self.spawn(right._panes[0])
+        right.focus_terminal()
+        self.assertTrue(self.key('<Control><Shift>5'))
+        self.assertEqual(right.terminal_count(), 2)
+        self.spawn(right._panes[-1])
+        self.assertEqual(self.window.terminal_bottom.terminal_count(), 1)
+        self.window.toggle_terminal_bottom()
+        _, editor = self.open_file()
+        editor.view.grab_focus()
+        self.accelerate('<Control><Shift>5')
+        self.assertTrue(self.window.terminal_bottom.get_visible())
+        self.assertEqual(self.window.terminal_bottom.terminal_count(), 2)
+        self.spawn(self.window.terminal_bottom._panes[-1])
+
+    def test_destroy_cleans_both_docks(self):
+        self.window.toggle_terminal_right()
+        self.spawn(self.window.terminal_right._panes[0])
+        for panel in (self.window.terminal_bottom, self.window.terminal_right):
+            panel.new_terminal()
+            self.spawn(panel._panes[-1])
+        self.window.destroy()
+        self.assertTrue(poll(lambda: all(not alive(pid) for pid in self.pids)))
 
     def test_folder_change_only_affects_new_shells(self):
-        old = self.window.terminal._tabs[0]
+        old = self.window.terminal_bottom._panes[0]
         new_root = self.root / 'new-project'
         new_root.mkdir()
         self.window.set_root(str(new_root))
         self.assertEqual(self.window.explorer.root, str(new_root))
         self.assertEqual(self.window.get_title(), 'IDgent - new-project')
-        self.window.terminal.new_terminal()
-        new = self.spawn(self.window.terminal._tabs[-1])
-        for tab, expected in ((old, self.root), (new, new_root)):
+        self.window.terminal_bottom.new_terminal()
+        new = self.spawn(self.window.terminal_bottom._panes[-1])
+        self.window.toggle_terminal_right()
+        right = self.spawn(self.window.terminal_right._panes[0])
+        for tab, expected in ((old, self.root), (new, new_root), (right, new_root)):
             tab.terminal.feed_child(b'pwd\n')
             self.assertTrue(poll(lambda: str(expected) in self.text(tab).splitlines()), repr(self.text(tab)))
 
@@ -189,17 +220,18 @@ class WindowIntegrationTests(unittest.TestCase):
 
     def test_readme_menu_actions_and_accelerators(self):
         self.accelerate('<Control>grave')
-        self.assertFalse(self.window.terminal.get_visible())
+        self.assertFalse(self.window.terminal_bottom.get_visible())
         self.accelerate('<Control>grave')
-        self.assertTrue(self.window.terminal.get_visible())
+        self.assertTrue(self.window.terminal_bottom.get_visible())
         self.accelerate('<Control>b')
         self.assertFalse(self.window.explorer.get_visible())
         self.accelerate('<Control>b')
         self.assertTrue(self.window.explorer.get_visible())
-        self.window.move_terminal_item.activate()
-        self.assertEqual(self.window.terminal_position, 'right')
-        self.window.move_terminal_item.activate()
-        self.assertEqual(self.window.terminal_position, 'bottom')
+        self.accelerate('<Control><Alt>grave')
+        self.assertTrue(self.window.terminal_right.get_visible())
+        self.spawn(self.window.terminal_right._panes[0])
+        self.accelerate('<Control><Alt>grave')
+        self.assertFalse(self.window.terminal_right.get_visible())
         path, tab = self.open_file()
         tab.buffer.set_text('saved through menu\n')
         self.accelerate('<Control>s')
@@ -216,7 +248,7 @@ class WindowIntegrationTests(unittest.TestCase):
     def test_editor_focus_receives_commands_before_menu(self):
         path, tab = self.open_file(content='value = 1\n')
         # Finish initial terminal focus idles before assigning editor focus.
-        self.assertTrue(poll(lambda: self.window.terminal._tabs[0].pid is not None))
+        self.assertTrue(poll(lambda: self.window.terminal_bottom._panes[0].pid is not None))
         tab.view.grab_focus()
         self.assertIs(self.window.get_focus(), tab.view)
         tab.buffer.set_text('value = 2\n')
