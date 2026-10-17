@@ -1,6 +1,7 @@
 """Tabbed VTE terminal panel, independent of its docking location."""
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 import os
 import signal
@@ -8,6 +9,7 @@ import signal
 import gi
 
 gi.require_version("Gtk", "3.0")
+gi.require_version("Gdk", "3.0")
 gi.require_version("Vte", "2.91")
 from gi.repository import Gdk, Gio, GLib, Gtk, Pango, Vte
 
@@ -84,7 +86,7 @@ class TerminalPanel(Gtk.Box):
         self.new_terminal()
 
     @staticmethod
-    def _button(label: str, tooltip: str, action) -> Gtk.Button:
+    def _button(label: str, tooltip: str, action: Callable[[], None]) -> Gtk.Button:
         button = Gtk.Button(label=label, relief=Gtk.ReliefStyle.NONE)
         button.set_tooltip_text(tooltip)
         button.connect("clicked", lambda _button: action())
@@ -120,8 +122,9 @@ class TerminalPanel(Gtk.Box):
         terminal.spawn_async(
             Vte.PtyFlags.DEFAULT, safe_cwd(self._cwd), [shell, "-i"],
             [f"{key}={value}" for key, value in env.items()],
-            GLib.SpawnFlags.DEFAULT, None, -1, tab.cancellable,
-            self._spawned, tab,
+            # Keywords avoid the hidden child_setup_data positional argument.
+            GLib.SpawnFlags.DEFAULT, child_setup=None, timeout=-1,
+            cancellable=tab.cancellable, callback=self._spawned, user_data=tab,
         )
         GLib.idle_add(self._focus_idle)
 
