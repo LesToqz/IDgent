@@ -254,7 +254,6 @@ class TerminalPanelTest(unittest.TestCase):
         event.keyval = Gdk.KEY_Right
         self.assertTrue(self.panel._key_press(self.panel._active.terminal, event))
         self.assertTrue(poll(lambda: self.window.get_focus() == first.terminal))
-        self.assertTrue(first.terminal.get_style_context().has_class("focused"))
         event.keyval = Gdk.KEY_Left
         self.panel._key_press(first.terminal, event)
         self.assertTrue(poll(lambda: self.window.get_focus() == self.panel._panes[-1].terminal))
@@ -262,6 +261,53 @@ class TerminalPanelTest(unittest.TestCase):
         event.keyval = Gdk.KEY_w
         self.panel._key_press(self.panel._active.terminal, event)
         self.assertEqual(self.panel.terminal_count(), 2)
+
+    def test_focus_events_toggle_style_class(self):
+        terminal = self.panel._panes[0].terminal
+        event = Gdk.Event.new(Gdk.EventType.FOCUS_CHANGE)
+        terminal.emit("focus-in-event", event)
+        self.assertTrue(terminal.get_style_context().has_class("focused"))
+        terminal.emit("focus-out-event", event)
+        self.assertFalse(terminal.get_style_context().has_class("focused"))
+
+    def test_copy_paste_shortcuts(self):
+        terminal = self.panel._panes[0].terminal
+        self.send(terminal, "printf '%s%s\\n' 'clipboard_' 'ok'")
+        self.expect(terminal, "clipboard_ok")
+        terminal.select_all()
+        event = Gdk.Event.new(Gdk.EventType.KEY_PRESS)
+        event.state = Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.SHIFT_MASK
+        event.keyval = Gdk.KEY_c
+        self.assertTrue(self.panel._key_press(terminal, event))
+        clipboard = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
+        self.assertIn("clipboard_ok", clipboard.wait_for_text())
+        clipboard.set_text("printf '%s%s\\n' 'paste_' 'ok'\n", -1)
+        event.keyval = Gdk.KEY_v
+        self.assertTrue(self.panel._key_press(terminal, event))
+        # Bash bracketed paste leaves pasted commands pending for Return.
+        self.expect(terminal, "'paste_' 'ok'")
+        terminal.feed_child(b"\n")
+        self.expect(terminal, "paste_ok")
+
+    def test_context_menu_split_and_kill(self):
+        terminal = self.panel._panes[0].terminal
+        event = Gdk.EventButton()
+        event.type = Gdk.EventType.BUTTON_PRESS
+        event.button = 3
+        with patch.object(Gtk.Menu, "popup_at_pointer") as popup:
+            self.assertTrue(self.panel._button_press(terminal, event))
+            popup.assert_called_once_with(event)
+        menu = next(w for w in Gtk.Menu.get_for_attach_widget(terminal))
+        items = menu.get_children()
+        self.assertEqual([w.get_label() for w in items if isinstance(w, Gtk.MenuItem)
+                          and not isinstance(w, Gtk.SeparatorMenuItem)],
+                         ["Copy", "Paste", "Select All", "Clear", "Split Terminal", "Kill Terminal"])
+        items[-2].activate()
+        self.wait_spawn(self.panel._panes[-1])
+        self.assertEqual(self.panel.terminal_count(), 2)
+        items[-1].activate()
+        self.assertEqual(self.panel.terminal_count(), 1)
+        menu.destroy()
 
     def test_destroy_terminates_children(self):
         self.panel.new_terminal()

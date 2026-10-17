@@ -165,6 +165,16 @@ class WindowIntegrationTests(unittest.TestCase):
         self.assertEqual(self.window.terminal_bottom.terminal_count(), 2)
         self.spawn(self.window.terminal_bottom._panes[-1])
 
+    def test_background_exit_preserves_editor_focus(self):
+        panel = self.window.terminal_bottom
+        panel.new_terminal()
+        exiting = self.spawn(panel._panes[-1])
+        _, editor = self.open_file()
+        editor.view.grab_focus()
+        exiting.terminal.feed_child(b'exit\n')
+        self.assertTrue(poll(lambda: panel.terminal_count() == 1))
+        self.assertIs(self.window.get_focus(), editor.view)
+
     def test_destroy_cleans_both_docks(self):
         self.window.toggle_terminal_right()
         self.spawn(self.window.terminal_right._panes[0])

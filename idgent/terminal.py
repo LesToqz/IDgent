@@ -27,7 +27,6 @@ def safe_cwd(path: str) -> str:
     return "/"
 
 
-
 @dataclass(eq=False)
 class _Pane:
     page: Gtk.Box
@@ -119,7 +118,7 @@ class TerminalPanel(Gtk.Box):
             GLib.SpawnFlags.DEFAULT, child_setup=None, timeout=-1,
             cancellable=pane.cancellable, callback=self._spawned, user_data=pane,
         )
-        GLib.idle_add(self._focus_idle)
+        GLib.idle_add(self._focus_idle, pane)
 
     @staticmethod
     def _configure(terminal: Vte.Terminal) -> None:
@@ -183,6 +182,8 @@ class TerminalPanel(Gtk.Box):
     def _close_pane(self, pane: _Pane) -> None:
         if pane.closed:
             return
+        refocus = pane.terminal.is_focus()
+        self._active = self._current_pane()
         pane.closed = True
         pane.cancellable.cancel()
         _hangup(pane)
@@ -195,14 +196,18 @@ class TerminalPanel(Gtk.Box):
         self._update_dividers()
         if not self._panes and not self._destroyed:
             self.emit("last-closed")
-        GLib.idle_add(self._focus_idle)
+        if refocus and self.get_visible():
+            GLib.idle_add(self._focus_idle)
 
     def focus_terminal(self) -> None:
-        if not self._destroyed:
-            if self._active in self._panes:
-                self._active.terminal.grab_focus()
+        if not self._destroyed and self._active in self._panes:
+            self._active.terminal.grab_focus()
 
-    def _focus_idle(self) -> bool:
+    def _focus_idle(self, pane: _Pane | None = None) -> bool:
+        if pane is not None:
+            if pane not in self._panes:
+                return GLib.SOURCE_REMOVE
+            self._active = pane
         self.focus_terminal()
         return GLib.SOURCE_REMOVE
 
@@ -220,7 +225,6 @@ class TerminalPanel(Gtk.Box):
             return True
         if event.state & mask != required:
             return False
-        key = Gdk.keyval_name(event.keyval).lower()
         actions = {"c": lambda: terminal.copy_clipboard_format(Vte.Format.TEXT),
                    "v": terminal.paste_clipboard, "t": self.new_terminal,
                    "5": self.new_terminal, "percent": self.new_terminal,
