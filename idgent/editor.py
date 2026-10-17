@@ -13,10 +13,11 @@ gi.require_version('Gtk', '3.0')
 gi.require_version('Gdk', '3.0')
 from gi.repository import Gdk, Gtk, Pango
 
-from idgent import highlight
+from idgent import gutter, highlight
 
 MAX_FILE_SIZE = 5 * 1024 * 1024
 COMMENT_EXTENSIONS = {'.py', '.sh', '.toml', '.yaml', '.yml', '.conf'}
+DEFAULT_FONT_SIZE, MIN_FONT_SIZE, MAX_FONT_SIZE = 11, 7, 32
 
 
 def detect_line_ending(text: str) -> str:
@@ -126,13 +127,13 @@ class _EditorTab:
         self.view.set_pixels_above_lines(1)
         self.view.set_pixels_below_lines(1)
         self.view.set_wrap_mode(Gtk.WrapMode.NONE)
-        self.view.set_left_margin(12)
+        self.view.set_left_margin(6)
         self.view.set_right_margin(12)
-        layout = self.view.create_pango_layout('    ')
-        tabs = Pango.TabArray.new(1, True)
-        tabs.set_tab(0, Pango.TabAlign.LEFT, layout.get_pixel_size()[0])
-        self.view.set_tabs(tabs)
+        self.view.set_cursor_visible(True)
         self.highlighter = highlight.Highlighter(self.buffer, panel.syntax_style)
+        self.chrome = gutter.ViewChrome(self.view, panel.chrome)
+        self.set_font_size(panel.font_size)
+        self.view.connect('scroll-event', panel._scroll)
         self.detect_language()
         self.page = Gtk.ScrolledWindow()
         self.page.add(self.view)
@@ -156,6 +157,13 @@ class _EditorTab:
         self.buffer.connect('mark-set', lambda *_: panel._update_status())
         self.view.connect('key-press-event', panel._key_press, self)
         self.update_title()
+
+    def set_font_size(self, size: int) -> None:
+        self.chrome.set_font_size(size)
+        layout = gutter.layout_for(self.view, '    ')
+        tabs = Pango.TabArray.new(1, True)
+        tabs.set_tab(0, Pango.TabAlign.LEFT, layout.get_pixel_size()[0])
+        self.view.set_tabs(tabs)
 
     @property
     def language(self) -> str:
@@ -223,6 +231,8 @@ class EditorPanel(Gtk.Box):
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
         self.get_style_context().add_class('idgent-editor')
         self.syntax_style: dict[str, highlight.SyntaxStyle] = dict(highlight.DARK_PLUS)
+        self.chrome: dict[str, str] = dict(gutter.DEFAULT_CHROME)
+        self.font_size = DEFAULT_FONT_SIZE
         self.tabs: list[_EditorTab] = []
         self.stack = Gtk.Stack()
         self.placeholder = Gtk.Label(label='IDgent  -  open a file from the explorer')
@@ -258,6 +268,37 @@ class EditorPanel(Gtk.Box):
         self.syntax_style = dict(styles)
         for tab in self.tabs:
             tab.highlighter.set_style(self.syntax_style)
+
+    def set_chrome(self, colors: dict[str, str]) -> None:
+        """Set gutter / current-line / bracket colours (keys of gutter.DEFAULT_CHROME) on all tabs."""
+        known = {key: value for key, value in colors.items() if key in gutter.DEFAULT_CHROME}
+        for tab in self.tabs:
+            tab.chrome.apply(known)
+        # Keep only values GTK accepted, so the dict mirrors what is painted.
+        self.chrome.update({key: value for key, value in known.items()
+                            if gutter.valid_color(value)})
+
+    def set_font_size(self, size: int) -> None:
+        size = max(MIN_FONT_SIZE, min(MAX_FONT_SIZE, int(size)))
+        if size == self.font_size:
+            return
+        self.font_size = size
+        for tab in self.tabs:
+            tab.set_font_size(size)
+
+    def zoom(self, step: int) -> None:
+        self.set_font_size(self.font_size + step)
+
+    def _scroll(self, _view: Gtk.TextView, event: Gdk.EventScroll) -> bool:
+        if not event.state & Gdk.ModifierType.CONTROL_MASK:
+            return False
+        if event.direction == Gdk.ScrollDirection.UP:
+            self.zoom(1)
+        elif event.direction == Gdk.ScrollDirection.DOWN:
+            self.zoom(-1)
+        elif event.direction == Gdk.ScrollDirection.SMOOTH and event.delta_y:
+            self.zoom(-1 if event.delta_y > 0 else 1)
+        return True
 
     def _current(self) -> _EditorTab | None:
         page = self.notebook.get_nth_page(self.notebook.get_current_page())
@@ -409,6 +450,12 @@ class EditorPanel(Gtk.Box):
                 self.notebook.set_current_page((self.notebook.get_current_page() + (-1 if backwards else 1)) % len(self.tabs))
             elif key == Gdk.KEY_slash:
                 self._edit(tab, 'comment')
+            elif key in (Gdk.KEY_plus, Gdk.KEY_equal, Gdk.KEY_KP_Add):
+                self.zoom(1)
+            elif key in (Gdk.KEY_minus, Gdk.KEY_KP_Subtract):
+                self.zoom(-1)
+            elif key in (Gdk.KEY_0, Gdk.KEY_KP_0):
+                self.set_font_size(DEFAULT_FONT_SIZE)
             else:
                 return False
             return True
