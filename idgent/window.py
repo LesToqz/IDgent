@@ -31,7 +31,8 @@ class MainWindow(Gtk.ApplicationWindow):
         self.dock = Gtk.Paned(orientation=Gtk.Orientation.VERTICAL)
         self.dock.pack1(self.editor, resize=True, shrink=False)
         self.dock.pack2(self.terminal, resize=False, shrink=False)
-        self.dock.set_position(470)
+        self._terminal_size_pending = True
+        self.dock.connect_after("size-allocate", self._size_terminal)
         self.sidebar = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
         self.sidebar.pack1(self.explorer, resize=False, shrink=False)
         self.sidebar.pack2(self.dock, resize=True, shrink=False)
@@ -83,8 +84,27 @@ class MainWindow(Gtk.ApplicationWindow):
         right = self.terminal_position == "right"
         self.dock.set_orientation(Gtk.Orientation.HORIZONTAL if right else Gtk.Orientation.VERTICAL)
         self.dock.pack2(terminal, resize=False, shrink=False)
-        self.dock.set_position(600 if right else 470)
+        self._terminal_size_pending = True
+        self.dock.queue_resize()
         self.move_terminal_item.set_label("Move Terminal to Bottom" if right else "Move Terminal to Right")
+
+    def _size_terminal(self, dock: Gtk.Paned, allocation: Gdk.Rectangle) -> None:
+        # Wait for real child allocations, including when moved before show_all()
+        # or while hidden. Only size once so subsequent divider drags still work.
+        if not self._terminal_size_pending or not self.terminal.get_visible():
+            return
+        right = self.terminal_position == "right"
+        extent = allocation.width if right else allocation.height
+        if extent <= 1:
+            return
+        editor = self.editor.get_allocation()
+        terminal = self.terminal.get_allocation()
+        handle = extent - (editor.width + terminal.width if right
+                           else editor.height + terminal.height)
+        size = (min(max(round(extent * .4), 380), int(extent * .6)) if right
+                else max(round(extent * .3), 150))
+        self._terminal_size_pending = False
+        dock.set_position(max(0, extent - max(0, handle) - size))
 
     @staticmethod
     def _toggle(widget: Gtk.Widget) -> None:
