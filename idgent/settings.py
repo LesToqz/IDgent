@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 from pathlib import Path
 import tempfile
@@ -62,3 +63,42 @@ def get_theme_id() -> str:
 
 def set_theme_id(theme_id: str | None) -> bool:
     return save({'theme': get_theme(theme_id).id})
+
+
+FONT_KEYS = ('terminal_font_size', 'editor_font_size', 'explorer_font_size')
+# Measured under X11: gtk_font_name == "Sans 10" and a Gtk.Label's Pango
+# context reports Sans 10, size / Pango.SCALE == 10. No GUI imports here.
+DEFAULT_FONT_SIZES = dict(zip(FONT_KEYS, (11, 11, 10)))
+FONT_SIZE_LIMITS = dict(zip(FONT_KEYS, ((7, 32), (7, 32), (8, 24))))
+
+
+def _font_size(key: str, value: object) -> int:
+    if key not in FONT_KEYS:
+        raise ValueError(f'Unknown font size key: {key}')
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return DEFAULT_FONT_SIZES[key]
+    # Avoid float conversion of arbitrarily large integers from JSON.
+    if isinstance(value, float) and not math.isfinite(value):
+        return DEFAULT_FONT_SIZES[key]
+    low, high = FONT_SIZE_LIMITS[key]
+    return round(max(low, min(high, value)))
+
+
+def get_font_size(key: str) -> int:
+    """Read integer points; invalid values default, numeric values clamp/round."""
+    return _font_size(key, load().get(key))
+
+
+def get_font_sizes() -> dict[str, int]:
+    data = load()
+    return {key: _font_size(key, data.get(key)) for key in FONT_KEYS}
+
+
+def set_font_size(key: str, size: int | float) -> bool:
+    """Save clamped, rounded points (invalid input uses the default)."""
+    return save({key: _font_size(key, size)})
+
+
+def reset_font_size(key: str) -> bool:
+    """Reset by explicitly writing the default; preserve unrelated settings."""
+    return set_font_size(key, _font_size(key, None))
