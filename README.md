@@ -66,11 +66,16 @@ Ctrl+Alt+Left/Right leaves the shell's Alt+Left/Right bindings available.
 
 Code lives in `idgent/`: `window.py` wires the explorer, editor and terminal
 panels; `fsops.py` implements file operations. `packaging/` contains Linux desktop
-assets. Run all tests with system GTK, VTE and Xvfb:
+assets.
+
+Tests (system GTK, VTE and Xvfb; test modules force the X11 backend):
 
 ```sh
 xvfb-run -a python3 -m unittest discover -s tests
 ```
+
+Manual smoke under Xvfb: `GDK_BACKEND=x11 xvfb-run -a python3 -m idgent /tmp`.
+Set the backend explicitly so an inherited `WAYLAND_DISPLAY` cannot use the desktop.
 
 Known limitations: no syntax highlighting, no persisted layout or session,
 and only regular UTF-8 text files up to 5 MB are editable. Comment toggling

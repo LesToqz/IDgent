@@ -11,6 +11,9 @@ import unittest
 import warnings
 from unittest.mock import patch
 
+# Keep GTK on the Xvfb display even when WAYLAND_DISPLAY is inherited.
+os.environ["GDK_BACKEND"] = "x11"
+
 import gi
 
 gi.require_version('Gtk', '3.0')
@@ -18,6 +21,7 @@ gi.require_version('Gdk', '3.0')
 gi.require_version('Vte', '2.91')
 from gi.repository import Gdk, Gio, GLib, Gtk, Vte
 
+from idgent import editor
 from idgent.window import MainWindow
 
 
@@ -262,20 +266,84 @@ class WindowIntegrationTests(unittest.TestCase):
         tab.view.grab_focus()
         self.assertIs(self.window.get_focus(), tab.view)
         tab.buffer.set_text('value = 2\n')
-        seen = []
-        handler = tab.view.connect('key-press-event', lambda _, e: seen.append(e.keyval) or False)
-        with patch.object(self.window.editor, 'save_current', wraps=self.window.editor.save_current) as save:
+        self.assertTrue(tab.buffer.get_modified())
+        self.assertTrue(tab.label.get_text().startswith('● '))
+        with patch.object(editor, 'atomic_write', wraps=editor.atomic_write) as write, \
+             patch.object(self.window.editor, '_save', wraps=self.window.editor._save) as save:
             self.assertTrue(self.key('<Control>s'))
-            save.assert_called_once_with()
-        tab.view.disconnect(handler)
-        self.assertIn(Gdk.KEY_s, seen)
+            # Intercept the actual save/write paths, including menu callbacks
+            # that might have captured a bound save_current method earlier.
+            save.assert_called_once_with(tab)
+            write.assert_called_once_with(str(path), 'value = 2\n', 'LF')
         self.assertEqual(path.read_text(), 'value = 2\n')
+        self.assertFalse(tab.buffer.get_modified())
+        self.assertFalse(self.window.editor.has_unsaved())
+        self.assertEqual(tab.label.get_text(), path.name)
         tab.buffer.place_cursor(tab.buffer.get_start_iter())
         self.assertTrue(self.key('<Control>slash'))
         self.assertEqual(tab.buffer.get_text(*tab.buffer.get_bounds(), True), '# value = 2\n')
         self.window.editor.save_current()
         self.assertTrue(self.key('<Control>w'))
         self.assertEqual(self.window.editor.tabs, [])
+
+    def test_save_from_explorer_focus_writes_once_and_clears_dirty_marker(self):
+        path, tab = self.open_file()
+        self.window.explorer.tree.grab_focus()
+        self.assertIs(self.window.get_focus(), self.window.explorer.tree)
+        tab.buffer.set_text('saved from explorer\n')
+        self.assertTrue(tab.buffer.get_modified())
+        self.assertTrue(tab.label.get_text().startswith('● '))
+        with patch.object(editor, 'atomic_write', wraps=editor.atomic_write) as write, \
+             patch.object(self.window.editor, '_save', wraps=self.window.editor._save) as save:
+            self.assertTrue(self.key('<Control>s'))
+            save.assert_called_once_with(tab)
+            write.assert_called_once_with(str(path), 'saved from explorer\n', 'LF')
+        self.assertEqual(path.read_text(), 'saved from explorer\n')
+        self.assertFalse(tab.buffer.get_modified())
+        self.assertFalse(self.window.editor.has_unsaved())
+        self.assertEqual(tab.label.get_text(), path.name)
+
+    def test_terminal_save_key_is_forwarded_but_file_menu_still_saves(self):
+        path, tab = self.open_file()
+        self.window.toggle_terminal_right()
+        self.spawn(self.window.terminal_right._panes[0])
+        for panel in (self.window.terminal_bottom, self.window.terminal_right):
+            with self.subTest(panel=panel):
+                tab.buffer.set_text('leave Ctrl+S to the shell\n')
+                panel.focus_terminal()
+                terminal = panel._panes[0].terminal
+                self.assertIs(self.window.get_focus(), terminal)
+                seen = []
+                handler = terminal.connect('key-press-event',
+                                           lambda _, e: seen.append(e.keyval) or False)
+                try:
+                    with patch.object(editor, 'atomic_write', wraps=editor.atomic_write) as write:
+                        self.key('<Control>s')
+                        self.assertIn(Gdk.KEY_s, seen)
+                        write.assert_not_called()
+                        # Even an unhandled terminal event must bypass menu acceleration.
+                        with patch.object(self.window, 'propagate_key_event', return_value=False) as propagate:
+                            self.assertFalse(self.key('<Control>s'))
+                            propagate.assert_called_once()
+                        write.assert_not_called()
+                finally:
+                    terminal.disconnect(handler)
+                self.assertEqual(path.read_text(), 'original\n')
+                self.assertTrue(tab.buffer.get_modified())
+                self.assertTrue(tab.label.get_text().startswith('● '))
+
+        # Activate File > Save itself with the terminal still focused.
+        menu_bar = self.window.get_child().get_children()[0]
+        file_menu = menu_bar.get_children()[0].get_submenu()
+        with patch.object(editor, 'atomic_write', wraps=editor.atomic_write) as write, \
+             patch.object(self.window.editor, '_save', wraps=self.window.editor._save) as save:
+            file_menu.get_children()[1].activate()
+            save.assert_called_once_with(tab)
+            write.assert_called_once_with(str(path), 'leave Ctrl+S to the shell\n', 'LF')
+        self.assertEqual(path.read_text(), 'leave Ctrl+S to the shell\n')
+        self.assertFalse(tab.buffer.get_modified())
+        self.assertFalse(self.window.editor.has_unsaved())
+        self.assertEqual(tab.label.get_text(), path.name)
 
 
 class PackagingTests(unittest.TestCase):
