@@ -22,6 +22,7 @@ from gi.repository import Gdk, GLib, Gtk, Vte
 
 from idgent.terminal import MAX_TERMINALS, TerminalPanel, pick_shell, safe_cwd
 from idgent.terminal_bar import PaneHeader
+from idgent.resizegate import ResizeGate
 
 def setUpModule() -> None:
     # PyGObject emits these Python 3.14 deprecations on every GLib iteration.
@@ -109,6 +110,38 @@ class TerminalPanelTest(unittest.TestCase):
     def expect(self, terminal, value):
         self.assertTrue(poll(lambda: value in self.text(terminal)), repr(self.text(terminal)))
 
+    def test_complete_page_is_gated_and_control_can_opt_out(self):
+        pane = self.panel._panes[0]
+        self.assertIsInstance(pane.frame, ResizeGate)
+        self.assertIs(pane.frame.get_child(), pane.page)
+        self.assertIs(pane.frame.get_parent(), self.panel._body)
+        self.assertIs(pane.header.get_parent(), pane.content.get_parent())
+        self.assertFalse(pane.frame.get_can_focus())
+        self.assertEqual(pane.frame.get_preferred_width(), pane.page.get_preferred_width())
+        control = TerminalPanel(self.directory.name, autostart=False)
+        control.RESIZE_GATE = False
+        self.addCleanup(control.destroy)
+        control.new_terminal()
+        self.wait_spawn(control._panes[0])
+        self.assertIs(control._panes[0].frame, control._panes[0].page)
+        control.destroy()
+
+    def test_discrete_layout_commits_without_waiting_for_debounce(self):
+        self.panel.new_terminal()
+        pane = self.panel._panes[0]
+        self.wait_spawn(self.panel._panes[1])
+        self.assertTrue(poll(lambda: pane.frame._committed == pane.frame._target))
+        # A long timer makes accidental fallback to debounce fail this test.
+        for other in self.panel._panes:
+            other.frame.SETTLE_MS = 10000
+        self.panel.toggle_maximize(pane)
+        self.assertTrue(poll(lambda: pane.frame._committed == pane.frame._target
+                             and pane.frame.get_allocated_width() > 700, .5))
+        self.panel.restore()
+        self.assertTrue(poll(lambda: all(p.frame._committed == p.frame._target
+                                        and p.frame.get_allocated_width() < 500
+                                        for p in self.panel._panes), .5))
+
     def test_initial_pane_and_appearance(self):
         self.assertEqual(self.panel.terminal_count(), 1)
         tab = self.panel._panes[0]
@@ -183,16 +216,16 @@ class TerminalPanelTest(unittest.TestCase):
         middle = self.panel._panes[1]
         self.wait_spawn(middle)
         self.assertIs(self.panel._panes[2], second)
-        self.assertTrue(poll(lambda: all(p.page.get_opacity() == 1 for p in self.panel._panes)))
-        self.assertTrue(poll(lambda: middle.page.get_allocated_width() > 1))
-        allocations = [p.page.get_allocation() for p in self.panel._panes]
-        xs = [p.page.translate_coordinates(self.panel, 0, 0)[0] for p in self.panel._panes]
+        self.assertTrue(poll(lambda: all(p.frame.get_opacity() == 1 for p in self.panel._panes)))
+        self.assertTrue(poll(lambda: middle.frame.get_allocated_width() > 1))
+        allocations = [p.frame.get_allocation() for p in self.panel._panes]
+        xs = [p.frame.translate_coordinates(self.panel, 0, 0)[0] for p in self.panel._panes]
         self.assertEqual(len({a.y for a in allocations}), 1)
         self.assertLess(xs[0], xs[1])
         self.assertLess(xs[1], xs[2])
         self.assertLessEqual(max(a.width for a in allocations) - min(a.width for a in allocations), 1)
         self.panel.close_current()
-        self.assertTrue(poll(lambda: first.page.get_allocated_width() > allocations[0].width))
+        self.assertTrue(poll(lambda: first.frame.get_allocated_width() > allocations[0].width))
 
     def test_stacked_panes_are_rows_with_horizontal_dividers(self):
         window = Gtk.Window()
@@ -213,8 +246,8 @@ class TerminalPanelTest(unittest.TestCase):
         self.wait_spawn(middle)
         self.assertEqual(panel._body.get_orientation(), Gtk.Orientation.VERTICAL)
         self.assertEqual(panel.header_labels(), ["bash1", "bash2", "bash3"])
-        self.assertTrue(poll(lambda: all(p.page.get_allocated_height() > 1 for p in panel._panes)))
-        rects = [(p.page.translate_coordinates(panel, 0, 0), p.page.get_allocation())
+        self.assertTrue(poll(lambda: all(p.frame.get_allocated_height() > 1 for p in panel._panes)))
+        rects = [(p.frame.translate_coordinates(panel, 0, 0), p.frame.get_allocation())
                  for p in panel._panes]
         self.assertEqual(len({xy[0] for xy, _ in rects}), 1)
         self.assertEqual(len({a.width for _, a in rects}), 1)
@@ -381,6 +414,8 @@ class TerminalPanelTest(unittest.TestCase):
         second = self.panel._panes[1]
         self.wait_spawn(second)
         for pane in (first, second):
+            bg = pane.frame.get_style_context().get_background_color(Gtk.StateFlags.NORMAL)
+            self.assertEqual(bg.to_string(), "rgb(68,85,102)")
             self.assertIn((pane.terminal, "rgb(17,34,51)", "rgb(68,85,102)", 16), calls)
             self.assertEqual(self.background_pixel(self.window, pane.terminal), (0x44, 0x55, 0x66))
         # The default palette is used until a panel's own palette is changed.
