@@ -23,7 +23,7 @@ def detect_line_ending(text: str) -> str:
 
 def read_file(path: str) -> tuple[str, str, int]:
     """Validate a regular UTF-8 file and return normalized text, EOL and mtime."""
-    with open(path, 'rb') as stream:
+    with os.fdopen(os.open(path, os.O_RDONLY | os.O_NONBLOCK), 'rb') as stream:
         info = os.fstat(stream.fileno())
         if not stat.S_ISREG(info.st_mode):
             raise ValueError('Cannot open a non-regular file')
@@ -205,7 +205,7 @@ class EditorPanel(Gtk.Box):
         self.placeholder = Gtk.Label(label='IDgent  -  open a file from the explorer')
         self.stack.add_named(self.placeholder, 'empty')
         self.notebook = Gtk.Notebook(scrollable=True)
-        self.notebook.connect('switch-page', lambda *_: self._update_status())
+        self.notebook.connect_after('switch-page', lambda *_: self._update_status())
         self.stack.add_named(self.notebook, 'editor')
         self.pack_start(self.stack, True, True, 0)
         self.search_bar = Gtk.SearchBar()
