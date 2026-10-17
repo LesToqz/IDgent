@@ -1,18 +1,15 @@
-"""Shell integration tests, independent of the sibling panel implementations."""
+"""Window layout and command wiring against real panels."""
 
 from pathlib import Path
-import sys
 import tempfile
-from types import ModuleType
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 import gi
 
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gio, Gtk
 
-from idgent import _placeholder
 from idgent.window import MainWindow
 
 
@@ -26,14 +23,7 @@ class WindowLayoutTests(unittest.TestCase):
     def setUp(self) -> None:
         self.folder = tempfile.TemporaryDirectory(prefix="idgent-layout-")
         self.addCleanup(self.folder.cleanup)
-        modules = {}
-        for name in ("explorer", "editor", "terminal"):
-            module = ModuleType(f"idgent.{name}")
-            panel = name.title() + "Panel"
-            setattr(module, panel, getattr(_placeholder, panel))
-            modules[module.__name__] = module
-        with patch.dict(sys.modules, modules):
-            self.window = MainWindow(self.application, self.folder.name)
+        self.window = MainWindow(self.application, self.folder.name)
         self.window.show_all()
         self.addCleanup(self.window.destroy)
 
@@ -96,14 +86,12 @@ class WindowLayoutTests(unittest.TestCase):
     def test_quit_confirmation(self) -> None:
         self.assertFalse(self.window._on_delete(self.window, None))
         with patch.object(self.window.editor, "has_unsaved", return_value=True), \
-             patch("idgent.window.Gtk.MessageDialog") as dialog_class:
-            dialog = Mock()
-            dialog_class.return_value = dialog
-            dialog.run.return_value = Gtk.ResponseType.CANCEL
+             patch.object(self.window, "_ask_quit") as ask:
+            ask.return_value = Gtk.ResponseType.CANCEL
             self.assertTrue(self.window._on_delete(self.window, None))
-            dialog.run.return_value = Gtk.ResponseType.REJECT
+            ask.return_value = Gtk.ResponseType.REJECT
             self.assertFalse(self.window._on_delete(self.window, None))
-            dialog.run.return_value = Gtk.ResponseType.ACCEPT
+            ask.return_value = Gtk.ResponseType.ACCEPT
             with patch.object(self.window.editor, "save_all", return_value=False):
                 self.assertTrue(self.window._on_delete(self.window, None))
             with patch.object(self.window.editor, "has_unsaved", side_effect=[True, False]), \
