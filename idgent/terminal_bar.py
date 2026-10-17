@@ -71,15 +71,15 @@ class _IconButton(Gtk.Button):
 class _Chip:
     """Label, fullscreen and delete controls of one terminal."""
 
-    def __init__(self, pane_id: int, number: int, text: str):
+    def __init__(self, pane_id: int, shell_name: str):
         self.id = pane_id
-        self.number = number
+        self.shell_name = shell_name
         self.closing = False
         self.revealer = Gtk.Revealer()
         self.revealer.set_transition_type(Gtk.RevealerTransitionType.SLIDE_RIGHT)
         self.box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
         self.box.get_style_context().add_class("idgent-terminal-chip")
-        self.label = Gtk.Label(label=text)
+        self.label = Gtk.Label()
         # Ellipsizing keeps chips shrinkable in a narrow dock.
         self.label.set_ellipsize(Pango.EllipsizeMode.END)
         self.label_button = Gtk.Button()
@@ -149,9 +149,7 @@ class TerminalBar(Gtk.Box):
     def add_chip(self, pane_id: int, index: int | None = None, shell_name: str = "bash",
                  duration: int = 0) -> str:
         """Add a chip at live position `index` (default: end); returns its label."""
-        used = {chip.number for chip in self._chips}
-        number = next(n for n in range(1, len(used) + 2) if n not in used)
-        chip = _Chip(pane_id, number, f"{shell_name}{number}")
+        chip = _Chip(pane_id, shell_name)
         chip.label_button.connect("clicked", lambda _b: self.emit("focus-requested", pane_id))
         chip.fullscreen_button.connect("clicked", lambda _b: self.emit("fullscreen-requested", pane_id))
         chip.delete_button.connect("clicked", lambda _b: self.emit("delete-requested", pane_id))
@@ -164,17 +162,27 @@ class TerminalBar(Gtk.Box):
         chip.revealer.set_reveal_child(not animated)
         self._chip_box.pack_start(chip.revealer, False, True, 0)
         self._chip_box.reorder_child(chip.revealer, position)
+        chip.revealer.connect("child-notify::position", self._renumber_chips)
+        self._renumber_chips()
         if animated:
             fade(chip.revealer, 0.0, 1.0, duration)
             chip.revealer.set_reveal_child(True)
         self._apply_maximized(chip)
         return chip.text
 
+    def _renumber_chips(self, *_args) -> None:
+        """Follow widget order, excluding chips that are fading out."""
+        children = self._chip_box.get_children()
+        self._chips.sort(key=lambda chip: children.index(chip.revealer))
+        for position, chip in enumerate(self._chips, 1):
+            chip.label.set_text(f"{chip.shell_name}{position}")
+
     def remove_chip(self, pane_id: int, duration: int = 0) -> None:
         chip = self.chip(pane_id)
         if chip is None:
             return
         self._chips.remove(chip)
+        self._renumber_chips()
         if self._maximized == pane_id:
             self._maximized = None
         if duration > 0 and self.get_mapped() and not self._destroyed:

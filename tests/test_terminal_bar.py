@@ -69,15 +69,40 @@ class BarTest(unittest.TestCase):
         self.assertTrue(poll(lambda: self.bar.get_allocated_height() > 1))
         self.assertTrue(28 <= self.bar.get_allocated_height() <= 34, self.bar.get_allocated_height())
 
-    def test_chip_numbers_are_stable_and_lowest_unused(self):
+    def test_chip_numbers_follow_position_after_delete_and_add(self):
         for pane_id in (1, 2, 3):
             self.bar.add_chip(pane_id)
         self.assertEqual(self.bar.chip_labels(), ["bash1", "bash2", "bash3"])
         self.bar.remove_chip(2)
-        self.assertEqual(self.bar.chip_labels(), ["bash1", "bash3"])
-        self.assertEqual(self.bar.add_chip(4, index=1), "bash2")
+        self.assertEqual(self.bar.chip_labels(), ["bash1", "bash2"])
+        self.assertEqual(self.bar.add_chip(4), "bash3")
         self.assertEqual(self.bar.chip_labels(), ["bash1", "bash2", "bash3"])
-        self.assertEqual(self.bar.chip(4).text, "bash2")
+        self.assertEqual(self.bar.chip(4).text, "bash3")
+
+    def test_middle_insertion_and_reordering_preserve_shell_names(self):
+        self.bar.add_chip(1)
+        self.bar.add_chip(2, shell_name="zsh")
+        self.assertEqual(self.bar.add_chip(3, index=1), "bash2")
+        self.assertEqual(self.bar.chip_labels(), ["bash1", "bash2", "zsh3"])
+        self.bar._chip_box.reorder_child(self.bar.chip(2).revealer, 0)
+        self.assertEqual(self.bar.chip_labels(), ["zsh1", "bash2", "bash3"])
+        self.assertEqual([chip.id for chip in self.bar._chips], [2, 1, 3])
+
+    def test_fading_chip_keeps_text_without_consuming_a_number(self):
+        for pane_id in (1, 2, 3):
+            self.bar.add_chip(pane_id)
+        self.assertTrue(poll(lambda: self.bar.chip(2).revealer.get_mapped()))
+        fading = self.bar.chip(2)
+        self.bar.remove_chip(2, duration=220)
+        self.assertIn(fading, self.bar._closing)
+        self.assertEqual(fading.text, "bash2")
+        self.assertEqual(self.bar.chip(3).text, "bash2")
+        self.assertEqual(self.bar.chip_labels(), ["bash1", "bash2"])
+        self.assertEqual(self.bar.add_chip(4), "bash3")
+        self.assertEqual(self.bar.chip_labels(), ["bash1", "bash2", "bash3"])
+        self.assertEqual(fading.text, "bash2")
+        self.assertTrue(poll(lambda: not self.bar._closing))
+        self.assertEqual(self.bar.chip_labels(), ["bash1", "bash2", "bash3"])
 
     def test_chip_controls_and_signals(self):
         self.bar.add_chip(7, shell_name="zsh")
@@ -265,11 +290,27 @@ class PanelBarTest(PanelFixture, unittest.TestCase):
         self.assertEqual(self.labels(), ["bash1", "bash2", "bash3"])
         second = self.panel._panes[1]
         self.panel.bar.chip(second.id).delete_button.clicked()
-        self.assertEqual(self.labels(), ["bash1", "bash3"])
+        self.assertEqual(self.labels(), ["bash1", "bash2"])
         self.add()
-        self.assertEqual(sorted(self.labels()), ["bash1", "bash2", "bash3"])
+        self.assertEqual(self.labels(), ["bash1", "bash2", "bash3"])
         # Chips follow pane order: the new terminal opens right of the active one.
         self.assertEqual([self.panel.bar.chip(p.id).text for p in self.panel._panes], self.labels())
+
+    def test_add_after_focusing_first_pane_numbers_left_to_right(self):
+        first = self.panel._panes[0]
+        second = self.add()
+        self.panel.bar.chip(first.id).label_button.clicked()
+        self.assertTrue(poll(lambda: self.windows[0].get_focus() == first.terminal))
+        third = self.add()
+        self.assertEqual(self.panel._panes, [first, third, second])
+        self.assertEqual(self.labels(), ["bash1", "bash2", "bash3"])
+        self.assertEqual([self.panel.bar.chip(p.id).text for p in self.panel._panes], self.labels())
+        self.assertTrue(poll(lambda: all(self.panel.bar.chip(p.id).box.get_allocated_width() > 1
+                                        for p in self.panel._panes)))
+        positions = [self.panel.bar.chip(p.id).box.translate_coordinates(self.panel.bar, 0, 0)[0]
+                     for p in self.panel._panes]
+        self.assertEqual(positions, sorted(positions))
+        self.assertEqual(len(set(positions)), 3)
 
     def test_plus_button_is_rightmost_and_adds(self):
         self.add()
@@ -310,7 +351,7 @@ class PanelBarTest(PanelFixture, unittest.TestCase):
         for pane in self.panel._panes:
             self.assertTrue(alive(pane.pid))
             self.assertEqual(pane.pid, pids[id(pane)])
-        self.assertEqual(self.labels(), ["bash1", "bash3"])
+        self.assertEqual(self.labels(), ["bash1", "bash2"])
 
     def test_fullscreen_button_maximizes_and_restores(self):
         self.add()
