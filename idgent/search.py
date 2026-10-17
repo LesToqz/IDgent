@@ -226,6 +226,7 @@ class SearchPanel(Gtk.Box):
     """
     __gsignals__ = {
         'result-activated': (GObject.SignalFlags.RUN_LAST, None, (str, int, int, int)),
+        'escaped': (GObject.SignalFlags.RUN_LAST, None, ()),
     }
 
     def __init__(self, content: Gtk.Widget, root: str = ''):
@@ -276,6 +277,7 @@ class SearchPanel(Gtk.Box):
         label = Gtk.CellRendererText(ypad=2)
         column.pack_start(label, True)
         column.add_attribute(label, 'markup', 2)
+        self._cells = [number, label]
         self.tree.append_column(column)
         scroll = Gtk.ScrolledWindow()
         scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
@@ -315,6 +317,14 @@ class SearchPanel(Gtk.Box):
         """Set path -> live text | None; callbacks always run on GTK's thread."""
         self.text_provider = provider
         self._changed()
+
+    def set_font_size(self, size):
+        """Size the result rows (in points)."""
+        self.font_size = size
+        for cell in self._cells:
+            cell.set_property('size-points', size)
+        self.tree.columns_autosize()
+        self.tree.queue_resize()
 
     def focus_search(self):
         self.entry.grab_focus()
@@ -498,6 +508,7 @@ class SearchPanel(Gtk.Box):
         if event.keyval == Gdk.KEY_Escape:
             self.clear()
             self.entry.grab_focus()
+            self.emit('escaped')
             return True
         if widget == self.entry and event.keyval == Gdk.KEY_Down:
             self.tree.grab_focus()

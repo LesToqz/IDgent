@@ -11,7 +11,7 @@ import gi
 
 gi.require_version('Gtk', '3.0')
 gi.require_version('Gdk', '3.0')
-from gi.repository import Gdk, GdkPixbuf, GLib, Gtk, Pango
+from gi.repository import Gdk, GdkPixbuf, GLib, GObject, Gtk, Pango
 
 from idgent import gutter, highlight, mdview
 
@@ -384,19 +384,25 @@ class _EditorTab:
 
 
 class EditorPanel(Gtk.Box):
+    __gsignals__ = {
+        # Absolute path of the active tab, '' when none is open.
+        'current-file-changed': (GObject.SignalFlags.RUN_LAST, None, (str,)),
+    }
+
     def __init__(self):
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
         self.get_style_context().add_class('idgent-editor')
         self.syntax_style: dict[str, highlight.SyntaxStyle] = dict(highlight.DARK_PLUS)
         self.chrome: dict[str, str] = dict(gutter.DEFAULT_CHROME)
-        self.font_size = DEFAULT_FONT_SIZE
+        self.font_size = self.default_font_size = DEFAULT_FONT_SIZE
+        self._announced_path = ''
         self.tabs: list[_EditorTab] = []
         self.stack = Gtk.Stack()
         self.placeholder = Gtk.Label(label='IDgent  -  open a file from the explorer')
         self.placeholder.get_style_context().add_class('idgent-empty')
         self.stack.add_named(self.placeholder, 'empty')
         self.notebook = Gtk.Notebook(scrollable=True)
-        self.notebook.connect_after('switch-page', lambda *_: self._update_status())
+        self.notebook.connect_after('switch-page', lambda *_: (self._update_status(), self._announce_current()))
         self.stack.add_named(self.notebook, 'editor')
         self.pack_start(self.stack, True, True, 0)
         self.search_bar = Gtk.SearchBar()
@@ -446,6 +452,10 @@ class EditorPanel(Gtk.Box):
         for tab in self.tabs:
             tab.set_font_size(size)
 
+    def set_default_font_size(self, size: int) -> None:
+        """Set the size Ctrl+0 restores (the configured editor size)."""
+        self.default_font_size = max(MIN_FONT_SIZE, min(MAX_FONT_SIZE, int(size)))
+
     def _markdown_tab(self, path=None):
         return self._current() if path is None else next((tab for tab in self.tabs if tab.path == os.path.abspath(path)), None)
 
@@ -480,12 +490,66 @@ class EditorPanel(Gtk.Box):
         page = self.notebook.get_nth_page(self.notebook.get_current_page())
         return next((tab for tab in self.tabs if tab.page == page), None)
 
+    def current_path(self) -> str | None:
+        tab = self._current()
+        return tab.path if tab else None
+
+    def _announce_current(self) -> None:
+        path = self.current_path() or ''
+        if path != self._announced_path:
+            self._announced_path = path
+            self.emit('current-file-changed', path)
+
+    def buffer_text(self, path: str) -> str | None:
+        """Live text (unsaved edits included) of an open tab, else None."""
+        path = os.path.abspath(path)
+        tab = next((tab for tab in self.tabs if tab.path == path), None)
+        # A deleted file is gone from the project; its tab must not be a search hit.
+        return _text(tab.buffer) if tab and not tab.deleted else None
+
+    def selected_text(self) -> str:
+        """Text selected in the active source view ('' in preview or without a selection)."""
+        tab = self._current()
+        if not tab or tab.md_mode == 'preview':
+            return ''
+        bounds = tab.buffer.get_selection_bounds()
+        return tab.buffer.get_text(*bounds, True) if bounds else ''
+
+    def focus_current(self) -> bool:
+        """Give keyboard focus to the active tab; False when no tab is open."""
+        tab = self._current()
+        if tab:
+            (tab.md_preview_view if tab.md_mode == 'preview' else tab.view).grab_focus()
+        return tab is not None
+
+    def open_file_at(self, path: str, line: int, column: int = 0, length: int = 0) -> None:
+        """Open or focus a file and select [column, column+length) on a zero-based line."""
+        path = os.path.abspath(path)
+        self.open_file(path)
+        tab = next((tab for tab in self.tabs if tab.path == path), None)
+        if tab is None:
+            return
+        if tab.md_toggle and tab.md_mode == 'preview':
+            tab.set_markdown_mode('source')
+        buffer = tab.buffer
+        start = buffer.get_iter_at_line(max(0, min(line, buffer.get_line_count() - 1)))
+        limit = start.copy()
+        if not limit.ends_line():
+            limit.forward_to_line_end()
+        start.set_line_offset(min(max(0, column), limit.get_line_offset()))
+        end = start.copy()
+        end.forward_chars(min(max(0, length), limit.get_line_offset() - start.get_line_offset()))
+        buffer.select_range(start, end)
+        tab.view.scroll_to_iter(start, 0, True, 0, .5)
+        tab.view.grab_focus()
+
     def open_file(self, path: str) -> None:
         path = os.path.abspath(path)
         for tab in self.tabs:
             if tab.path == path:
                 self.notebook.set_current_page(self.notebook.page_num(tab.page))
                 (tab.md_preview_view if tab.md_mode == 'preview' else tab.view).grab_focus()
+                self._announce_current()
                 return
         try:
             # Reject FIFOs before open(), which could otherwise block the UI.
@@ -504,6 +568,7 @@ class EditorPanel(Gtk.Box):
         self.notebook.set_current_page(self.notebook.page_num(tab.page))
         tab.view.grab_focus()
         self._update_status()
+        self._announce_current()
 
     def _save(self, tab: _EditorTab) -> bool:
         if not tab.buffer.get_modified() and not tab.deleted:
@@ -544,6 +609,7 @@ class EditorPanel(Gtk.Box):
             if tab.path == old or tab.path.startswith(old + os.sep):
                 tab.set_path(new + tab.path[len(old):])
         self._update_status()
+        self._announce_current()
 
     def on_path_deleted(self, path: str) -> None:
         path = os.path.abspath(path)
@@ -567,6 +633,7 @@ class EditorPanel(Gtk.Box):
             self.stack.set_visible_child_name('empty')
             self.search_bar.set_search_mode(False)
         self._update_status()
+        self._announce_current()
         return True
 
     def _update_status(self) -> None:
@@ -623,7 +690,7 @@ class EditorPanel(Gtk.Box):
                 tab.undo(shift)
             elif key in (Gdk.KEY_w, Gdk.KEY_W):
                 self._close_tab(tab)
-            elif key in (Gdk.KEY_f, Gdk.KEY_F):
+            elif key in (Gdk.KEY_f, Gdk.KEY_F) and not shift:
                 tab.set_markdown_mode('source')
                 self.search_bar.set_search_mode(True)
                 self.search_entry.grab_focus()
@@ -639,7 +706,7 @@ class EditorPanel(Gtk.Box):
             elif key in (Gdk.KEY_minus, Gdk.KEY_KP_Subtract):
                 self.zoom(-1)
             elif key in (Gdk.KEY_0, Gdk.KEY_KP_0):
-                self.set_font_size(DEFAULT_FONT_SIZE)
+                self.set_font_size(self.default_font_size)
             else:
                 return False
             return True
