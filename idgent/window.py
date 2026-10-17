@@ -9,6 +9,8 @@ gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
 from gi.repository import Gdk, Gtk
 
+from idgent import settings, style
+from idgent.themes import THEMES, Theme, get_theme
 from idgent.explorer import ExplorerPanel
 from idgent.editor import EditorPanel
 from idgent.terminal import TerminalPanel
@@ -16,12 +18,14 @@ from idgent.titlebar import TitleBar
 
 
 class MainWindow(Gtk.ApplicationWindow):
-    def __init__(self, application: Gtk.Application, root: str) -> None:
+    def __init__(self, application: Gtk.Application, root: str,
+                 theme: Theme | None = None) -> None:
         super().__init__(application=application)
         self.set_default_size(1200, 750)
         self.root = str(Path(root).resolve())
         self._fullscreen_panel = None
         self._fullscreen_layout = None
+        self.theme = theme if theme is not None else get_theme(settings.get_theme_id())
 
         self.explorer = ExplorerPanel(self.root)
         self.editor = EditorPanel()
@@ -56,6 +60,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self.add(layout)
         self._update_title()
         self.connect("delete-event", self._on_delete)
+        self.set_theme(self.theme.id, persist=False)
 
     def _build_menu(self) -> Gtk.MenuBar:
         bar = Gtk.MenuBar()
@@ -89,7 +94,43 @@ class MainWindow(Gtk.ApplicationWindow):
         item(view_menu, "Toggle Terminal Fullscreen", self.toggle_terminal_fullscreen,
              "<Control><Shift>F11")
         item(view_menu, "Toggle Explorer Sidebar", self.toggle_explorer, "<Control>b")
+        theme_menu = Gtk.Menu()
+        theme_entry = Gtk.MenuItem(label="Theme")
+        theme_entry.set_submenu(theme_menu)
+        view_menu.append(theme_entry)
+        self._theme_items = {}
+        group = None
+        for theme in THEMES:
+            entry = Gtk.RadioMenuItem.new_with_label(group, theme.name)
+            group = entry.get_group()
+            entry.set_active(theme.id == self.theme.id)
+            entry.connect("toggled", self._theme_toggled, theme.id)
+            theme_menu.append(entry)
+            self._theme_items[theme.id] = entry
+        item(view_menu, "Next Theme", self.next_theme, "<Control><Alt>t")
         return bar
+
+    def _theme_toggled(self, entry: Gtk.RadioMenuItem, theme_id: str) -> None:
+        if entry.get_active() and theme_id != self.theme.id:
+            self.set_theme(theme_id)
+
+    def set_theme(self, theme_id: str, persist: bool = True) -> None:
+        """Recolour existing widgets and defaults without restarting any shells."""
+        theme = get_theme(theme_id)
+        style.apply_theme(theme)
+        self.editor.set_syntax_style(theme.syntax)
+        self.editor.set_chrome(theme.chrome)
+        colors = theme.terminal
+        for panel in (self.terminal_bottom, self.terminal_right):
+            panel.apply_palette(colors.foreground, colors.background, colors.ansi, colors.cursor)
+        self.theme = theme
+        self._theme_items[theme.id].set_active(True)
+        if persist:
+            settings.set_theme_id(theme.id)
+
+    def next_theme(self) -> None:
+        index = next(i for i, theme in enumerate(THEMES) if theme.id == self.theme.id)
+        self.set_theme(THEMES[(index + 1) % len(THEMES)].id)
 
     def _size_terminal(self, dock: Gtk.Paned, allocation: Gdk.Rectangle,
                        panel: TerminalPanel) -> None:
