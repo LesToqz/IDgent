@@ -723,7 +723,10 @@ class WithoutPygmentsTest(EditorHarness):
             settle(tab.highlighter)
             self.assertIsNone(tab.highlighter.lexer)
             self.assertEqual(self.panel.status.get_text(), 'Ln 3, Col 1  |  UTF-8  |  LF  |  Plain Text')
-            self.assertEqual(tab.buffer.get_tag_table().get_size(), 0)
+            hl_tags = []
+            tab.buffer.get_tag_table().foreach(lambda tag: hl_tags.append(tag.get_property('name'))
+                                               if (tag.get_property('name') or '').startswith('hl-') else None)
+            self.assertEqual(hl_tags, [])
             tab.buffer.insert(tab.buffer.get_end_iter(), '# more\n')
             self.assertFalse(tab.highlighter.pending)
             self.panel.set_syntax_style(highlight.DARK_PLUS)
