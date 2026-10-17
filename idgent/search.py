@@ -455,9 +455,10 @@ class SearchPanel(Gtk.Box):
         for group in result.groups:
             directory = os.path.dirname(group.relative_path)
             tag = '  · current file' if group.is_current else ''
+            # Count and tag first: a narrow sidebar clips the long directory, not these.
             markup = (f'<b>{esc(os.path.basename(group.path))}</b> '
-                      f'<span alpha="60%">{esc(directory)}  {len(group.matches)}</span>'
-                      f'<i>{tag}</i>')
+                      f'<span alpha="60%">{len(group.matches)}</span><i>{tag}</i>'
+                      f'<span alpha="60%">  {esc(directory)}</span>')
             parent = self.store.append(None, ['text-x-generic-symbolic', '', markup,
                                              group.path, 0, 0, 0, 'group'])
             for match in group.matches:
