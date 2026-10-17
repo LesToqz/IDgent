@@ -89,3 +89,42 @@ class SettingsTest(unittest.TestCase):
         with patch.dict(os.environ, XDG_CONFIG_HOME=''), patch.object(Path, 'home', return_value=Path(self.root.name)):
             self.assertTrue(settings.set_theme_id('nord'))
             self.assertTrue((Path(self.root.name) / '.config/idgent/settings.json').exists())
+
+    def test_font_defaults_and_unknown_keys(self):
+        self.assertEqual(settings.get_font_sizes(), dict(zip(settings.FONT_KEYS, (11, 11, 10))))
+        for method, args in ((settings.get_font_size, ('other',)),
+                             (settings.set_font_size, ('other', 12)),
+                             (settings.reset_font_size, ('other',))):
+            with self.assertRaises(ValueError):
+                method(*args)
+
+    def test_font_clamping_rounding_and_reset_preserve_keys(self):
+        settings.save({'future': {'enabled': True}, 'theme': 'nord'})
+        for key in settings.FONT_KEYS:
+            low, high = settings.FONT_SIZE_LIMITS[key]
+            for value, expected in ((-100, low), (100, high), (12.7, 13), (12.2, 12)):
+                self.assertTrue(settings.set_font_size(key, value))
+                self.assertEqual(settings.get_font_size(key), expected)
+            self.assertTrue(settings.reset_font_size(key))
+            self.assertEqual(settings.load()[key], settings.DEFAULT_FONT_SIZES[key])
+        self.assertEqual(settings.load()['future'], {'enabled': True})
+        self.assertEqual(settings.get_theme_id(), 'nord')
+
+    def test_junk_font_values(self):
+        for key in settings.FONT_KEYS:
+            for value in (None, True, False, '14', 'junk', [], {}, float('nan'), float('inf'), -float('inf')):
+                settings.save({key: value})
+                self.assertEqual(settings.get_font_size(key), settings.DEFAULT_FONT_SIZES[key])
+            for value, expected in ((-10, settings.FONT_SIZE_LIMITS[key][0]),
+                                    (10 ** 1000, settings.FONT_SIZE_LIMITS[key][1]), (14.8, 15)):
+                settings.save({key: value})
+                self.assertEqual(settings.get_font_size(key), expected)
+
+    def test_font_atomic_failure_preserves_old_file(self):
+        settings.set_font_size('editor_font_size', 15)
+        original = self.path.read_bytes()
+        with patch.object(settings.os, 'replace', side_effect=OSError('disk failure')):
+            self.assertFalse(settings.set_font_size('editor_font_size', 18))
+            self.assertFalse(settings.reset_font_size('editor_font_size'))
+        self.assertEqual(self.path.read_bytes(), original)
+        self.assertEqual(list(self.path.parent.iterdir()), [self.path])
