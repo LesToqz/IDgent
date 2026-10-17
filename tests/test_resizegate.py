@@ -104,6 +104,31 @@ class BashDrag:
         assert poll(lambda: all(self.text(t).count("long-prompt-directory") == 1 and
                                 "printf" not in self.text(t) for t in self.terminals))
         spin(150)
+        self.commit_delays = [[] for _gate in self.gates]
+        for gate, terminal, delays in zip(self.gates, self.terminals, self.commit_delays):
+            self._trace_allocations(gate, terminal, delays)
+
+    @staticmethod
+    def _trace_allocations(gate, terminal, delays):
+        geometry = (gate.get_allocated_width(), gate.get_allocated_height())
+        child_geometry = (terminal.get_allocated_width(), terminal.get_allocated_height())
+        changed_at = time.monotonic()
+
+        def gate_allocated(_gate, allocation):
+            nonlocal geometry, changed_at
+            current = allocation.width, allocation.height
+            if current != geometry:
+                geometry, changed_at = current, time.monotonic()
+
+        def child_allocated(_terminal, allocation):
+            nonlocal child_geometry
+            current = allocation.width, allocation.height
+            if current != child_geometry:
+                child_geometry = current
+                delays.append(time.monotonic() - changed_at)
+
+        gate.connect("size-allocate", gate_allocated)
+        terminal.connect("size-allocate", child_allocated)
 
     @staticmethod
     def text(terminal):
@@ -437,7 +462,15 @@ class BashDragTest(unittest.TestCase):
                                 self.assertEqual(metric["history_copies"], 1, metric)
                                 self.assertFalse(metric["garbage"], metric)
                                 self.assertEqual(metric["prompt_ends"], 1, metric)
-                                self.assertLessEqual(metric["winch"], 1)
+                            # A scheduler pause longer than SETTLE_MS is a real
+                            # settled allocation and may legitimately commit
+                            # mid-drag. Check each actual commit's timing instead
+                            # of requiring exactly one under arbitrary CPU load.
+                            for delays, metric in zip(harness.commit_delays, metrics):
+                                self.assertTrue(delays)
+                                self.assertGreaterEqual(min(delays), .100, delays)
+                                self.assertLess(len(delays), 10, delays)
+                                self.assertLessEqual(metric["winch"], len(delays), metric)
                     finally:
                         harness.close()
                 for baseline, after in zip(*measurements):
