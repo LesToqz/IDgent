@@ -26,6 +26,7 @@ bash packaging/install.sh
 bash packaging/install.sh --uninstall
 ```
 
+The top bar combines File/View menus, a centred folder title and window buttons.
 The resizable layout keeps the explorer on the left, with independent terminal
 docks below the editor and on its right. Both docks can be open together:
 
@@ -40,7 +41,20 @@ docks below the editor and on its right. Both docks can be open together:
 The bottom dock starts open; the right dock starts hidden. View → Terminal Below
 and Terminal on Right toggle each dock. Hiding a dock preserves its running
 shells. Showing an empty dock starts a shell. Closing the final pane hides its
-dock. Each dock has equal-width horizontal panes without headers or terminal tabs.
+dock after its exit animation. Each dock has equal-width horizontal panes and a
+bar with chips named bash1, bash2, bash3 (or the selected shell's name). Each chip
+has fullscreen and delete icons; the "+" button adds a terminal. Each dock allows
+three terminals independently; a fourth shows "Cannot add terminal (limit 3)".
+Adding and deleting panes animates the pane and chip.
+
+A chip's fullscreen icon fills the whole content area, keeping the top bar visible.
+Click it again, or use View → Toggle Terminal Fullscreen / Ctrl+Shift+F11, to
+restore the previous layout. The command uses the focused dock, otherwise the
+bottom dock, otherwise the right; if both are hidden it opens the bottom dock.
+Layout commands restore fullscreen first. Esc stays available to terminal shells
+and editors. Ctrl+Shift+F is already consumed by editor search, so fullscreen uses
+Ctrl+Shift+F11.
+
 Split Terminal inserts a pane immediately to the right of the focused pane,
 using the focused dock or the bottom dock when focus is elsewhere. Right-click a
 terminal for Copy, Paste, Select All, Clear, Split Terminal and Kill Terminal.
@@ -49,6 +63,7 @@ terminal for Copy, Paste, Select All, Clear, Split Terminal and Kill Terminal.
 | --- | --- |
 | Ctrl+` | Toggle bottom terminal dock; focus it when shown |
 | Ctrl+Alt+` | Toggle right terminal dock; focus it when shown |
+| Ctrl+Shift+F11 | Toggle whole-window terminal fullscreen |
 | Ctrl+Shift+5 | Split terminal in the focused dock (otherwise bottom) |
 | Ctrl+Shift+T | Split terminal (terminal focus) |
 | Ctrl+Shift+W | Kill focused terminal pane (terminal focus) |

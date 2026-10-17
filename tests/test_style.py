@@ -13,6 +13,8 @@ from idgent import style
 from idgent.editor import EditorPanel
 from idgent.explorer import ExplorerPanel
 from idgent.terminal import TerminalPanel
+from idgent.terminal_bar import TerminalBar
+from idgent.titlebar import TITLEBAR_CSS
 from gi.repository import Gtk, Vte
 
 
@@ -82,6 +84,29 @@ class StyleTest(unittest.TestCase):
         self.assertEqual(scrolled.get_vscrollbar().get_allocated_width(), 8)
         self.assertEqual(scrolled.get_hscrollbar().get_allocated_height(), 8)
 
+    def test_terminal_bar_is_styled(self):
+        style.apply_style()
+        window = Gtk.Window()
+        self.addCleanup(window.destroy)
+        bar = TerminalBar()
+        bar.add_chip(1)
+        bar.add_chip(2)
+        bar.set_active(2)
+        bar.show_limit_notice()
+        window.add(bar)
+        window.show_all()
+        self.assertTrue(self.poll(lambda: bar.get_allocated_height() > 1))
+        self.assertTrue(28 <= bar.get_allocated_height() <= 34)
+        warning = bar.notice.get_style_context().get_color(Gtk.StateFlags.NORMAL)
+        self.assertAlmostEqual(warning.red, 0xcc / 255, places=2)
+        self.assertAlmostEqual(warning.green, 0xa7 / 255, places=2)
+        inactive, active = (bar.chip(i).box.get_style_context() for i in (1, 2))
+        self.assertAlmostEqual(active.get_color(Gtk.StateFlags.NORMAL).red, 0xcc / 255, places=2)
+        self.assertAlmostEqual(inactive.get_color(Gtk.StateFlags.NORMAL).red, 0x85 / 255, places=2)
+        self.assertEqual(active.get_border(Gtk.StateFlags.NORMAL).bottom, 2)
+        flat = bar.chip(1).delete_button.get_style_context()
+        self.assertEqual(flat.get_border(Gtk.StateFlags.NORMAL).left, 0)
+
     def test_apply_is_idempotent(self):
         # Start unregistered even if an application test already applied the theme.
         if style._provider is not None:
@@ -96,6 +121,11 @@ class StyleTest(unittest.TestCase):
         register.assert_called_once_with(style._screen, provider,
                                          Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
         self.assertTrue(Gtk.Settings.get_default().get_property('gtk-application-prefer-dark-theme'))
+
+    def test_titlebar_css_is_in_applied_theme(self):
+        self.assertIn(TITLEBAR_CSS, style.CSS)
+        style.apply_style()
+        self.assertIsNotNone(style._provider)
 
     def test_css_has_no_parsing_errors(self):
         provider = Gtk.CssProvider()

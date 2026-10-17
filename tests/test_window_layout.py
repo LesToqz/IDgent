@@ -131,11 +131,128 @@ class WindowLayoutTests(unittest.TestCase):
         for panel, toggle in ((self.window.terminal_right, self.window.toggle_terminal_right),
                               (self.window.terminal_bottom, self.window.toggle_terminal_bottom)):
             panel.close_current()
-            self.assertFalse(panel.get_visible())
+            self.assertTrue(self.poll(lambda: not panel.get_visible()))
             self.assertEqual(panel.terminal_count(), 0)
             toggle()
             self.assertTrue(panel.get_visible())
             self.assertEqual(panel.terminal_count(), 1)
+
+    def fullscreen_button(self, panel):
+        return panel.bar.chip(panel._panes[0].id).fullscreen_button
+
+    def layout_state(self):
+        window = self.window
+        return ([widget.get_visible() for widget in
+                 (window.explorer, window.editor, window.dock_bottom,
+                  window.terminal_bottom, window.terminal_right)],
+                [paned.get_position() for paned in
+                 (window.sidebar, window.dock, window.dock_bottom)])
+
+    def test_chip_fullscreen_restores_visibility_positions_and_survives_show_all(self):
+        window = self.window
+        for right in (False, True):
+            for hidden_explorer in (False, True):
+                with self.subTest(right=right, hidden_explorer=hidden_explorer):
+                    if window.explorer.get_visible() == hidden_explorer:
+                        window.toggle_explorer()
+                    if right and not window.terminal_right.get_visible():
+                        window.toggle_terminal_right()
+                    panel = window.terminal_right if right else window.terminal_bottom
+                    panel.new_terminal()
+                    self.settle_layout()
+                    before = self.layout_state()
+                    self.fullscreen_button(panel).clicked()
+                    window.show_all()
+                    self.settle_layout()
+                    self.assertTrue(panel.is_maximized())
+                    self.assertTrue(window.titlebar.get_visible())
+                    self.assertFalse(window.explorer.get_visible())
+                    if right:
+                        self.assertFalse(window.dock_bottom.get_visible())
+                    else:
+                        self.assertFalse(window.editor.get_visible())
+                        self.assertFalse(window.terminal_right.get_visible())
+                    self.assertFalse(panel._panes[1].page.get_visible())
+                    self.assertEqual(panel.get_allocated_width(), window.sidebar.get_allocated_width())
+                    self.assertEqual(panel.get_allocated_height(), window.sidebar.get_allocated_height())
+                    self.fullscreen_button(panel).clicked()
+                    self.settle_layout()
+                    self.assertEqual(self.layout_state(), before)
+                    self.assertTrue(panel._panes[1].page.get_visible())
+
+    def test_fullscreen_command_target_and_empty_layout(self):
+        window = self.window
+        window.toggle_terminal_bottom()
+        window.toggle_terminal_fullscreen()
+        self.assertTrue(window.terminal_bottom.is_maximized())
+        window.toggle_terminal_fullscreen()
+        window.toggle_terminal_right()
+        window.terminal_right.focus_terminal()
+        window.toggle_terminal_fullscreen()
+        self.assertTrue(window.terminal_right.is_maximized())
+        window.toggle_terminal_fullscreen()
+        window.toggle_terminal_bottom()
+        window.explorer.tree.grab_focus()
+        window.toggle_terminal_fullscreen()
+        self.assertTrue(window.terminal_right.is_maximized())
+        window.toggle_terminal_fullscreen()
+
+    def test_layout_commands_restore_fullscreen_first(self):
+        window = self.window
+        for command, widget in ((window.toggle_explorer, window.explorer),
+                                (window.toggle_terminal_bottom, window.terminal_bottom),
+                                (window.toggle_terminal_right, window.terminal_right)):
+            before = widget.get_visible()
+            window.toggle_terminal_fullscreen()
+            command()
+            self.assertIsNone(window._fullscreen_panel)
+            self.assertEqual(widget.get_visible(), not before)
+        window.toggle_terminal_fullscreen()
+        with patch('idgent.window.Gtk.FileChooserDialog') as chooser:
+            chooser.return_value.run.return_value = Gtk.ResponseType.CANCEL
+            window.open_folder()
+        self.assertIsNone(window._fullscreen_panel)
+
+    def test_last_close_in_fullscreen_restores_and_hides_dock(self):
+        window = self.window
+        for panel in (window.terminal_bottom, window.terminal_right):
+            window._show_terminal(panel)
+            self.settle_layout()
+            panel.toggle_maximize()
+            panel.close_current()
+            self.assertTrue(self.poll(lambda: not panel.get_visible()))
+            self.assertIsNone(window._fullscreen_panel)
+            self.assertTrue(window.editor.get_visible())
+            self.assertTrue(window.explorer.get_visible())
+            self.assertTrue(window.dock_bottom.get_visible())
+
+    def test_show_during_last_exit_animation_respawns(self):
+        panel = self.window.terminal_bottom
+        panel.close_current()
+        self.window._show_terminal(panel)
+        self.settle_layout()
+        self.settle_layout()
+        self.assertTrue(panel.get_visible())
+        self.assertEqual(panel.terminal_count(), 1)
+
+    def test_each_dock_limit_and_split_notice(self):
+        self.window.toggle_terminal_right()
+        for panel in (self.window.terminal_bottom, self.window.terminal_right):
+            panel.bar.add_button.clicked()
+            panel.bar.add_button.clicked()
+            self.assertEqual(panel.terminal_count(), 3)
+            panel.bar.add_button.clicked()
+            self.assertEqual(panel.terminal_count(), 3)
+            self.assertTrue(panel.bar.notice.get_visible())
+            self.assertEqual(panel.bar.notice.get_text(), 'Cannot add terminal (limit 3)')
+            panel.bar.notice.hide()
+            panel.focus_terminal()
+            self.window.split_terminal()
+            self.assertTrue(panel.get_visible())
+            self.assertEqual(panel.terminal_count(), 3)
+            self.assertTrue(panel.bar.notice.get_visible())
+        self.assertEqual(self.window.terminal_bottom.terminal_count(), 3)
+        self.assertEqual(self.window.terminal_right.terminal_count(), 3)
 
     def test_explorer_toggle(self) -> None:
         self.window.toggle_explorer()
