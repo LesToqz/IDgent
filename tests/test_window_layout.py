@@ -3,6 +3,8 @@
 from pathlib import Path
 import os
 import signal
+import subprocess
+import sys
 import time
 import tempfile
 import unittest
@@ -14,7 +16,7 @@ os.environ["GDK_BACKEND"] = "x11"
 import gi
 
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gio, GLib, Gtk
+from gi.repository import Gio, GLib, GObject, Gtk
 
 from idgent.window import MainWindow
 
@@ -77,7 +79,12 @@ class WindowLayoutTests(unittest.TestCase):
         self.assertIs(self.window.dock.get_child2(), self.window.terminal_right)
         self.assertIs(self.window.dock_bottom.get_child2(), self.window.terminal_bottom)
         self.assertEqual(self.window.get_default_size(), (1200, 750))
-        self.assertIn(Path(self.folder.name).name, self.window.get_title())
+        self.assertEqual(self.window.get_title(), "IDgent")
+        self.assertEqual(self.window.titlebar.title_label.get_text(), "IDgent")
+        self.assertTrue(self.window.terminal_right.stacked)
+        self.assertFalse(self.window.terminal_bottom.stacked)
+        self.assertEqual(self.window.terminal_right._body.get_orientation(), Gtk.Orientation.VERTICAL)
+        self.assertEqual(self.window.terminal_bottom._body.get_orientation(), Gtk.Orientation.HORIZONTAL)
         self.assertEqual(self.window.get_child().get_children(), [self.window.sidebar])
         self.assertEqual(self.window.sidebar.get_position(), 260)
 
@@ -138,7 +145,7 @@ class WindowLayoutTests(unittest.TestCase):
             self.assertEqual(panel.terminal_count(), 1)
 
     def fullscreen_button(self, panel):
-        return panel.bar.chip(panel._panes[0].id).fullscreen_button
+        return panel._panes[0].header.fullscreen_button
 
     def layout_state(self):
         window = self.window
@@ -148,7 +155,7 @@ class WindowLayoutTests(unittest.TestCase):
                 [paned.get_position() for paned in
                  (window.sidebar, window.dock, window.dock_bottom)])
 
-    def test_chip_fullscreen_restores_visibility_positions_and_survives_show_all(self):
+    def test_header_fullscreen_restores_visibility_positions_and_survives_show_all(self):
         window = self.window
         for right in (False, True):
             for hidden_explorer in (False, True):
@@ -235,24 +242,179 @@ class WindowLayoutTests(unittest.TestCase):
         self.assertTrue(panel.get_visible())
         self.assertEqual(panel.terminal_count(), 1)
 
-    def test_each_dock_limit_and_split_notice(self):
+    def test_each_dock_limit_and_split_toast(self):
         self.window.toggle_terminal_right()
         for panel in (self.window.terminal_bottom, self.window.terminal_right):
-            panel.bar.add_button.clicked()
-            panel.bar.add_button.clicked()
+            panel.add_button.clicked()
+            panel.add_button.clicked()
             self.assertEqual(panel.terminal_count(), 3)
-            panel.bar.add_button.clicked()
+            panel.add_button.clicked()
             self.assertEqual(panel.terminal_count(), 3)
-            self.assertTrue(panel.bar.notice.get_visible())
-            self.assertEqual(panel.bar.notice.get_text(), 'Cannot add terminal (limit 3)')
-            panel.bar.notice.hide()
+            self.assertTrue(panel.toast.get_visible())
+            self.assertEqual(panel.toast.get_text(), 'Cannot add terminal (limit 3)')
+            panel.toast.hide()
             panel.focus_terminal()
             self.window.split_terminal()
             self.assertTrue(panel.get_visible())
             self.assertEqual(panel.terminal_count(), 3)
-            self.assertTrue(panel.bar.notice.get_visible())
+            self.assertTrue(panel.toast.get_visible())
         self.assertEqual(self.window.terminal_bottom.terminal_count(), 3)
         self.assertEqual(self.window.terminal_right.terminal_count(), 3)
+
+    def test_right_dock_stacks_and_bottom_dock_is_side_by_side(self):
+        window = self.window
+        window.toggle_terminal_right()
+        for panel in (window.terminal_bottom, window.terminal_right):
+            panel.new_terminal()
+            panel.new_terminal()
+            self.assertEqual(panel.header_labels(), ["bash1", "bash2", "bash3"])
+        self.settle_layout()
+        for panel, axis in ((window.terminal_bottom, 0), (window.terminal_right, 1)):
+            pages = [p.page.translate_coordinates(panel, 0, 0) for p in panel._panes]
+            self.assertEqual(len({xy[1 - axis] for xy in pages}), 1)
+            self.assertEqual([xy[axis] for xy in pages], sorted(xy[axis] for xy in pages))
+            self.assertEqual(len({xy[axis] for xy in pages}), 3)
+            for pane in panel._panes:
+                header = pane.header.translate_coordinates(panel, 0, 0)
+                content = pane.content.translate_coordinates(panel, 0, 0)
+                self.assertEqual(header[1] + pane.header.get_allocated_height(), content[1])
+                self.assertEqual(header[0], content[0])
+                self.assertEqual(pane.header.get_allocated_width(), pane.content.get_allocated_width())
+
+    def content_top(self) -> int:
+        """y of the editor/terminal area (right under the title bar) in window coordinates."""
+        return self.window.sidebar.translate_coordinates(self.window, 0, 0)[1]
+
+    def handle_width(self, paned: Gtk.Paned) -> int:
+        value = GObject.Value(int)
+        paned.style_get_property("handle-size", value)
+        return max(value.get_int(), 5)
+
+    def test_bottom_divider_collapses_editor_and_restores(self) -> None:
+        window = self.window
+        self.settle_layout()
+        before = window.terminal_bottom.get_allocated_height()
+        window.dock_bottom.set_position(0)
+        self.settle_layout()
+        self.assertFalse(window.editor.get_mapped())
+        top = window.terminal_bottom.translate_coordinates(window, 0, 0)[1] - self.content_top()
+        self.assertLessEqual(top, self.handle_width(window.dock_bottom))
+        self.assertEqual(window.terminal_bottom.get_allocated_height(),
+                         window.dock_bottom.get_allocated_height() - top)
+        self.assertGreater(window.terminal_bottom.get_allocated_height(), before)
+        self.assertEqual(window.sidebar.get_position(), 260)
+        header = window.terminal_bottom._panes[0].header
+        self.assertTrue(header.get_mapped())
+        self.assertEqual(header.translate_coordinates(window, 0, 0)[1] - self.content_top(), top)
+        window.dock_bottom.set_position(300)
+        self.settle_layout()
+        self.assertTrue(window.editor.get_mapped())
+        self.assertGreaterEqual(window.editor.get_allocated_height(), 150)
+        self.assertGreaterEqual(window.editor.get_allocated_width(), 300)
+        self.assertGreaterEqual(window.terminal_bottom.get_allocated_height(), 150)
+
+    def test_right_divider_collapses_left_part_and_restores(self) -> None:
+        window = self.window
+        window.toggle_terminal_right()
+        self.settle_layout()
+        window.dock.set_position(0)
+        self.settle_layout()
+        self.assertFalse(window.dock_bottom.get_mapped())
+        explorer_edge = window.explorer.get_allocated_width() + self.handle_width(window.sidebar)
+        right = window.terminal_right.translate_coordinates(window.sidebar, 0, 0)[0]
+        # Only the two divider handles separate the right dock from the explorer.
+        self.assertLessEqual(right - explorer_edge, self.handle_width(window.dock) + 1)
+        self.assertEqual(right + window.terminal_right.get_allocated_width(),
+                         window.sidebar.get_allocated_width())
+        self.assertEqual(window.explorer.get_allocated_width(), 260)
+        self.assertEqual(window.sidebar.get_position(), 260)
+        self.assertTrue(window.terminal_right.get_mapped())
+        window.dock.set_position(window.dock.get_allocated_width() // 2)
+        self.settle_layout()
+        self.assertTrue(window.dock_bottom.get_mapped())
+        self.assertGreaterEqual(window.editor.get_allocated_width(), 300)
+        self.assertGreaterEqual(window.terminal_right.get_allocated_width(), 380)
+        self.assertGreaterEqual(window.editor.get_allocated_height(), 150)
+
+    def test_both_collapsed_then_restored(self) -> None:
+        window = self.window
+        window.toggle_terminal_right()
+        self.settle_layout()
+        window.dock_bottom.set_position(0)
+        window.dock.set_position(0)
+        self.settle_layout()
+        self.assertFalse(window.editor.get_mapped())
+        self.assertTrue(window.terminal_right.get_mapped())
+        window.dock_bottom.set_position(300)
+        window.dock.set_position(window.dock.get_allocated_width() // 2)
+        self.settle_layout()
+        self.assertTrue(window.editor.get_mapped())
+        self.assertTrue(window.terminal_bottom.get_mapped())
+        self.assertGreater(window.editor.get_allocated_height(), 100)
+
+    def test_collapse_then_fullscreen_restores_positions(self) -> None:
+        window = self.window
+        window.toggle_terminal_right()
+        self.settle_layout()
+        window.dock_bottom.set_position(0)
+        window.dock.set_position(0)
+        self.settle_layout()
+        before = self.layout_state()
+        window.terminal_bottom.toggle_maximize()
+        self.settle_layout()
+        window.terminal_bottom.restore()
+        self.settle_layout()
+        self.assertEqual(self.layout_state(), before)
+
+    COLLAPSE_SCRIPT = """
+import os, tempfile, time
+os.environ.update(GDK_BACKEND="x11", SHELL="/bin/bash", PS1="$ ")
+import gi
+gi.require_version("Gtk", "3.0")
+from gi.repository import Gio, GLib, Gtk
+from idgent import style
+from idgent.window import MainWindow
+
+def pump(seconds):
+    end = time.monotonic() + seconds
+    context = GLib.MainContext.default()
+    while time.monotonic() < end:
+        while context.pending():
+            context.iteration(False)
+        time.sleep(0.01)
+
+app = Gtk.Application(application_id="dev.idgent.Collapse", flags=Gio.ApplicationFlags.NON_UNIQUE)
+app.register(None)
+style.apply_style()
+window = MainWindow(app, tempfile.mkdtemp())
+window.set_default_size(1400, 850)
+window.show_all()
+pump(0.4)
+window.toggle_terminal_right()
+for panel in (window.terminal_bottom, window.terminal_right):
+    while not panel.is_full():
+        panel.new_terminal()
+        pump(0.15)
+for bottom, right in ((0, 700), (100000, 700), (300, 0), (300, 100000), (0, 0), (300, 700)):
+    window.dock_bottom.set_position(bottom)
+    window.dock.set_position(right)
+    pump(0.3)
+window.terminal_right.toggle_maximize()
+pump(0.2)
+window.terminal_right.restore()
+pump(0.2)
+window.destroy()
+print("scenario-ok")
+"""
+
+    def test_collapse_scenario_logs_no_gtk_critical(self) -> None:
+        root = Path(__file__).resolve().parent.parent
+        env = dict(os.environ, G_DEBUG="fatal-criticals", PYTHONPATH=str(root))
+        result = subprocess.run([sys.executable, "-W", "ignore", "-c", self.COLLAPSE_SCRIPT],
+                                env=env, cwd=root, capture_output=True, text=True, timeout=90)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("scenario-ok", result.stdout)
+        self.assertNotIn("CRITICAL", result.stderr)
 
     def test_explorer_toggle(self) -> None:
         self.window.toggle_explorer()
@@ -280,8 +442,8 @@ class WindowLayoutTests(unittest.TestCase):
             explorer.assert_called_once_with(root)
             terminal.assert_called_once_with(root)
             right.assert_called_once_with(root)
-            self.assertEqual(self.window.get_title(), f"IDgent - {Path(root).name}")
-            self.assertEqual(self.window.titlebar.title_label.get_text(), self.window.get_title())
+            self.assertEqual(self.window.get_title(), "IDgent")
+            self.assertEqual(self.window.titlebar.title_label.get_text(), "IDgent")
 
     def test_quit_confirmation(self) -> None:
         self.assertFalse(self.window._on_delete(self.window, None))

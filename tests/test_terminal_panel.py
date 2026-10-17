@@ -21,7 +21,7 @@ gi.require_version("Vte", "2.91")
 from gi.repository import Gdk, GLib, Gtk, Vte
 
 from idgent.terminal import MAX_TERMINALS, TerminalPanel, pick_shell, safe_cwd
-from idgent.terminal_bar import TerminalBar
+from idgent.terminal_bar import PaneHeader
 
 def setUpModule() -> None:
     # PyGObject emits these Python 3.14 deprecations on every GLib iteration.
@@ -114,7 +114,7 @@ class TerminalPanelTest(unittest.TestCase):
         tab = self.panel._panes[0]
         self.assertEqual(tab.terminal.get_scrollback_lines(), 10000)
         self.assertEqual(tab.terminal.get_font().to_string(), "Monospace 11")
-        scrollbar = tab.page.get_children()[1]
+        scrollbar = tab.content.get_children()[1]
         self.assertEqual(scrollbar.get_adjustment(), tab.terminal.get_vadjustment())
         self.assertTrue(poll(lambda: self.window.get_focus() == tab.terminal))
         self.send(tab.terminal, "printf '%s:%s\\n' \"$TERM\" \"$COLORTERM\"")
@@ -144,13 +144,14 @@ class TerminalPanelTest(unittest.TestCase):
         self.assertEqual(events, [True])
         self.assertTrue(poll(lambda: not alive(pid)))
 
-    def test_empty_panel_has_only_bar_and_no_notebook(self):
+    def test_empty_panel_has_only_overlay_and_no_notebook(self):
         empty = TerminalPanel(self.directory.name, autostart=False)
         self.assertEqual(empty.terminal_count(), 0)
-        bar, body = empty.get_children()
-        self.assertIsInstance(bar, TerminalBar)
-        self.assertEqual(body.get_children(), [])
-        self.assertEqual(bar.chip_labels(), [])
+        self.assertEqual(empty.get_children(), [empty.overlay])
+        self.assertEqual(empty._body.get_children(), [])
+        self.assertEqual(empty.header_labels(), [])
+        self.assertIn(empty.add_button, empty.overlay.get_children())
+        self.assertIn(empty.toast, empty.overlay.get_children())
         empty.destroy()
         def descendants(widget):
             yield widget
@@ -159,7 +160,17 @@ class TerminalPanelTest(unittest.TestCase):
                     yield from descendants(child)
         self.assertFalse(any(isinstance(w, Gtk.Notebook) for w in descendants(self.panel)))
         self.assertEqual(self.panel.get_orientation(), Gtk.Orientation.VERTICAL)
-        self.assertEqual(self.panel.get_children()[0], self.panel.bar)
+        self.assertEqual(self.panel.get_children(), [self.panel.overlay])
+        self.assertEqual(self.panel._body.get_orientation(), Gtk.Orientation.HORIZONTAL)
+
+    def test_pane_structure_header_above_terminal(self):
+        pane = self.panel._panes[0]
+        self.assertIsInstance(pane.header, PaneHeader)
+        inner = pane.page.get_children()[0]
+        self.assertEqual(inner.get_orientation(), Gtk.Orientation.VERTICAL)
+        self.assertEqual(inner.get_children(), [pane.header, pane.content])
+        self.assertIn(pane.terminal, pane.content.get_children())
+        self.assertEqual(pane.header.text, "bash1")
 
     def test_equal_horizontal_panes_and_insertion(self):
         first = self.panel._panes[0]
@@ -182,6 +193,42 @@ class TerminalPanelTest(unittest.TestCase):
         self.assertLessEqual(max(a.width for a in allocations) - min(a.width for a in allocations), 1)
         self.panel.close_current()
         self.assertTrue(poll(lambda: first.page.get_allocated_width() > allocations[0].width))
+
+    def test_stacked_panes_are_rows_with_horizontal_dividers(self):
+        window = Gtk.Window()
+        window.set_default_size(600, 700)
+        panel = TerminalPanel(self.directory.name, stacked=True)
+        panel.ANIMATION_MS = 0
+        window.add(panel)
+        window.show_all()
+        self.addCleanup(window.destroy)
+        self.wait_spawn(panel._panes[0])
+        first = panel._panes[0]
+        panel.new_terminal()
+        self.wait_spawn(panel._panes[1])
+        first.terminal.grab_focus()
+        self.assertTrue(poll(lambda: window.get_focus() == first.terminal))
+        panel.new_terminal()
+        middle = panel._panes[1]
+        self.wait_spawn(middle)
+        self.assertEqual(panel._body.get_orientation(), Gtk.Orientation.VERTICAL)
+        self.assertEqual(panel.header_labels(), ["bash1", "bash2", "bash3"])
+        self.assertTrue(poll(lambda: all(p.page.get_allocated_height() > 1 for p in panel._panes)))
+        rects = [(p.page.translate_coordinates(panel, 0, 0), p.page.get_allocation())
+                 for p in panel._panes]
+        self.assertEqual(len({xy[0] for xy, _ in rects}), 1)
+        self.assertEqual(len({a.width for _, a in rects}), 1)
+        self.assertEqual(rects[0][1].width, panel.get_allocated_width())
+        ys = [xy[1] for xy, _ in rects]
+        self.assertLess(ys[0], ys[1])
+        self.assertLess(ys[1], ys[2])
+        heights = [a.height for _, a in rects]
+        self.assertLessEqual(max(heights) - min(heights), 1)
+        for pane in panel._panes[:-1]:
+            self.assertEqual(pane.divider.get_orientation(), Gtk.Orientation.HORIZONTAL)
+            self.assertTrue(pane.divider.get_visible())
+        self.assertFalse(panel._panes[-1].divider.get_visible())
+        panel.destroy()
 
     def test_set_cwd_only_changes_new_shells(self):
         first = self.panel._panes[0]
@@ -273,6 +320,73 @@ class TerminalPanelTest(unittest.TestCase):
         event.keyval = Gdk.KEY_w
         self.panel._key_press(self.panel._active.terminal, event)
         self.assertEqual(self.panel.terminal_count(), 2)
+
+    def test_stacked_focus_moves_with_up_down_only_when_stacked(self):
+        up, down = Gdk.KEY_Up, Gdk.KEY_Down
+        event = Gdk.Event.new(Gdk.EventType.KEY_PRESS)
+        event.state = Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.MOD1_MASK
+        first = self.panel._panes[0]
+        self.panel.new_terminal()
+        self.wait_spawn(self.panel._panes[1])
+        # Side by side: Ctrl+Alt+Up/Down are left to the terminal.
+        for key in (up, down):
+            event.keyval = key
+            self.assertFalse(self.panel._key_press(first.terminal, event))
+        window = Gtk.Window()
+        window.set_default_size(600, 600)
+        stacked = TerminalPanel(self.directory.name, stacked=True)
+        window.add(stacked)
+        window.show_all()
+        self.addCleanup(window.destroy)
+        self.wait_spawn(stacked._panes[0])
+        stacked.new_terminal()
+        self.wait_spawn(stacked._panes[1])
+        top, bottom = stacked._panes
+        top.terminal.grab_focus()
+        self.assertTrue(poll(lambda: window.get_focus() == top.terminal))
+        event.keyval = down
+        self.assertTrue(stacked._key_press(top.terminal, event))
+        self.assertTrue(poll(lambda: window.get_focus() == bottom.terminal))
+        event.keyval = up
+        self.assertTrue(stacked._key_press(bottom.terminal, event))
+        self.assertTrue(poll(lambda: window.get_focus() == top.terminal))
+        event.keyval = Gdk.KEY_Right  # left/right keep working as well
+        self.assertTrue(stacked._key_press(top.terminal, event))
+        self.assertTrue(poll(lambda: window.get_focus() == bottom.terminal))
+        stacked.destroy()
+
+    def background_pixel(self, window, terminal):
+        """Rendered colour near the bottom-right corner of an (empty) terminal area."""
+        poll(lambda: False, 0.4)
+        x, y = terminal.translate_coordinates(window, 0, 0)
+        x += terminal.get_allocated_width() - 4
+        y += terminal.get_allocated_height() - 4
+        pixbuf = Gdk.pixbuf_get_from_window(window.get_window(), x, y, 1, 1)
+        return tuple(pixbuf.get_pixels()[:3])
+
+    def test_apply_palette_changes_existing_and_new_terminals(self):
+        first = self.panel._panes[0]
+        self.assertEqual(self.background_pixel(self.window, first.terminal), (0x1e, 0x1e, 0x1e))
+        ansi = [f"#{i:02x}{i:02x}{i:02x}" for i in range(0x10, 0x10 + 16 * 0x10, 0x10)]
+        calls = []
+        original = Vte.Terminal.set_colors
+
+        def record(terminal, fg, bg, palette):
+            calls.append((terminal, fg.to_string(), bg.to_string(), len(palette)))
+            return original(terminal, fg, bg, palette)
+
+        with patch.object(Vte.Terminal, "set_colors", record):
+            self.panel.apply_palette("#112233", "#445566", ansi, "#aabbcc")
+            self.panel.new_terminal()
+        second = self.panel._panes[1]
+        self.wait_spawn(second)
+        for pane in (first, second):
+            self.assertIn((pane.terminal, "rgb(17,34,51)", "rgb(68,85,102)", 16), calls)
+            self.assertEqual(self.background_pixel(self.window, pane.terminal), (0x44, 0x55, 0x66))
+        # The default palette is used until a panel's own palette is changed.
+        fresh = TerminalPanel(self.directory.name, autostart=False)
+        self.addCleanup(fresh.destroy)
+        self.assertEqual(fresh._palette[:2], ("#d4d4d4", "#1e1e1e"))
 
     def test_focus_events_toggle_style_class(self):
         terminal = self.panel._panes[0].terminal
