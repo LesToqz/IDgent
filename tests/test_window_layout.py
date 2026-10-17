@@ -19,6 +19,8 @@ gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
 from gi.repository import Gdk, Gio, GLib, GObject, Gtk
 
+from idgent import settings, style
+from idgent.themes import THEMES, DEFAULT_THEME_ID
 from idgent.window import MainWindow
 
 
@@ -34,6 +36,11 @@ class WindowLayoutTests(unittest.TestCase):
     def setUp(self) -> None:
         self.folder = tempfile.TemporaryDirectory(prefix="idgent-layout-")
         self.addCleanup(self.folder.cleanup)
+        config = tempfile.TemporaryDirectory(prefix="idgent-config-")
+        self.addCleanup(config.cleanup)
+        environment = patch.dict(os.environ, {"XDG_CONFIG_HOME": config.name})
+        environment.start()
+        self.addCleanup(environment.stop)
         self.window = MainWindow(self.application, self.folder.name)
         self.window.show_all()
         self.addCleanup(self.destroy_window)
@@ -69,6 +76,51 @@ class WindowLayoutTests(unittest.TestCase):
         if not exited:
             os.kill(pid, signal.SIGKILL)
         self.assertTrue(exited, "shell survived window destruction")
+
+    def test_theme_menu_order_selection_persistence_and_reopen(self):
+        view_menu = self.window.titlebar.menu_bar.get_children()[1].get_submenu()
+        theme_menu = next(item.get_submenu() for item in view_menu.get_children()
+                          if item.get_label() == "Theme")
+        entries = theme_menu.get_children()
+        self.assertEqual([item.get_label() for item in entries], [t.name for t in THEMES])
+        self.assertTrue(all(isinstance(item, Gtk.RadioMenuItem) for item in entries))
+        self.assertEqual([item.get_active() for item in entries],
+                         [t.id == DEFAULT_THEME_ID for t in THEMES])
+        entries[1].activate()
+        self.assertIs(self.window.theme, THEMES[1])
+        self.assertEqual(settings.get_theme_id(), THEMES[1].id)
+        other = MainWindow(self.application, self.folder.name)
+        self.addCleanup(other.destroy)
+        self.assertFalse(other.get_realized())
+        self.assertIs(other.theme, THEMES[1])
+        self.assertTrue(other._theme_items[THEMES[1].id].get_active())
+        self.assertIs(style.current_theme(), THEMES[1])
+
+    def test_theme_fallback_and_nonpersisting_switch(self):
+        target = Path(os.environ["XDG_CONFIG_HOME"]) / "idgent/settings.json"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        for payload in ('{"theme": "unknown"}', '{broken json'):
+            with self.subTest(payload=payload):
+                target.write_text(payload)
+                other = MainWindow(self.application, self.folder.name)
+                try:
+                    self.assertEqual(other.theme.id, DEFAULT_THEME_ID)
+                finally:
+                    other.destroy()
+        settings.set_theme_id(THEMES[1].id)
+        self.window.set_theme(THEMES[2].id, persist=False)
+        self.assertEqual(settings.get_theme_id(), THEMES[1].id)
+        self.window.set_theme("unknown")
+        self.assertEqual(self.window.theme.id, DEFAULT_THEME_ID)
+        self.assertEqual(settings.get_theme_id(), DEFAULT_THEME_ID)
+
+    def test_next_theme_accelerator_cycles_and_wraps(self):
+        key, modifiers = Gtk.accelerator_parse("<Control><Alt>t")
+        for theme in (*THEMES[1:], THEMES[0]):
+            self.assertTrue(Gtk.accel_groups_activate(self.window, key, modifiers))
+            self.assertIs(self.window.theme, theme)
+            self.assertTrue(self.window._theme_items[theme.id].get_active())
+            self.assertEqual(settings.get_theme_id(), theme.id)
 
     def test_default_layout_and_title(self) -> None:
         self.assertTrue(self.window.terminal_bottom.get_visible())

@@ -27,6 +27,7 @@ class Application(Gtk.Application):
     def do_activate(self) -> None:
         window = self.get_active_window()
         if window is None:
+            self.theme = get_theme(settings.get_theme_id())
             window = MainWindow(self, self.root, theme=self.theme)
             window.show_all()
         window.present()
