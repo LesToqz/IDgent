@@ -94,6 +94,52 @@ class WindowLayoutTests(unittest.TestCase):
         self.window.toggle_terminal()
         self.assertTrue(self.window.terminal.get_visible())
 
+    def settle_layout(self) -> None:
+        deadline = time.monotonic() + 1
+        self.assertTrue(self.poll(lambda: time.monotonic() >= deadline))
+
+    def assert_right_terminal_size(self, window) -> None:
+        width = window.terminal.get_allocated_width()
+        dock_width = window.dock.get_allocated_width()
+        self.assertGreaterEqual(width, 380)
+        self.assertLessEqual(width, dock_width * .6)
+        self.assertAlmostEqual(width, max(380, round(dock_width * .4)), delta=1)
+
+    def test_allocated_terminal_dock_sizes(self) -> None:
+        self.window.resize(1200, 750)
+        terminal = self.window.terminal
+        self.window.toggle_terminal_position()
+        self.settle_layout()
+        self.assert_right_terminal_size(self.window)
+        self.window.toggle_terminal_position()
+        self.settle_layout()
+        height = terminal.get_allocated_height()
+        self.assertGreaterEqual(height, 150)
+        self.assertAlmostEqual(height, self.window.dock.get_allocated_height() * .3,
+                               delta=1)
+        self.assertIs(self.window.terminal, terminal)
+
+    def test_move_before_realize(self) -> None:
+        window = MainWindow(self.application, self.folder.name)
+        self.addCleanup(window.destroy)
+        self.assertFalse(window.get_realized())
+        window.toggle_terminal_position()
+        window.show_all()
+        self.settle_layout()
+        self.assert_right_terminal_size(window)
+
+    def test_hidden_terminal_dock_size(self) -> None:
+        self.window.toggle_terminal()
+        self.window.toggle_terminal_position()
+        self.settle_layout()
+        self.window.toggle_terminal()
+        self.window.toggle_explorer()
+        self.settle_layout()
+        self.assert_right_terminal_size(self.window)
+        self.window.toggle_explorer()
+        self.settle_layout()
+        self.assertGreaterEqual(self.window.terminal.get_allocated_width(), 380)
+
     def test_explorer_toggle(self) -> None:
         self.window.toggle_explorer()
         self.assertFalse(self.window.explorer.get_visible())
