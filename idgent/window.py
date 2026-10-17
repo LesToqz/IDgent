@@ -240,6 +240,11 @@ class MainWindow(Gtk.ApplicationWindow):
     def do_key_press_event(self, event: Gdk.EventKey) -> bool:
         focus = self.get_focus()
         modifiers = event.state & Gtk.accelerator_get_default_mod_mask()
+        # Handle before GTK/editor bindings can consume the menu shortcut.
+        if (modifiers == Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.SHIFT_MASK
+                and event.keyval == Gdk.KEY_F11):
+            self.toggle_terminal_fullscreen()
+            return True
         if (modifiers == Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.SHIFT_MASK
                 and event.keyval in (Gdk.KEY_5, Gdk.KEY_percent)):
             self.split_terminal()
