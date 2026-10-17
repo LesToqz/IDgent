@@ -5,6 +5,8 @@ import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk
 
+from idgent.themes import get_theme
+
 
 def build_titlebar_css(ui: dict[str, str]) -> str:
     """Build the titlebar rules from the same roles as the application theme."""
@@ -29,8 +31,6 @@ headerbar.idgent-titlebar {{
 .idgent-titlebar separator {{ background: transparent; min-width: 0; margin: 0; }}
 """
 
-
-from idgent.themes import get_theme
 
 TITLEBAR_CSS = build_titlebar_css(get_theme(None).ui)
 

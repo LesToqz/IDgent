@@ -19,7 +19,7 @@ menu {{ background: {ui['sidebar_bg']}; color: {ui['foreground']}; border: 1px s
 menuitem {{ padding: 4px 8px; }}
 menuitem:hover {{ background: {ui['selection_active']}; }}
 button, entry {{ background: {ui['button_bg']}; color: {ui['foreground']}; border: 1px solid {ui['border']};
-    border-radius: 4px; box-shadow: none; text-shadow: none; min-height: 22px; padding: 3px 8px; }}
+    border-radius: 4px; box-shadow: none; text-shadow: none; min-height: 22px; padding: 4px 8px; }}
 button:hover {{ background: {ui['button_hover']}; }}
 button:active {{ background: {ui['selection_active']}; }}
 button:focus, entry:focus {{ border-color: {ui['accent']}; outline-color: {ui['accent']}; outline-offset: -1px; }}
@@ -52,12 +52,12 @@ tab:hover .idgent-tab-close, tab:checked .idgent-tab-close,
 .idgent-tab-close:focus {{ opacity: 1; }}
 .idgent-tab-close:hover {{ background: {ui['tab_close_hover']}; }}
 .idgent-editor textview, .idgent-editor textview text {{ background-color: {ui['bg']};
-    color: {ui['editor_fg']}; caret-color: {ui['selection_fg']}; font-family: monospace; font-size: 11pt; }}
+    color: {ui['editor_fg']}; caret-color: {ui['cursor']}; font-family: monospace; font-size: 11pt; }}
 .idgent-editor textview text selection {{ background-color: {ui['editor_selection']}; color: {ui['selection_fg']}; }}
 .idgent-empty {{ color: {ui['muted']}; font-size: 16px; padding: 12px; }}
 .idgent-find-bar > revealer > box {{ background: {ui['sidebar_bg']}; border-top: 1px solid {ui['border']};
     border-bottom: 0; box-shadow: none; padding: 8px; }}
-.idgent-status {{ background: {ui['status_bg']}; color: {ui['status_fg']}; font-size: 12px; padding: 3px 10px; }}
+.idgent-status {{ background: {ui['status_bg']}; color: {ui['status_fg']}; font-size: 12px; padding: 4px 12px; }}
 scrollbar, scrollbar trough {{ background: transparent; border: 0;
     box-shadow: none; padding: 0; margin: 0; min-width: 0; min-height: 0; }}
 scrollbar slider {{ background: {ui['scrollbar']}; border: 0; border-radius: 0;
@@ -77,14 +77,14 @@ paned.vertical > separator {{ border-top: 2px solid transparent; border-bottom: 
     background-clip: padding-box; }}
 .idgent-terminal {{ background: {ui['panel_bg']}; color: {ui['foreground']}; }}
 .idgent-terminal-sep {{ background: {ui['border']}; min-width: 1px; min-height: 1px; border: 0; }}
-.idgent-vte {{ padding: 6px; }}
+.idgent-vte {{ padding: 8px; }}
 .idgent-terminal-header {{ background: {ui['panel_bg']}; color: {ui['muted']}; border: 0;
     border-bottom: 1px solid {ui['border']}; box-shadow: none; min-height: 29px; padding: 0 4px 0 0; }}
 .idgent-terminal-header.corner {{ padding-right: 34px; }}
 .idgent-terminal-header button {{ background: transparent; color: {ui['muted']}; border: 0; border-radius: 4px;
     box-shadow: none; text-shadow: none; min-height: 22px; min-width: 22px; padding: 0; margin: 3px 0 3px 2px; }}
 .idgent-terminal-header button:hover {{ background: {ui['hover']}; color: {ui['foreground']}; }}
-.idgent-terminal-header .idgent-terminal-header-label {{ min-width: 0; margin: 0; padding: 0 10px;
+.idgent-terminal-header .idgent-terminal-header-label {{ min-width: 0; margin: 0; padding: 0 12px;
     border-radius: 0; font-size: 12px; }}
 .idgent-terminal-header .idgent-terminal-header-label:hover {{ background: transparent; color: {ui['foreground']}; }}
 .idgent-terminal-header.active {{ color: {ui['foreground']}; border-bottom-color: {ui['accent']}; }}
@@ -96,7 +96,7 @@ paned.vertical > separator {{ border-top: 2px solid transparent; border-bottom: 
 .idgent-terminal-add.limit {{ color: {ui['limit_tint']}; }}
 .idgent-terminal-add.limit:hover {{ color: {ui['warning']}; }}
 .idgent-terminal-toast {{ background: {ui['toast_bg']}; color: {ui['warning']}; font-size: 12px;
-    border: 1px solid {ui['limit_tint']}; border-radius: 3px; padding: 4px 10px; }}
+    border: 1px solid {ui['limit_tint']}; border-radius: 4px; padding: 4px 12px; }}
 
 entry {{ background: {ui['input_bg']}; }}
 button, menuitem, notebook > header.top > tabs > tab, .idgent-explorer treeview.view {{

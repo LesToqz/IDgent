@@ -1,7 +1,6 @@
 """Theme catalogue integrity and independent WCAG contrast checks."""
 import dataclasses
 import os
-import re
 import subprocess
 import sys
 import unittest
@@ -76,6 +75,12 @@ class ThemesTest(unittest.TestCase):
                     self.assertGreaterEqual(contrast(value.foreground, u['bg']),
                                             2.2 if kind == 'comment' else 3)
             self.assertGreaterEqual(contrast(t.terminal.foreground, t.terminal.background), 7)
+
+    def test_terminal_palette_rejects_invalid_ansi(self):
+        for palette in (('#ffffff',) * 15, ('#ffffff',) * 17,
+                        ('#GGGGGG',) * 16, ('#fff',) * 16):
+            with self.assertRaises(ValueError):
+                themes.TerminalColors('#ffffff', '#000000', '#ffffff', palette)
 
     def test_dark_plus_matches_original(self):
         t = themes.get_theme('dark-plus')

@@ -10,6 +10,7 @@ github.com/primer/github-vscode-theme. Contrast-adjusted shades retain palette h
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import NamedTuple, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -20,11 +21,18 @@ KINDS = ('comment', 'doc', 'string', 'escape', 'regex', 'number', 'keyword', 'co
          'attribute', 'selector', 'heading', 'strong', 'emphasis', 'link', 'preproc', 'punctuation',
          'error')
 
+
 class _Style(NamedTuple):
     foreground: str
     bold: bool = False
     italic: bool = False
     underline: bool = False
+
+
+# Runtime alias keeps annotations introspectable without importing the GUI.
+if not TYPE_CHECKING:
+    SyntaxStyle = _Style
+
 
 _DARK_PLUS = {
     'comment': _Style('#6A9955'),
@@ -62,6 +70,11 @@ class TerminalColors:
     background: str
     cursor: str
     ansi: tuple[str, ...]
+
+    def __post_init__(self):
+        if len(self.ansi) != 16 or any(re.fullmatch(r'#[0-9a-f]{6}', c) is None
+                                       for c in self.ansi):
+            raise ValueError('A terminal palette requires exactly 16 #rrggbb colors')
 
 
 @dataclass(frozen=True)
@@ -117,7 +130,7 @@ _DARK_CHROME = dict(gutter_bg='#1e1e1e', gutter_fg='#858585', gutter_fg_active='
 
 
 def _theme(slug, name, dark, bg, sidebar, panel, fg, muted, accent, border,
-           colors, *, selection, ansi=None):
+           colors, *, selection, ansi=None, syntax_colors=None):
     # colors = comment, red, orange, yellow, green, cyan, blue, purple.
     comment, red, orange, yellow, green, cyan, blue, purple = colors
     foreground = _legible(fg, bg, 7)
@@ -139,6 +152,7 @@ def _theme(slug, name, dark, bg, sidebar, panel, fg, muted, accent, border,
                    decorator=yellow, variable=foreground, property=red, tag=red,
                    attribute=orange, selector=green, heading=blue, strong=blue,
                    emphasis=foreground, link=cyan, preproc=purple, punctuation=muted, error=red)
+    mapping.update(syntax_colors or {})
     syntax = {kind: _Style(_legible(mapping[kind], bg, 2.2 if kind == 'comment' else 3),
                           bold=kind in ('heading', 'strong'), italic=kind == 'emphasis',
                           underline=kind == 'link') for kind in KINDS}
@@ -157,17 +171,21 @@ THEMES: tuple[Theme, ...] = (
     _theme('light-plus', 'Light+', False, '#ffffff', '#f3f3f3', '#eeeeee', '#333333', '#616161',
            '#007acc', '#d4d4d4',
            ('#008000', '#a31515', '#b06000', '#795e26', '#a31515', '#267f99', '#0000ff', '#af00db'),
-           selection='#add6ff', ansi=('#000000', '#cd3131', '#008000', '#795e26', '#0451a5',
+           selection='#add6ff',
+           syntax_colors=dict(keyword='#0000ff', control='#af00db', number='#098658'),
+           ansi=('#000000', '#cd3131', '#008000', '#795e26', '#0451a5',
            '#bc05bc', '#0598bc', '#555555', '#666666', '#cd3131', '#008000', '#795e26',
            '#0451a5', '#bc05bc', '#0598bc', '#333333')),
     _theme('monokai', 'Monokai', True, '#272822', '#22231e', '#30312a', '#f8f8f2', '#909084',
            '#a6e22e', '#49483e',
            ('#75715e', '#f92672', '#fd971f', '#e6db74', '#a6e22e', '#66d9ef', '#66d9ef', '#ae81ff'),
-           selection='#49483e'),
+           selection='#49483e', syntax_colors=dict(keyword='#f92672', control='#f92672',
+               function='#a6e22e', string='#e6db74', doc='#e6db74', number='#ae81ff')),
     _theme('dracula', 'Dracula', True, '#282a36', '#21222c', '#343746', '#f8f8f2', '#8b93b6',
            '#bd93f9', '#44475a',
            ('#6272a4', '#ff5555', '#ffb86c', '#f1fa8c', '#50fa7b', '#8be9fd', '#8be9fd', '#ff79c6'),
-           selection='#44475a'),
+           selection='#44475a', syntax_colors=dict(function='#50fa7b', string='#f1fa8c',
+               doc='#f1fa8c', number='#bd93f9', property='#f8f8f2')),
     _theme('solarized-dark', 'Solarized Dark', True, '#002b36', '#073642', '#073642', '#eee8d5', '#839496',
            '#268bd2', '#164956',
            ('#586e75', '#dc322f', '#cb4b16', '#b58900', '#859900', '#2aa198', '#268bd2', '#6c71c4'),
@@ -183,17 +201,19 @@ THEMES: tuple[Theme, ...] = (
     _theme('nord', 'Nord', True, '#2e3440', '#272d38', '#3b4252', '#eceff4', '#8793a8',
            '#88c0d0', '#434c5e',
            ('#616e88', '#bf616a', '#d08770', '#ebcb8b', '#a3be8c', '#8fbcbb', '#81a1c1', '#b48ead'),
-           selection='#434c5e', ansi=('#3b4252', '#bf616a', '#a3be8c', '#ebcb8b', '#81a1c1',
+           selection='#434c5e', syntax_colors=dict(keyword='#81a1c1', control='#81a1c1',
+               function='#88c0d0', number='#b48ead', property='#d8dee9'),
+           ansi=('#3b4252', '#bf616a', '#a3be8c', '#ebcb8b', '#81a1c1',
            '#b48ead', '#88c0d0', '#e5e9f0', '#4c566a', '#bf616a', '#a3be8c', '#ebcb8b',
            '#81a1c1', '#b48ead', '#8fbcbb', '#eceff4')),
     _theme('one-dark', 'One Dark', True, '#282c34', '#21252b', '#2c313a', '#c8ccd4', '#828997',
            '#61afef', '#3e4451',
            ('#5c6370', '#e06c75', '#d19a66', '#e5c07b', '#98c379', '#56b6c2', '#61afef', '#c678dd'),
-           selection='#3e4451'),
+           selection='#3e4451', syntax_colors={'class': '#e5c07b', 'function': '#61afef'}),
     _theme('github-dark', 'GitHub Dark', True, '#0d1117', '#010409', '#161b22', '#e6edf3', '#8b949e',
            '#2f81f7', '#30363d',
            ('#8b949e', '#ff7b72', '#ffa657', '#d2a8ff', '#a5d6ff', '#79c0ff', '#79c0ff', '#ff7b72'),
-           selection='#264f78'),
+           selection='#264f78', syntax_colors=dict(function='#d2a8ff')),
     _theme('idgent-midnight', 'IDgent Midnight', True, '#081521', '#0b1c2b', '#102638', '#d5f1fa', '#7299ab',
            '#25d9e8', '#1b3c50',
            ('#587e91', '#ff7597', '#ffbb7b', '#f6df8e', '#7ce3b2', '#5fe4e9', '#78b8ff', '#c5a0ff'),

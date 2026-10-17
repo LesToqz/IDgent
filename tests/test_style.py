@@ -14,11 +14,108 @@ from idgent.editor import EditorPanel
 from idgent.explorer import ExplorerPanel
 from idgent.terminal import TerminalPanel
 from idgent.terminal_bar import AddButton, LimitToast, PaneHeader
-from idgent.titlebar import TITLEBAR_CSS
+from idgent.titlebar import TITLEBAR_CSS, TitleBar
+from idgent.themes import THEMES, get_theme
+from dataclasses import replace
+from gi.repository import Gdk
 from gi.repository import Gtk, Vte
 
 
 class StyleTest(unittest.TestCase):
+    def setUp(self):
+        self.addCleanup(style.apply_style)
+
+    def assert_color(self, widget, expected, *, background=False):
+        color = Gdk.RGBA()
+        self.assertTrue(color.parse(expected))
+        context = widget.get_style_context()
+        getter = context.get_background_color if background else context.get_color
+
+        def matches():
+            actual = getter(Gtk.StateFlags.NORMAL)
+            return all(abs(a - b) < .005 for a, b in zip(
+                (actual.red, actual.green, actual.blue, actual.alpha),
+                (color.red, color.green, color.blue, color.alpha)))
+
+        self.assertTrue(self.poll(matches),
+                        f'{getter(Gtk.StateFlags.NORMAL).to_string()} != {expected}')
+
+    def test_every_theme_parses(self):
+        for theme in THEMES:
+            with self.subTest(theme=theme.id):
+                provider = Gtk.CssProvider()
+                errors = []
+                provider.connect('parsing-error', lambda _, section, error: errors.append(str(error)))
+                provider.load_from_data(style.build_css(theme).encode('utf-8'))
+                self.assertEqual(errors, [])
+                self.assertIn('.idgent-resize-gate', style.build_css(theme))
+
+    def test_live_switch_uses_one_provider_and_updates_widgets(self):
+        style.apply_style()
+        provider = style._provider
+        window = Gtk.Window()
+        self.addCleanup(window.destroy)
+        bar = TitleBar(Gtk.MenuBar())
+        window.set_titlebar(bar)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        sidebar = Gtk.Box()
+        sidebar.get_style_context().add_class('idgent-explorer')
+        editor = EditorPanel()
+        box.pack_start(sidebar, False, False, 0)
+        box.pack_start(editor, True, True, 0)
+        window.add(box)
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / 'example.py'
+            path.write_text('def answer():\n    return 42\n')
+            editor.open_file(str(path))
+            window.show_all()
+            self.assertTrue(self.poll(window.get_mapped))
+            view = editor._current().view
+            with patch.object(Gtk.StyleContext, 'add_provider_for_screen') as register:
+                for theme in THEMES:
+                    with self.subTest(theme=theme.id):
+                        style.apply_theme(theme)
+                        editor.set_syntax_style(theme.syntax)
+                        editor.set_chrome(theme.chrome)
+                        self.assertIs(style.current_theme(), theme)
+                        self.assertIs(style._provider, provider)
+                        self.assertEqual(Gtk.Settings.get_default().get_property(
+                            'gtk-application-prefer-dark-theme'), theme.dark)
+                        self.assert_color(sidebar, theme.ui['foreground'])
+                        self.assert_color(sidebar, theme.ui['sidebar_bg'], background=True)
+                        self.assert_color(view, theme.ui['editor_fg'])
+                        self.assert_color(view, theme.ui['bg'], background=True)
+                        self.assert_color(editor.status, theme.ui['status_fg'])
+                        self.assert_color(editor.status, theme.ui['status_bg'], background=True)
+                        self.assert_color(bar, theme.ui['titlebar_bg'], background=True)
+                        self.assert_color(bar.title_label, theme.ui['title_fg'])
+                        self.assertEqual(editor.syntax_style, theme.syntax)
+                        self.assertEqual(editor.chrome, theme.chrome)
+                register.assert_not_called()
+
+    def test_invalid_switch_preserves_provider_theme_and_preference(self):
+        theme = get_theme('light-plus')
+        style.apply_theme(theme)
+        provider = style._provider
+        bad = replace(get_theme('nord'), ui={**get_theme('nord').ui, 'bg': 'invalid-color'})
+        with self.assertRaisesRegex(RuntimeError, 'IDgent theme CSS failed to parse'):
+            style.apply_theme(bad)
+        with patch.object(style, 'CSS', 'label { made-up-property: invalid; }'):
+            with self.assertRaisesRegex(RuntimeError, 'IDgent theme CSS failed to parse'):
+                style.apply_style()
+        self.assertIs(style.current_theme(), theme)
+        self.assertIs(style._provider, provider)
+        self.assertFalse(Gtk.Settings.get_default().get_property('gtk-application-prefer-dark-theme'))
+        window = Gtk.Window()
+        self.addCleanup(window.destroy)
+        window.show_all()
+        self.assert_color(window, theme.ui['bg'], background=True)
+
+    def test_requires_display(self):
+        with patch.object(Gdk.Screen, 'get_default', return_value=None):
+            with self.assertRaisesRegex(RuntimeError, 'initialized GTK display'):
+                style.apply_style()
+
     @staticmethod
     def poll(predicate, timeout=5):
         deadline = time.monotonic() + timeout
