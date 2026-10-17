@@ -4,6 +4,7 @@ from pathlib import Path
 import stat
 import tempfile
 import unittest
+import warnings
 from unittest.mock import patch
 
 # Keep GTK on the Xvfb display even when WAYLAND_DISPLAY is inherited.
@@ -322,6 +323,228 @@ class EditorPanelTest(unittest.TestCase):
         self.assertTrue(self.panel.search_entry.get_style_context().has_class('error'))
         self.key(first, Gdk.KEY_w, ctrl=True)
         self.assertEqual(len(self.panel.tabs), 1)
+
+
+class MarkdownEditorPanelTest(unittest.TestCase):
+    setUp = EditorPanelTest.setUp
+    open = EditorPanelTest.open
+    replace = EditorPanelTest.replace
+    key = EditorPanelTest.key
+
+    def markdown(self, name='notes.md', text='# Title\n\n**body**'):
+        path = self.root / name
+        path.write_text(text)
+        return self.open(path)
+
+    def wait(self, predicate, timeout=3):
+        import time
+        with warnings.catch_warnings():
+            warnings.filterwarnings('ignore', category=DeprecationWarning, module=r'gi\.events')
+            end = time.monotonic() + timeout
+            while not predicate() and time.monotonic() < end:
+                if Gtk.events_pending():
+                    Gtk.main_iteration_do(False)
+                else:
+                    time.sleep(.002)
+        self.assertTrue(predicate())
+
+    def ready(self, tab):
+        self.wait(lambda: not tab._md_timeout and not tab.md_renderer._idle and not tab._md_restore_idle)
+
+    def test_only_markdown_and_default_source(self):
+        plain = self.open()
+        self.assertIsNone(plain.md_toggle)
+        self.assertIsNone(self.panel.markdown_mode())
+        for name in ('notes.md', 'README.MD', 'doc.MarkDown'):
+            tab = self.markdown(name)
+            self.assertIsInstance(tab.page, Gtk.Overlay)
+            self.assertIsNotNone(tab.md_toggle)
+            self.assertEqual(tab.md_mode, 'source')
+            self.assertEqual(self.panel.markdown_mode(), 'source')
+            self.assertEqual(tab.md_stack.get_visible_child_name(), 'source')
+            self.assertEqual(tab.md_buttons['preview'].get_tooltip_text(), 'Preview Markdown')
+            self.assertEqual(tab.md_buttons['source'].get_tooltip_text(), 'Show source')
+            self.assertFalse(tab.md_preview_view.get_editable())
+        with self.assertRaises(ValueError):
+            self.panel.set_markdown_mode('invalid')
+
+    def test_buttons_switch_both_ways_and_remain_pressed(self):
+        tab = self.markdown()
+        tab.md_buttons['preview'].clicked()
+        self.ready(tab)
+        self.assertEqual(tab.md_mode, 'preview')
+        self.assertTrue(tab.md_buttons['preview'].get_active())
+        self.assertFalse(tab.md_buttons['source'].get_active())
+        tab.md_buttons['preview'].clicked()
+        self.assertTrue(tab.md_buttons['preview'].get_active())
+        tab.md_buttons['source'].clicked()
+        self.assertEqual(tab.md_mode, 'source')
+        self.assertTrue(tab.md_buttons['source'].get_active())
+        self.assertFalse(tab.md_buttons['preview'].get_active())
+
+    def test_per_tab_mode_and_named_path(self):
+        first = self.markdown()
+        second = self.markdown('second.md')
+        self.panel.set_markdown_mode('preview', first.path)
+        self.assertEqual(self.panel.markdown_mode(first.path), 'preview')
+        self.assertEqual(self.panel.markdown_mode(second.path), 'source')
+        self.assertIs(self.panel._current(), second)
+        self.assertIsNone(self.panel.markdown_mode(self.root / 'missing.md'))
+        self.panel.open_file(first.path)
+        self.ready(first)
+        self.assertIs(self.panel._current(), first)
+        self.assertTrue(first.md_preview_view.is_focus())
+
+    def test_unsaved_buffer_and_debounced_live_update(self):
+        tab = self.markdown()
+        self.replace(tab, '# Unsaved\n\nhello')
+        self.panel.set_markdown_mode('preview')
+        self.ready(tab)
+        self.assertIn('Unsaved', editor._text(tab.md_renderer.buffer))
+        self.assertNotIn('Unsaved', Path(tab.path).read_text())
+        self.replace(tab, '# Latest')
+        self.assertNotEqual(tab._md_timeout, 0)
+        self.replace(tab, '# Final')
+        self.ready(tab)
+        self.assertIn('Final', editor._text(tab.md_renderer.buffer))
+        self.assertNotIn('Latest', editor._text(tab.md_renderer.buffer))
+        self.assertTrue(tab.buffer.get_modified())
+
+    def test_cursor_focus_and_status_survive_switch(self):
+        tab = self.markdown()
+        tab.buffer.place_cursor(tab.buffer.get_iter_at_offset(4))
+        before = self.panel.status.get_text()
+        self.panel.set_markdown_mode('preview')
+        self.ready(tab)
+        self.assertTrue(tab.md_preview_view.is_focus())
+        self.assertEqual(self.panel.status.get_text(), before + ' (Preview)')
+        self.panel.set_markdown_mode('source')
+        self.assertEqual(tab.cursor(), 4)
+        self.assertTrue(tab.view.is_focus())
+        self.assertEqual(self.panel.status.get_text(), before)
+
+    def test_scroll_context_and_rerender_offset(self):
+        tab = self.markdown(text=('paragraph line\n\n' * 300))
+        self.wait(lambda: tab.source_scroll.get_vadjustment().get_upper() > 1000)
+        a = tab.source_scroll.get_vadjustment()
+        a.set_value((a.get_upper() - a.get_page_size()) * .4)
+        original = a.get_value()
+        self.panel.set_markdown_mode('preview')
+        self.ready(tab)
+        preview = tab.md_scroll.get_vadjustment()
+        self.assertGreater(preview.get_value(), 100)
+        preview.set_value(200)
+        tab.buffer.insert(tab.buffer.get_end_iter(), '\nextra')
+        self.ready(tab)
+        self.assertAlmostEqual(preview.get_value(), 200, delta=2)
+        self.panel.set_markdown_mode('source')
+        self.assertAlmostEqual(a.get_value(), original, delta=2)
+
+    def test_theme_and_zoom_update_open_and_future_previews(self):
+        from idgent import themes
+        tab = self.markdown()
+        self.panel.set_markdown_mode('preview')
+        self.ready(tab)
+        for name in ('light-plus', 'nord', 'dark-plus'):
+            theme = themes.get_theme(name)
+            self.panel.set_syntax_style(theme.syntax)
+            self.panel.set_chrome(theme.chrome)
+            self.panel.set_font_size(16)
+            tag = tab.md_renderer.tags['h1']
+            from gi.repository import Gdk
+            expected = Gdk.RGBA()
+            expected.parse(theme.syntax['heading'].foreground)
+            self.assertEqual(tag.get_property('foreground-rgba'), expected)
+            self.assertEqual(tab.md_renderer.size, 16)
+            self.assertEqual(tab.md_renderer.chrome, self.panel.chrome)
+        later = self.markdown('later.markdown')
+        self.assertEqual(later.md_renderer.size, 16)
+        self.assertEqual(later.md_renderer.chrome, self.panel.chrome)
+
+    def test_rename_adds_removes_and_readds_toggle(self):
+        tab = self.open()
+        tab.set_path(str(self.root / 'renamed.MD'))
+        self.assertIsNotNone(tab.md_toggle)
+        self.panel.set_markdown_mode('preview')
+        renderer = tab.md_renderer
+        tab.set_path(str(self.root / 'renamed.txt'))
+        self.assertIsNone(tab.md_toggle)
+        self.assertIsNone(tab.md_preview_view)
+        self.assertTrue(renderer.destroyed)
+        self.assertEqual(tab.md_mode, 'source')
+        self.assertEqual(renderer._idle, 0)
+        tab.set_path(str(self.root / 'again.markdown'))
+        self.assertIsNotNone(tab.md_toggle)
+        self.panel.set_markdown_mode('preview')
+        self.ready(tab)
+
+    def test_partial_and_invalid_syntax_styles_remain_supported(self):
+        tab = self.markdown(text='# Heading\n\n```python\nreturn 123\n```')
+        self.panel.set_syntax_style({'keyword': editor.highlight.SyntaxStyle('not-a-color')})
+        self.panel.set_markdown_mode('preview')
+        self.ready(tab)
+        self.assertIn('return 123', editor._text(tab.md_renderer.buffer))
+        self.assertFalse(tab.md_renderer.tags['syntax-keyword'].get_property('foreground-set'))
+
+    def test_shortcut_find_readonly_and_shared_zoom(self):
+        tab = self.markdown()
+        self.assertTrue(self.key(tab, Gdk.KEY_V, ctrl=True, shift=True))
+        self.ready(tab)
+        self.assertEqual(tab.md_mode, 'preview')
+        before = editor._text(tab.buffer)
+        self.key(tab, Gdk.KEY_Return)
+        self.key(tab, Gdk.KEY_Tab)
+        self.key(tab, Gdk.KEY_slash, ctrl=True)
+        self.assertEqual(editor._text(tab.buffer), before)
+        self.key(tab, Gdk.KEY_plus, ctrl=True)
+        self.assertEqual(tab.md_renderer.size, 12)
+        self.key(tab, Gdk.KEY_minus, ctrl=True)
+        self.assertEqual(tab.md_renderer.size, 11)
+        self.key(tab, Gdk.KEY_0, ctrl=True)
+        self.key(tab, Gdk.KEY_f, ctrl=True)
+        self.assertEqual(tab.md_mode, 'source')
+        self.assertTrue(self.panel.search_bar.get_search_mode())
+        self.key(tab, Gdk.KEY_v, ctrl=True, shift=True)
+        self.assertFalse(self.panel.search_bar.get_search_mode())
+        self.key(tab, Gdk.KEY_v, ctrl=True, shift=True)
+        self.assertEqual(tab.md_mode, 'source')
+
+    def test_preview_key_event_scroll_switch_and_close(self):
+        tab = self.markdown()
+        self.panel.set_markdown_mode('preview')
+        event = Gdk.Event.new(Gdk.EventType.KEY_PRESS)
+        event.keyval, event.state = Gdk.KEY_plus, Gdk.ModifierType.CONTROL_MASK
+        self.assertTrue(tab.md_preview_view.emit('key-press-event', event))
+        self.assertEqual(self.panel.font_size, 12)
+        scroll = Gdk.Event.new(Gdk.EventType.SCROLL)
+        scroll.state, scroll.direction = Gdk.ModifierType.CONTROL_MASK, Gdk.ScrollDirection.UP
+        tab.md_preview_view.emit('scroll-event', scroll)
+        self.assertEqual(self.panel.font_size, 13)
+        other = self.markdown('other.md')
+        self.key(other, Gdk.KEY_Tab, ctrl=True)
+        self.assertIs(self.panel._current(), tab)
+        event.keyval = Gdk.KEY_w
+        self.assertTrue(tab.md_preview_view.emit('key-press-event', event))
+        self.assertNotIn(tab, self.panel.tabs)
+
+    def test_close_and_destroy_cancel_pending_work(self):
+        tab = self.markdown()
+        self.panel.set_markdown_mode('preview')
+        self.replace(tab, '# pending')
+        renderer = tab.md_renderer
+        self.assertNotEqual(tab._md_timeout, 0)
+        self.ask.return_value = 'discard'
+        self.assertTrue(self.panel._close_tab(tab))
+        self.assertEqual(tab._md_timeout, 0)
+        self.assertEqual(renderer._idle, 0)
+        self.assertTrue(renderer.destroyed)
+        tab = self.markdown('again.md')
+        self.panel.set_markdown_mode('preview')
+        renderer = tab.md_renderer
+        self.window.destroy()
+        self.assertTrue(renderer.destroyed)
+        self.assertEqual(renderer._idle, 0)
+        self.assertEqual(tab._md_restore_idle, 0)
 
 
 if __name__ == '__main__':

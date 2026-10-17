@@ -231,14 +231,20 @@ class _EditorTab:
             return
         panel, colors = self.panel, self.panel.chrome
         self.md_renderer.set_style(panel.syntax_style, colors, panel.font_size)
-        foreground = panel.syntax_style['operator'].foreground
+        foreground = self.md_renderer.foreground
+        active, edge = Gdk.RGBA(), Gdk.RGBA()
+        active.parse(colors['bracket_bg'])
+        edge.parse(colors['gutter_fg'])
+        border = 'rgb(' + ','.join(str(round((a * .75 + b * .25) * 255))
+                                  for a, b in zip((active.red, active.green, active.blue),
+                                                  (edge.red, edge.green, edge.blue))) + ')'
         self.md_toggle_provider.load_from_data(f'''
             .md-toggle {{ background: {colors['current_line_bg']}; border-radius: 8px; padding: 3px; }}
             .md-toggle button {{ background: transparent; color: {foreground}; border: 1px solid transparent;
                 border-radius: 6px; padding: 0; min-width: 26px; min-height: 22px;
                 box-shadow: none; outline: none; margin: 0; }}
             .md-toggle button:hover {{ background: {colors['bracket_bg']}; }}
-            .md-toggle button:checked {{ background: {colors['bracket_bg']}; border-color: {colors['gutter_fg']}; }}
+            .md-toggle button:checked {{ background: {colors['bracket_bg']}; border-color: {border}; }}
         '''.encode())
         paths = {'preview': '<path d="M2 10s3.5-6 8-6 8 6 8 6-3.5 6-8 6-8-6-8-6Z"/><circle cx="10" cy="10" r="2.7"/>',
                  'source': '<path d="m6 5-5 5 5 5m8-10 5 5-5 5M12 3 8 17"/>'}
@@ -612,6 +618,8 @@ class EditorPanel(Gtk.Box):
             if shift and key in (Gdk.KEY_v, Gdk.KEY_V) and tab.md_toggle:
                 tab.set_markdown_mode('preview' if tab.md_mode == 'source' else 'source')
             elif key in (Gdk.KEY_z, Gdk.KEY_Z):
+                if tab.md_mode == 'preview':
+                    return True
                 tab.undo(shift)
             elif key in (Gdk.KEY_w, Gdk.KEY_W):
                 self._close_tab(tab)

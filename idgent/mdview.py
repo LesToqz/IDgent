@@ -38,7 +38,7 @@ _INLINE = re.compile(r'\\([!"#$%&\'()*+,\-./:;<=>?@\[\]\\^_`{|}~]|\n)|'
                      r'(`+)([^`]*?)\2|'
                      r'(!?)\[([^\]\n]*)\]\((<[^>\n]*>|[^\s()]*(?:\([^()]*\)[^\s()]*)*)(?:\s+"[^"\n]*")?\)|'
                      r'<((?:https?://|mailto:)[^<>\s]+)>|'
-                     r'(\*\*|__|~~|\*|_)(?=\S)(.+?)\8| {2,}\n', re.DOTALL)
+                     r'(\*\*\*|___|\*\*|__|~~|\*|_)(?=\S)(.+?)\8| {2,}\n', re.DOTALL)
 
 
 def parse_inline(text: str, styles: tuple[str, ...] = (), depth: int = 0) -> list[Span]:
@@ -63,8 +63,9 @@ def parse_inline(text: str, styles: tuple[str, ...] = (), depth: int = 0) -> lis
         elif auto:
             result.append(Span(auto, styles + ('link',), auto))
         elif delimiter:
-            style = {'**': 'strong', '__': 'strong', '*': 'emphasis', '_': 'emphasis', '~~': 'strike'}[delimiter]
-            result.extend(parse_inline(body, styles + (style,), depth + 1))
+            added = ('strong', 'emphasis') if len(delimiter) == 3 else (
+                {'**': 'strong', '__': 'strong', '*': 'emphasis', '_': 'emphasis', '~~': 'strike'}[delimiter],)
+            result.extend(parse_inline(body, styles + added, depth + 1))
         else:
             result.append(Span('\n', styles))
         pos = match.end()
@@ -80,9 +81,9 @@ _RULE = re.compile(r'^ {0,3}(?:(?:\*\s*){3,}|(?:-\s*){3,}|(?:_\s*){3,})$')
 _TABLE_RULE = re.compile(r'^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$')
 
 
-def _quote(line):
+def _quote(line, limit=32):
     depth = 0
-    while depth < 32:
+    while depth < limit:
         match = re.match(r'^ {0,3}> ?', line)
         if not match:
             break
@@ -92,7 +93,9 @@ def _quote(line):
 
 
 def _cells(line):
-    return [part.strip().replace('\\|', '|') for part in re.split(r'(?<!\\)\|', line.strip().strip('|'))]
+    # Bound grid expansion (one very wide cell must not multiply a huge table).
+    return [part.strip().replace('\\|', '|')[:120]
+            for part in re.split(r'(?<!\\)\|', line.strip().strip('|'), maxsplit=31)]
 
 
 def parse_blocks(text: str):
@@ -115,7 +118,7 @@ def parse_blocks(text: str):
             i += 1
             content, size = [], 0
             while i < count:
-                q, current = _quote(lines[i])
+                q, current = _quote(lines[i], quote)
                 if re.fullmatch(r' {0,3}' + re.escape(token[0]) + '{' + str(len(token)) + r',}\s*', current):
                     i += 1
                     break
@@ -144,21 +147,22 @@ def parse_blocks(text: str):
             i += 1
             continue
         if i + 1 < count and '|' in line and _TABLE_RULE.fullmatch(_quote(lines[i + 1])[1]):
-            rows = [_cells(line)]
+            header = _cells(line)
             i += 2
-            while i < count and '|' in lines[i] and lines[i].strip() and len(rows) < 128:
-                rows.append(_cells(_quote(lines[i])[1]))
-                i += 1
-            columns = max(map(len, rows))
-            widths = [max((len(row[c]) if c < len(row) else 0) for row in rows) for c in range(columns)]
-            grid = []
-            for n, row in enumerate(rows):
-                grid.append('│ ' + ' │ '.join((row[c] if c < len(row) else '').ljust(widths[c]) for c in range(columns)) + ' │')
-                if n == 0:
-                    grid.append('├─' + '─┼─'.join('─' * w for w in widths) + '─┤')
-            for row in grid:
-                for start in range(0, len(row), CHUNK):
-                    yield Block('table', row[start:start + CHUNK] + '\n', quote=quote)
+            while True:
+                rows = [header]
+                while i < count and '|' in lines[i] and lines[i].strip() and len(rows) < 128:
+                    rows.append(_cells(_quote(lines[i])[1]))
+                    i += 1
+                columns = max(map(len, rows))
+                widths = [max((len(row[c]) if c < len(row) else 0) for row in rows) for c in range(columns)]
+                for n, row in enumerate(rows):
+                    grid = '│ ' + ' │ '.join((row[c] if c < len(row) else '').ljust(widths[c]) for c in range(columns)) + ' │'
+                    yield Block('table', grid + '\n', quote=quote)
+                    if n == 0:
+                        yield Block('table', '├─' + '─┼─'.join('─' * w for w in widths) + '─┤\n', quote=quote)
+                if i >= count or '|' not in lines[i] or not lines[i].strip():
+                    break
             continue
         item = _LIST.match(line)
         if item:
@@ -168,11 +172,23 @@ def parse_blocks(text: str):
                 marker, body = ('☐' if task[1] == ' ' else '☑'), task[2]
             elif marker in ('-', '+', '*'):
                 marker = '•'
-            yield Block('list', body, indent=min(len(spaces), 64), quote=quote, marker=marker)
             i += 1
+            content = [body]
+            size = len(body)
+            while i < count and size < CHUNK:
+                q, continuation = _quote(lines[i])
+                width = len(continuation) - len(continuation.lstrip(' '))
+                if (q != quote or width < item.start(3) or not continuation.strip() or
+                        _LIST.match(continuation) or _FENCE.match(continuation) or _HEADING.match(continuation)):
+                    break
+                content.append(continuation[item.start(3):])
+                size += len(continuation)
+                i += 1
+            yield Block('list', '\n'.join(content), indent=min(len(spaces), 64), quote=quote, marker=marker)
             continue
         if line.startswith('    '):
-            yield Block('codeblock', line[4:] + '\n', quote=quote)
+            for start in range(4, max(5, len(line)), CHUNK):
+                yield Block('codeblock', line[start:start + CHUNK] + '\n', quote=quote)
             i += 1
             continue
         content, size = [], 0
@@ -215,7 +231,10 @@ def link_target(target: str, source_path: str):
     if parsed.scheme or parsed.netloc or not parsed.path or Path(unquote(parsed.path)).is_absolute():
         return None
     path = Path(source_path).parent / unquote(parsed.path)
-    return ('file', str(path.resolve())) if path.is_file() else None
+    try:
+        return ('file', str(path.resolve())) if path.is_file() else None
+    except OSError:
+        return None
 
 
 class MarkdownView:
@@ -223,8 +242,8 @@ class MarkdownView:
     def __init__(self, open_file, source_path):
         import gi
         gi.require_version('Gtk', '3.0')
-        from gi.repository import Gtk, GLib, Pango
-        self.Gtk, self.GLib, self.Pango = Gtk, GLib, Pango
+        from gi.repository import Gdk, Gtk, GLib, Pango
+        self.Gtk, self.GLib, self.Pango, self.Gdk = Gtk, GLib, Pango, Gdk
         self.open_file, self.source_path = open_file, source_path
         self.view = Gtk.TextView(editable=False, cursor_visible=False, wrap_mode=Gtk.WrapMode.WORD_CHAR)
         self.view.set_left_margin(32)
@@ -251,10 +270,17 @@ class MarkdownView:
         return tag
 
     def set_style(self, syntax, chrome, size):
+        from idgent import highlight
         self.syntax, self.chrome, self.size = syntax, chrome, size
+        def valid(style):
+            return style is not None and self.Gdk.RGBA().parse(style.foreground)
         def color(kind):
-            return syntax.get(kind, syntax.get('operator')).foreground
+            style = syntax.get(kind)
+            fallback = syntax.get('operator')
+            return (style.foreground if valid(style) else fallback.foreground if valid(fallback)
+                    else chrome['gutter_fg_active'])
         bg, fg = chrome['gutter_bg'], color('operator')
+        self.foreground = fg
         self.provider.load_from_data(f'textview, textview text {{background-color:{bg}; color:{fg}; font-family:sans-serif; font-size:{size}pt;}}'.encode())
         p = self.Pango
         self.tag('body', pixels_above_lines=3, pixels_below_lines=8)
@@ -266,17 +292,20 @@ class MarkdownView:
         self.tag('strike', strikethrough=True)
         self.tag('code', family='monospace', background=chrome['current_line_bg'], foreground=color('string'))
         self.tag('codeblock', family='monospace', paragraph_background=chrome['current_line_bg'],
-                 foreground=fg, left_margin=16, right_margin=16, pixels_above_lines=5, pixels_below_lines=5)
+                 foreground=fg, right_margin=48, pixels_above_lines=5, pixels_below_lines=5)
         self.tag('table', family='monospace', foreground=fg, pixels_below_lines=0)
         self.tag('link', foreground=color('link'), underline=p.Underline.SINGLE)
         self.tag('image', foreground=chrome['gutter_fg'])
         self.tag('rule', foreground=chrome['gutter_fg'], scale=.65, pixels_above_lines=0, pixels_below_lines=8)
-        for kind, style in syntax.items():
-            self.tag('syntax-' + kind, foreground=style.foreground, weight=p.Weight.BOLD if style.bold else p.Weight.NORMAL,
-                     style=p.Style.ITALIC if style.italic else p.Style.NORMAL)
+        for kind in highlight.KINDS:
+            style = syntax.get(kind)
+            self.tag('syntax-' + kind, foreground=color(kind), foreground_set=bool(valid(style)),
+                     weight=p.Weight.BOLD if style and style.bold else p.Weight.NORMAL,
+                     style=p.Style.ITALIC if style and style.italic else p.Style.NORMAL)
         for name in tuple(self.tags):
             if name.startswith('container-'):
-                self.tags[name].set_property('foreground', chrome['gutter_fg'] if name.split('-')[1] != '0' else fg)
+                if name.split('-')[1] != '0':
+                    self.tags[name].set_property('foreground', chrome['gutter_fg'])
 
     def cancel(self):
         if self._idle:
@@ -300,9 +329,14 @@ class MarkdownView:
     def _operations(self, text):
         from idgent import highlight
         for block in parse_blocks(text):
-            container = f'container-{block.quote}-{block.indent}'
-            self.tag(container, left_margin=block.quote * 22 + block.indent * 5 + (12 if block.kind == 'list' else 0),
-                     foreground=self.chrome['gutter_fg'] if block.quote else self.syntax['operator'].foreground)
+            inset = block.indent * 5 + (16 if block.kind == 'codeblock' else 12 if block.kind == 'list' else 0)
+            container = f'container-{block.quote}-{inset}'
+            if container not in self.tags:
+                tag = self.tag(container, left_margin=32 + block.quote * 22 + inset)
+                if block.quote:
+                    tag.set_property('foreground', self.chrome['gutter_fg'])
+                # Container foreground must not override headings/links/inline styles.
+                tag.set_priority(0)
             base = ('body', container)
             if block.kind == 'heading':
                 base += ('h' + str(block.level),)
@@ -311,8 +345,8 @@ class MarkdownView:
                 if block.kind == 'codeblock' and block.language and highlight.AVAILABLE:
                     # Bounded snippets avoid pathological long-line lexing in Pygments.
                     try:
-                        lexer = highlight._class_by_name(block.language)
-                        lexer = lexer(**highlight._LEXER_OPTIONS) if lexer else None
+                        from pygments.lexers import get_lexer_by_name
+                        lexer = get_lexer_by_name(block.language, stripnl=False, stripall=False, ensurenl=False)
                         if lexer and len(block.text) <= CHUNK * 2:
                             for a, b, kind in highlight.classify(lexer, block.text):
                                 yield (a, b, 'syntax-' + kind), (), None
@@ -324,8 +358,9 @@ class MarkdownView:
                 continue
             if block.marker:
                 yield block.marker + '  ', base, None
-            for span in parse_inline(block.text):
-                yield span.text, base + span.styles, span.link
+            for start in range(0, len(block.text), CHUNK):
+                for span in parse_inline(block.text[start:start + CHUNK]):
+                    yield span.text, base + span.styles, span.link
             yield '\n', base, None
             if block.kind == 'heading' and block.level < 3:
                 yield '─' * 64 + '\n', ('rule',), None
@@ -362,7 +397,10 @@ class MarkdownView:
             self.open_file(value)
         else:
             top = self.view.get_toplevel()
-            self.Gtk.show_uri_on_window(top if isinstance(top, self.Gtk.Window) else None, value, 0)
+            try:
+                self.Gtk.show_uri_on_window(top if isinstance(top, self.Gtk.Window) else None, value, 0)
+            except self.GLib.Error:
+                return False
         return True
 
     def _release(self, view, event):
