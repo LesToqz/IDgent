@@ -8,6 +8,7 @@ import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk
 
+from idgent.style import apply_style
 from idgent.window import MainWindow
 
 
@@ -15,6 +16,10 @@ class Application(Gtk.Application):
     def __init__(self, root: str) -> None:
         super().__init__(application_id="dev.idgent.IDgent")
         self.root = root
+
+    def do_startup(self) -> None:
+        Gtk.Application.do_startup(self)
+        apply_style()
 
     def do_activate(self) -> None:
         window = self.get_active_window()

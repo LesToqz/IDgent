@@ -20,17 +20,20 @@ class ExplorerPanel(Gtk.Box):
     }
 
     def __init__(self, root: str):
-        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        self.get_style_context().add_class("idgent-explorer")
         self.root = ""
         self._loaded: set[str] = set()
         self.store = Gtk.TreeStore(str, str, str)
         self.tree = Gtk.TreeView(model=self.store)
         self.tree.set_headers_visible(False)
+        self.tree.set_grid_lines(Gtk.TreeViewGridLines.NONE)
         column = Gtk.TreeViewColumn()
         icon = Gtk.CellRendererPixbuf()
         column.pack_start(icon, False)
         column.add_attribute(icon, "icon-name", 0)
         label = Gtk.CellRendererText()
+        label.set_fixed_size(-1, 20)
         column.pack_start(label, True)
         column.add_attribute(label, "text", 1)
         self.tree.append_column(column)
@@ -40,12 +43,14 @@ class ExplorerPanel(Gtk.Box):
         self.connect("key-press-event", self._on_key)
         self.tree.connect("popup-menu", self._on_popup)
         toolbar = Gtk.Box(spacing=3)
+        toolbar.get_style_context().add_class("idgent-explorer-header")
         title = Gtk.Label(label="EXPLORER", xalign=0)
+        title.get_style_context().add_class("idgent-explorer-title")
         toolbar.pack_start(title, True, True, 6)
         for name, tooltip, callback in (
-            ("document-new", "New File", lambda *_: self._new_dialog(False)),
-            ("folder-new", "New Folder", lambda *_: self._new_dialog(True)),
-            ("view-refresh", "Refresh", lambda *_: self.refresh()),
+            ("document-new-symbolic", "New File", lambda *_: self._new_dialog(False)),
+            ("folder-new-symbolic", "New Folder", lambda *_: self._new_dialog(True)),
+            ("view-refresh-symbolic", "Refresh", lambda *_: self.refresh()),
         ):
             button = Gtk.Button.new_from_icon_name(name, Gtk.IconSize.MENU)
             button.set_relief(Gtk.ReliefStyle.NONE)
