@@ -160,6 +160,8 @@ class KindMappingTest(unittest.TestCase):
         self.assertEqual(kind('a:hover'), 'selector')
         self.assertEqual(kind('hover'), 'selector')
         self.assertEqual(kind('b >'), 'selector')
+        self.assertEqual(kind('.b'), 'selector')                # the dot belongs to the class selector
+        self.assertEqual(kind('#c'), 'selector')
         self.assertEqual(kind('color'), 'property')
         self.assertEqual(kind('red'), 'string')
         self.assertEqual(kind('10px'), 'number')
@@ -367,6 +369,7 @@ class LexerDetectionTest(unittest.TestCase):
         self.assertEqual(self.name('script', '#!/usr/bin/env perl'), 'Perl')
         self.assertIsNone(highlight.lexer_for('script', '#!/no/such/interpreter'))
         self.assertEqual(self.name('a.json', '#!/bin/bash'), 'JSON')    # a file name wins
+        self.assertEqual(self.name('run.unknownext', '#!/bin/bash'), 'Shell Script')
 
     def test_instances_are_cached_without_stripping_text(self):
         self.assertIs(highlight.lexer_for('a.py'), highlight.lexer_for('/x/b.pyi'))

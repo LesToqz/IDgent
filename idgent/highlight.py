@@ -134,7 +134,7 @@ def lexer_for(path: str, first_line: str = ''):
         lexer_class = _class_by_name(alias)
     if lexer_class is None and name:
         lexer_class = find_lexer_class_for_filename(name)
-    if lexer_class is None and not extension:
+    if lexer_class is None:
         interpreter = _interpreter(first_line)
         alias = _INTERPRETERS.get(interpreter, interpreter)
         lexer_class = _class_by_name(alias) if alias else None
@@ -204,7 +204,8 @@ if AVAILABLE:
         'markup': {Token.Comment.Preproc: 'tag', Token.Punctuation: 'mpunct'},
         'css': {Token.Name: 'cssname', Token.Name.Tag: 'cssname', Token.Name.Class: 'selector',
                 Token.Name.Namespace: 'selector', Token.Name.Decorator: 'selector',
-                Token.Name.Builtin: 'function', Token.Keyword: 'csskw', Token.Keyword.Constant: 'string',
+                Token.Name.Builtin: 'function', Token.Punctuation: 'csspunct', Token.Keyword: 'csskw',
+                Token.Keyword.Constant: 'string',
                 Token.Keyword.Type: 'number', Token.Comment.Preproc: 'keyword',
                 Token.Error: None},
         'c': {Token.Keyword.Type: 'keyword'},
@@ -257,7 +258,7 @@ def _walk(table: dict, cache: dict, token_type):
 
 _DEFAULTS = {'ident': 'variable', 'kw': 'keyword', 'builtin_name': 'builtin', 'pseudo': 'variable',
              'sdoc': 'doc', 'yamlval': 'string', 'mdkw': 'keyword', 'mdhead': 'heading',
-             'mdtag': 'tag', 'mdattr': 'attribute', 'mpunct': None, 'cssname': 'selector',
+             'mdtag': 'tag', 'mdattr': 'attribute', 'mpunct': None, 'csspunct': None, 'cssname': 'selector',
              'csskw': 'property'}
 
 
@@ -327,6 +328,8 @@ class _Classifier:
             if following[:1] == ':' and following[1:].isspace():
                 return 'property'
             return 'function' if following[:1] == '(' else 'selector'
+        if base == 'csspunct':
+            return 'selector' if value in ('.', '#') else None
         if base == 'csskw':
             return 'control' if value[0] == '@' or self.prev == '@' else 'property'
         if base == 'yamlval':
@@ -521,7 +524,7 @@ class Highlighter:
             buffer = self.buffer
             text = buffer.get_text(buffer.get_start_iter(), buffer.get_end_iter(), True)
             self.skipped = len(text.encode('utf-8', 'surrogatepass')) > MAX_BYTES or \
-                re.search(r'[^\n]{%d}' % (MAX_LINE + 1), text) is not None
+                max(map(len, text.split('\n'))) > MAX_LINE
             if self.skipped or self.lexer is None:
                 self._clear(0, buffer.get_char_count())
                 return False
