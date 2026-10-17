@@ -13,7 +13,7 @@ from idgent import style
 from idgent.editor import EditorPanel
 from idgent.explorer import ExplorerPanel
 from idgent.terminal import TerminalPanel
-from idgent.terminal_bar import TerminalBar
+from idgent.terminal_bar import AddButton, LimitToast, PaneHeader
 from idgent.titlebar import TITLEBAR_CSS
 from gi.repository import Gtk, Vte
 
@@ -41,7 +41,7 @@ class StyleTest(unittest.TestCase):
             window.show_all()
             pane = panel._panes[0]
             terminal = pane.terminal
-            scrollbar = pane.page.get_children()[1]
+            scrollbar = pane.content.get_children()[1]
             adjustment = terminal.get_vadjustment()
             self.assertTrue(self.poll(lambda: pane.pid is not None))
             self.assertFalse(scrollbar.get_visible())
@@ -84,43 +84,55 @@ class StyleTest(unittest.TestCase):
         self.assertEqual(scrolled.get_vscrollbar().get_allocated_width(), 8)
         self.assertEqual(scrolled.get_hscrollbar().get_allocated_height(), 8)
 
-    def test_terminal_bar_is_styled(self):
+    def test_pane_header_and_toast_are_styled(self):
         style.apply_style()
         window = Gtk.Window()
         self.addCleanup(window.destroy)
-        bar = TerminalBar()
-        bar.add_chip(1)
-        bar.add_chip(2)
-        bar.set_active(2)
-        bar.show_limit_notice()
-        window.add(bar)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        inactive, active = PaneHeader(), PaneHeader()
+        for header in (inactive, active):
+            header.set_valign(Gtk.Align.START)
+            box.pack_start(header, False, False, 0)
+        active.set_active(True)
+        active.set_corner(True)
+        toast = LimitToast()
+        toast.set_valign(Gtk.Align.START)
+        box.pack_start(toast, False, False, 0)
+        window.add(box)
         window.show_all()
-        self.assertTrue(self.poll(lambda: bar.get_allocated_height() > 1))
-        self.assertTrue(28 <= bar.get_allocated_height() <= 34)
-        warning = bar.notice.get_style_context().get_color(Gtk.StateFlags.NORMAL)
+        toast.show()
+        self.assertTrue(self.poll(lambda: inactive.get_allocated_height() > 1))
+        self.assertTrue(28 <= inactive.get_allocated_height() <= 34)
+        self.assertEqual(inactive.get_allocated_height(), active.get_allocated_height())
+        warning = toast.get_style_context().get_color(Gtk.StateFlags.NORMAL)
         self.assertAlmostEqual(warning.red, 0xcc / 255, places=2)
         self.assertAlmostEqual(warning.green, 0xa7 / 255, places=2)
-        inactive, active = (bar.chip(i).box.get_style_context() for i in (1, 2))
-        self.assertAlmostEqual(active.get_color(Gtk.StateFlags.NORMAL).red, 0xcc / 255, places=2)
-        self.assertAlmostEqual(inactive.get_color(Gtk.StateFlags.NORMAL).red, 0x85 / 255, places=2)
-        self.assertEqual(active.get_border(Gtk.StateFlags.NORMAL).bottom, 2)
-        flat = bar.chip(1).delete_button.get_style_context()
+        inactive_style, active_style = inactive.get_style_context(), active.get_style_context()
+        self.assertAlmostEqual(active_style.get_color(Gtk.StateFlags.NORMAL).red, 0xcc / 255, places=2)
+        self.assertAlmostEqual(inactive_style.get_color(Gtk.StateFlags.NORMAL).red, 0x85 / 255, places=2)
+        self.assertEqual(inactive_style.get_border(Gtk.StateFlags.NORMAL).bottom, 1)
+        self.assertEqual(active_style.get_border(Gtk.StateFlags.NORMAL).bottom, 1)
+        # The corner header reserves room for the "+" button; others do not.
+        self.assertGreaterEqual(active_style.get_padding(Gtk.StateFlags.NORMAL).right,
+                                AddButton().get_preferred_width()[0])
+        self.assertLess(inactive_style.get_padding(Gtk.StateFlags.NORMAL).right, 8)
+        flat = inactive.delete_button.get_style_context()
         self.assertEqual(flat.get_border(Gtk.StateFlags.NORMAL).left, 0)
 
     def test_realized_add_button_normal_hover_and_limit_colours(self):
         style.apply_style()
         window = Gtk.Window()
         self.addCleanup(window.destroy)
-        bar = TerminalBar()
-        window.add(bar)
+        button = AddButton()
+        window.add(button)
         window.show_all()
-        self.assertTrue(self.poll(lambda: bar.add_button.get_mapped()))
-        context = bar.add_button.get_style_context()
+        self.assertTrue(self.poll(lambda: button.get_mapped()))
+        context = button.get_style_context()
 
         def assert_colour(expected, *, hover=False, background=False):
-            bar.add_button.unset_state_flags(Gtk.StateFlags.PRELIGHT)
+            button.unset_state_flags(Gtk.StateFlags.PRELIGHT)
             if hover:
-                bar.add_button.set_state_flags(Gtk.StateFlags.PRELIGHT, False)
+                button.set_state_flags(Gtk.StateFlags.PRELIGHT, False)
             getter = context.get_background_color if background else context.get_color
 
             def matches():
@@ -133,10 +145,10 @@ class StyleTest(unittest.TestCase):
         assert_colour((0xcc, 0xcc, 0xcc))
         assert_colour((255, 255, 255), hover=True)
         assert_colour((0x2a, 0x2d, 0x2e), hover=True, background=True)
-        bar.set_full(True)
+        button.set_full(True)
         assert_colour((0x7d, 0x6f, 0x2a))
         assert_colour((0xcc, 0xa7, 0), hover=True)
-        bar.set_full(False)
+        button.set_full(False)
         assert_colour((0xcc, 0xcc, 0xcc))
 
     def test_apply_is_idempotent(self):

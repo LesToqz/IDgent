@@ -67,17 +67,17 @@ class TitleBarTests(unittest.TestCase):
         self.assertEqual(bar.get_decoration_layout(), ":minimize,maximize,close")
         self.assertTrue(bar.get_show_close_button())
 
-    def test_folder_title_updates_and_root_is_preserved(self):
+    def test_title_is_just_the_application_name(self):
         bar = self.window.titlebar
         self.assertIs(bar.get_custom_title(), bar.title_label)
         self.assertTrue(bar.title_label.get_style_context().has_class("idgent-title"))
-        self.assertEqual(bar.title_label.get_text(), f"IDgent - {Path(self.folder.name).name}")
+        self.assertEqual(bar.title_label.get_text(), "IDgent")
+        self.assertEqual(self.window.get_title(), "IDgent")
         with tempfile.TemporaryDirectory(prefix="idgent-titlebar-new-") as folder:
             self.window.set_root(folder)
-            self.assertEqual(bar.title_label.get_text(), f"IDgent - {Path(folder).name}")
-            self.assertEqual(self.window.get_title(), bar.title_label.get_text())
-        bar.set_folder("/")
-        self.assertEqual(bar.title_label.get_text(), "IDgent - /")
+            self.assertEqual(bar.title_label.get_text(), "IDgent")
+            self.assertEqual(self.window.get_title(), "IDgent")
+        self.assertFalse(hasattr(bar, "set_folder"))
 
     def test_css_parses_and_keeps_title_centered_in_compact_bar(self):
         provider = Gtk.CssProvider()

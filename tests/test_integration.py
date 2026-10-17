@@ -194,7 +194,7 @@ class WindowIntegrationTests(unittest.TestCase):
         new_root.mkdir()
         self.window.set_root(str(new_root))
         self.assertEqual(self.window.explorer.root, str(new_root))
-        self.assertEqual(self.window.get_title(), 'IDgent - new-project')
+        self.assertEqual(self.window.get_title(), 'IDgent')
         self.window.terminal_bottom.new_terminal()
         new = self.spawn(self.window.terminal_bottom._panes[-1])
         self.window.toggle_terminal_right()
