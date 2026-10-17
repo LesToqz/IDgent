@@ -1,7 +1,6 @@
-"""Tabbed VTE terminal panel, independent of its docking location."""
+"""Side-by-side VTE terminals, independent of their docking location."""
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass
 import os
 import signal
@@ -11,7 +10,7 @@ import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
 gi.require_version("Vte", "2.91")
-from gi.repository import Gdk, Gio, GLib, Gtk, Pango, Vte
+from gi.repository import Gdk, Gio, GLib, GObject, Gtk, Pango, Vte
 
 
 def pick_shell() -> str:
@@ -28,12 +27,9 @@ def safe_cwd(path: str) -> str:
     return "/"
 
 
-def tab_title(shell: str, n: int) -> str:
-    return f"{os.path.basename(shell)} {n}"
-
 
 @dataclass(eq=False)
-class _Tab:
+class _Pane:
     page: Gtk.Box
     terminal: Vte.Terminal
     cancellable: Gio.Cancellable
@@ -55,42 +51,34 @@ def _color(value: str) -> Gdk.RGBA:
     return color
 
 
-def _hangup(tab: _Tab) -> None:
-    if tab.pid is not None:
+def _hangup(pane: _Pane) -> None:
+    if pane.pid is not None:
         try:
-            os.kill(tab.pid, signal.SIGHUP)
+            os.kill(pane.pid, signal.SIGHUP)
         except ProcessLookupError:
             pass
-        tab.pid = None
+        pane.pid = None
 
 
 class TerminalPanel(Gtk.Box):
-    def __init__(self, cwd: str):
-        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+    __gsignals__ = {"last-closed": (GObject.SignalFlags.RUN_LAST, None, ())}
+
+    def __init__(self, cwd: str, autostart: bool = True):
+        super().__init__(orientation=Gtk.Orientation.HORIZONTAL, spacing=0,
+                         homogeneous=True)
         self._cwd = cwd
-        self._counter = 0
         self._destroyed = False
-        self._tabs: list[_Tab] = []
+        self._panes: list[_Pane] = []
+        self._active: _Pane | None = None
+        self.get_style_context().add_class("idgent-terminal")
         self.set_hexpand(True)
         self.set_vexpand(True)
-        header = Gtk.Box(spacing=4)
-        header.set_border_width(4)
-        header.pack_start(Gtk.Label(label="TERMINAL"), False, False, 4)
-        header.pack_end(self._button("×", "Close terminal (Ctrl+Shift+W)", self.close_current), False, False, 0)
-        header.pack_end(self._button("+", "New terminal (Ctrl+Shift+T)", self.new_terminal), False, False, 0)
-        self.pack_start(header, False, False, 0)
-        self.notebook = Gtk.Notebook(scrollable=True, tab_pos=Gtk.PositionType.TOP)
-        self.notebook.connect("switch-page", self._switch_page)
-        self.pack_start(self.notebook, True, True, 0)
         self.connect("destroy", self._on_destroy)
-        self.new_terminal()
+        if autostart:
+            self.new_terminal()
 
-    @staticmethod
-    def _button(label: str, tooltip: str, action: Callable[[], None]) -> Gtk.Button:
-        button = Gtk.Button(label=label, relief=Gtk.ReliefStyle.NONE)
-        button.set_tooltip_text(tooltip)
-        button.connect("clicked", lambda _button: action())
-        return button
+    def terminal_count(self) -> int:
+        return len(self._panes)
 
     def set_cwd(self, path: str) -> None:
         self._cwd = path
@@ -99,37 +87,47 @@ class TerminalPanel(Gtk.Box):
         if self._destroyed:
             return
         shell = pick_shell()
-        self._counter += 1
         terminal = Vte.Terminal()
         self._configure(terminal)
         page = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
         page.pack_start(terminal, True, True, 0)
-        page.pack_end(Gtk.Scrollbar(orientation=Gtk.Orientation.VERTICAL,
+        page.pack_start(Gtk.Scrollbar(orientation=Gtk.Orientation.VERTICAL,
                                    adjustment=terminal.get_vadjustment()), False, False, 0)
-        tab = _Tab(page, terminal, Gio.Cancellable())
-        self._tabs.append(tab)
-        label = Gtk.Box(spacing=4)
-        label.pack_start(Gtk.Label(label=tab_title(shell, self._counter)), False, False, 0)
-        label.pack_start(self._button("×", "Close terminal", lambda: self._close_tab(tab)), False, False, 0)
-        terminal.connect("child-exited", self._child_exited, tab)
+        pane = _Pane(page, terminal, Gio.Cancellable())
+        active = self._current_pane()
+        index = self._panes.index(active) + 1 if active else len(self._panes)
+        self._panes.insert(index, pane)
+        self.pack_start(page, True, True, 0)
+        self.reorder_child(page, index)
+        divider = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL)
+        divider.set_size_request(1, -1)
+        divider.get_style_context().add_class("idgent-terminal-sep")
+        page.pack_start(divider, False, False, 0)
+        terminal.connect("child-exited", self._child_exited, pane)
         terminal.connect("key-press-event", self._key_press)
         terminal.connect("button-press-event", self._button_press)
-        index = self.notebook.append_page(page, label)
+        terminal.connect("focus-in-event", self._focus_changed, pane, True)
+        terminal.connect("focus-out-event", self._focus_changed, pane, False)
+        self._active = pane
         page.show_all()
-        label.show_all()
-        self.notebook.set_current_page(index)
+        self._update_dividers()
         env = dict(os.environ, TERM="xterm-256color", COLORTERM="truecolor")
         terminal.spawn_async(
             Vte.PtyFlags.DEFAULT, safe_cwd(self._cwd), [shell, "-i"],
             [f"{key}={value}" for key, value in env.items()],
             # Keywords avoid the hidden child_setup_data positional argument.
             GLib.SpawnFlags.DEFAULT, child_setup=None, timeout=-1,
-            cancellable=tab.cancellable, callback=self._spawned, user_data=tab,
+            cancellable=pane.cancellable, callback=self._spawned, user_data=pane,
         )
         GLib.idle_add(self._focus_idle)
 
     @staticmethod
     def _configure(terminal: Vte.Terminal) -> None:
+        terminal.get_style_context().add_class("idgent-vte")
+        terminal.set_margin_start(8)
+        terminal.set_margin_end(8)
+        terminal.set_margin_top(8)
+        terminal.set_margin_bottom(8)
         terminal.set_font(Pango.FontDescription("Monospace 11"))
         terminal.set_colors(_color("#d4d4d4"), _color("#1e1e1e"), [_color(c) for c in _PALETTE])
         terminal.set_cursor_blink_mode(Vte.CursorBlinkMode.ON)
@@ -142,61 +140,90 @@ class TerminalPanel(Gtk.Box):
         terminal.set_vexpand(True)
         terminal.set_size(20, 4)
 
-    def _spawned(self, terminal: Vte.Terminal, pid: int, error: GLib.Error | None, tab: _Tab) -> None:
+    def _spawned(self, terminal: Vte.Terminal, pid: int, error: GLib.Error | None, pane: _Pane) -> None:
         if pid > 0:
-            tab.pid = pid
-        if tab.closed or self._destroyed:
-            _hangup(tab)
+            pane.pid = pid
+        if pane.closed or self._destroyed:
+            _hangup(pane)
         elif error is not None:
             terminal.feed(f"Unable to start shell: {error.message}\r\n".encode())
 
-    def _child_exited(self, _terminal: Vte.Terminal, _status: int, tab: _Tab) -> None:
-        tab.pid = None
-        self._close_tab(tab)
+    def _child_exited(self, _terminal: Vte.Terminal, _status: int, pane: _Pane) -> None:
+        pane.pid = None
+        self._close_pane(pane)
 
     def close_current(self) -> None:
-        tab = self._current_tab()
-        if tab is not None:
-            self._close_tab(tab)
+        pane = self._current_pane()
+        if pane is not None:
+            self._close_pane(pane)
 
-    def _current_tab(self) -> _Tab | None:
-        page = self.notebook.get_nth_page(self.notebook.get_current_page())
-        return next((tab for tab in self._tabs if tab.page == page), None)
+    def _current_pane(self) -> _Pane | None:
+        # get_focus also works before the toplevel receives focus-in events.
+        toplevel = self.get_toplevel()
+        focus = toplevel.get_focus() if isinstance(toplevel, Gtk.Window) else None
+        return next((pane for pane in self._panes if pane.terminal is focus),
+                    self._active if self._active in self._panes else None)
 
-    def _close_tab(self, tab: _Tab) -> None:
-        if tab.closed:
+    def _focus_changed(self, terminal, _event, pane, focused):
+        context = terminal.get_style_context()
+        if focused:
+            self._active = pane
+            context.add_class("focused")
+        else:
+            context.remove_class("focused")
+        return False
+
+    def _update_dividers(self):
+        for index, pane in enumerate(self._panes):
+            divider = pane.page.get_children()[-1]
+            visible = index < len(self._panes) - 1
+            divider.set_no_show_all(not visible)
+            divider.set_visible(visible)
+
+    def _close_pane(self, pane: _Pane) -> None:
+        if pane.closed:
             return
-        tab.closed = True
-        tab.cancellable.cancel()
-        _hangup(tab)
-        self._tabs.remove(tab)
-        self.notebook.remove_page(self.notebook.page_num(tab.page))
-        tab.page.destroy()
-        if not self._tabs and not self._destroyed:
-            self.new_terminal()
+        pane.closed = True
+        pane.cancellable.cancel()
+        _hangup(pane)
+        index = self._panes.index(pane)
+        self._panes.remove(pane)
+        if self._active is pane:
+            self._active = self._panes[min(index, len(self._panes) - 1)] if self._panes else None
+        self.remove(pane.page)
+        pane.page.destroy()
+        self._update_dividers()
+        if not self._panes and not self._destroyed:
+            self.emit("last-closed")
         GLib.idle_add(self._focus_idle)
 
     def focus_terminal(self) -> None:
         if not self._destroyed:
-            tab = self._current_tab()
-            if tab is not None:
-                tab.terminal.grab_focus()
+            if self._active in self._panes:
+                self._active.terminal.grab_focus()
 
     def _focus_idle(self) -> bool:
         self.focus_terminal()
         return GLib.SOURCE_REMOVE
 
-    def _switch_page(self, _notebook: Gtk.Notebook, _page: Gtk.Widget, _number: int) -> None:
-        GLib.idle_add(self._focus_idle)
-
     def _key_press(self, terminal: Vte.Terminal, event: Gdk.EventKey) -> bool:
         mask = Gtk.accelerator_get_default_mod_mask()
         required = Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.SHIFT_MASK
+        key = Gdk.keyval_name(event.keyval).lower()
+        if (event.state & mask == Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.MOD1_MASK
+                and key in ("left", "right")):
+            pane = next((p for p in self._panes if p.terminal is terminal), None)
+            if pane:
+                index = self._panes.index(pane)
+                self._active = self._panes[(index + (1 if key == "right" else -1)) % len(self._panes)]
+                self.focus_terminal()
+            return True
         if event.state & mask != required:
             return False
         key = Gdk.keyval_name(event.keyval).lower()
         actions = {"c": lambda: terminal.copy_clipboard_format(Vte.Format.TEXT),
                    "v": terminal.paste_clipboard, "t": self.new_terminal,
+                   "5": self.new_terminal, "percent": self.new_terminal,
                    "w": self.close_current}
         if key in actions:
             actions[key]()
@@ -214,6 +241,7 @@ class TerminalPanel(Gtk.Box):
     def _button_press(self, terminal: Vte.Terminal, event: Gdk.EventButton) -> bool:
         if event.button != 3:
             return False
+        terminal.grab_focus()
         menu = Gtk.Menu()
         actions = (("Copy", lambda: terminal.copy_clipboard_format(Vte.Format.TEXT)),
                    ("Paste", terminal.paste_clipboard), ("Select All", terminal.select_all),
@@ -224,6 +252,12 @@ class TerminalPanel(Gtk.Box):
             if label == "Copy":
                 item.set_sensitive(terminal.get_has_selection())
             menu.append(item)
+        menu.append(Gtk.SeparatorMenuItem())
+        for label, action in (("Split Terminal", self.new_terminal),
+                              ("Kill Terminal", self.close_current)):
+            item = Gtk.MenuItem(label=label)
+            item.connect("activate", lambda _item, callback=action: callback())
+            menu.append(item)
         menu.attach_to_widget(terminal, None)
         menu.connect("selection-done", lambda widget: widget.destroy())
         menu.show_all()
@@ -232,8 +266,8 @@ class TerminalPanel(Gtk.Box):
 
     def _on_destroy(self, _widget: Gtk.Widget) -> None:
         self._destroyed = True
-        for tab in self._tabs:
-            tab.closed = True
-            tab.cancellable.cancel()
-            _hangup(tab)
-        self._tabs.clear()
+        for pane in self._panes:
+            pane.closed = True
+            pane.cancellable.cancel()
+            _hangup(pane)
+        self._panes.clear()

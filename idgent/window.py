@@ -19,20 +19,28 @@ class MainWindow(Gtk.ApplicationWindow):
         super().__init__(application=application)
         self.set_default_size(1200, 750)
         self.root = str(Path(root).resolve())
-        self.terminal_position = "bottom"
 
         self.explorer = ExplorerPanel(self.root)
         self.editor = EditorPanel()
-        self.terminal = TerminalPanel(self.root)
+        self.terminal_bottom = TerminalPanel(self.root)
+        self.terminal_right = TerminalPanel(self.root, autostart=False)
+        self.terminal_right.set_no_show_all(True)
+        for panel in (self.terminal_bottom, self.terminal_right):
+            panel.connect("last-closed", self._hide_terminal)
         self.explorer.connect("file-activated", lambda _, path: self.editor.open_file(path))
         self.explorer.connect("path-renamed", lambda _, old, new: self.editor.on_path_renamed(old, new))
         self.explorer.connect("path-deleted", lambda _, path: self.editor.on_path_deleted(path))
 
-        self.dock = Gtk.Paned(orientation=Gtk.Orientation.VERTICAL)
-        self.dock.pack1(self.editor, resize=True, shrink=False)
-        self.dock.pack2(self.terminal, resize=False, shrink=False)
-        self._terminal_size_pending = True
-        self.dock.connect_after("size-allocate", self._size_terminal)
+        self.editor.set_size_request(300, 150)
+        self.dock_bottom = Gtk.Paned(orientation=Gtk.Orientation.VERTICAL)
+        self.dock_bottom.pack1(self.editor, resize=True, shrink=False)
+        self.dock_bottom.pack2(self.terminal_bottom, resize=False, shrink=True)
+        self.dock = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
+        self.dock.pack1(self.dock_bottom, resize=True, shrink=False)
+        self.dock.pack2(self.terminal_right, resize=False, shrink=True)
+        self._size_pending = {self.terminal_bottom: True, self.terminal_right: True}
+        self.dock_bottom.connect_after("size-allocate", self._size_terminal, self.terminal_bottom)
+        self.dock.connect_after("size-allocate", self._size_terminal, self.terminal_right)
         self.sidebar = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
         self.sidebar.pack1(self.explorer, resize=False, shrink=False)
         self.sidebar.pack2(self.dock, resize=True, shrink=False)
@@ -71,40 +79,61 @@ class MainWindow(Gtk.ApplicationWindow):
         item(file_menu, "Save", lambda: self.editor.save_current(), "<Control>s")
         item(file_menu, "Save All", lambda: self.editor.save_all(), "<Control><Shift>s")
         item(file_menu, "Quit", self.close, "<Control>q")
-        item(view_menu, "Toggle Terminal", self.toggle_terminal, "<Control>grave")
-        self.move_terminal_item = item(view_menu, "Move Terminal to Right", self.toggle_terminal_position)
+        item(view_menu, "Terminal Below", self.toggle_terminal_bottom, "<Control>grave")
+        item(view_menu, "Terminal on Right", self.toggle_terminal_right, "<Control><Alt>grave")
+        item(view_menu, "Split Terminal", self.split_terminal, "<Control><Shift>5")
         item(view_menu, "Toggle Explorer Sidebar", self.toggle_explorer, "<Control>b")
         return bar
 
-    def toggle_terminal_position(self) -> None:
-        # Keep the panel alive while reparenting, preserving running terminals.
-        terminal = self.terminal
-        self.dock.remove(terminal)
-        self.terminal_position = "right" if self.terminal_position == "bottom" else "bottom"
-        right = self.terminal_position == "right"
-        self.dock.set_orientation(Gtk.Orientation.HORIZONTAL if right else Gtk.Orientation.VERTICAL)
-        self.dock.pack2(terminal, resize=False, shrink=False)
-        self._terminal_size_pending = True
-        self.dock.queue_resize()
-        self.move_terminal_item.set_label("Move Terminal to Bottom" if right else "Move Terminal to Right")
-
-    def _size_terminal(self, dock: Gtk.Paned, allocation: Gdk.Rectangle) -> None:
-        # Wait for real child allocations, including when moved before show_all()
-        # or while hidden. Only size once so subsequent divider drags still work.
-        if not self._terminal_size_pending or not self.terminal.get_visible():
+    def _size_terminal(self, dock: Gtk.Paned, allocation: Gdk.Rectangle,
+                       panel: TerminalPanel) -> None:
+        if not self._size_pending[panel] or not panel.get_visible():
             return
-        right = self.terminal_position == "right"
+        right = panel is self.terminal_right
         extent = allocation.width if right else allocation.height
         if extent <= 1:
             return
-        editor = self.editor.get_allocation()
-        terminal = self.terminal.get_allocation()
-        handle = extent - (editor.width + terminal.width if right
-                           else editor.height + terminal.height)
-        size = (min(max(round(extent * .4), 380), int(extent * .6)) if right
-                else max(round(extent * .3), 150))
-        self._terminal_size_pending = False
-        dock.set_position(max(0, extent - max(0, handle) - size))
+        first, second = dock.get_child1().get_allocation(), panel.get_allocation()
+        handle = max(0, extent - (first.width + second.width if right
+                                  else first.height + second.height))
+        available = extent - handle
+        size = (min(max(round(extent * .4), 380), int(extent * .6), available - 300)
+                if right else min(max(round(extent * .3), 150), available - 150))
+        self._size_pending[panel] = False
+        dock.set_position(max(0, available - max(0, size)))
+
+    def _hide_terminal(self, panel: TerminalPanel) -> None:
+        panel.set_no_show_all(True)
+        panel.hide()
+
+    def _show_terminal(self, panel: TerminalPanel) -> None:
+        panel.set_no_show_all(False)
+        panel.show_all()
+        if panel.terminal_count() == 0:
+            panel.new_terminal()
+        panel.focus_terminal()
+
+    def _toggle_terminal(self, panel: TerminalPanel) -> None:
+        if panel.get_visible():
+            self._hide_terminal(panel)
+        else:
+            self._show_terminal(panel)
+
+    def toggle_terminal_bottom(self) -> None:
+        self._toggle_terminal(self.terminal_bottom)
+
+    def toggle_terminal_right(self) -> None:
+        self._toggle_terminal(self.terminal_right)
+
+    def split_terminal(self) -> None:
+        focus = self.get_focus()
+        panel = (self.terminal_right if focus is not None
+                 and focus.is_ancestor(self.terminal_right) else self.terminal_bottom)
+        # Opening an empty dock already creates its initial terminal.
+        empty = panel.terminal_count() == 0
+        self._show_terminal(panel)
+        if not empty:
+            panel.new_terminal()
 
     @staticmethod
     def _toggle(widget: Gtk.Widget) -> None:
@@ -114,9 +143,6 @@ class MainWindow(Gtk.ApplicationWindow):
             widget.show_all()
         else:
             widget.hide()
-
-    def toggle_terminal(self) -> None:
-        self._toggle(self.terminal)
 
     def toggle_explorer(self) -> None:
         self._toggle(self.explorer)
@@ -131,7 +157,8 @@ class MainWindow(Gtk.ApplicationWindow):
             raise ValueError(f"not a directory: {path}")
         self.root = str(root)
         self.explorer.set_root(self.root)
-        self.terminal.set_cwd(self.root)
+        self.terminal_bottom.set_cwd(self.root)
+        self.terminal_right.set_cwd(self.root)
         self._update_title()
 
     def open_folder(self) -> None:
@@ -150,6 +177,10 @@ class MainWindow(Gtk.ApplicationWindow):
     def do_key_press_event(self, event: Gdk.EventKey) -> bool:
         focus = self.get_focus()
         modifiers = event.state & Gtk.accelerator_get_default_mod_mask()
+        if (modifiers == Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.SHIFT_MASK
+                and event.keyval in (Gdk.KEY_5, Gdk.KEY_percent)):
+            self.split_terminal()
+            return True
         if (focus is not None and focus.is_ancestor(self.editor)
                 and modifiers == Gdk.ModifierType.CONTROL_MASK
                 and event.keyval in (Gdk.KEY_s, Gdk.KEY_w, Gdk.KEY_slash)):
