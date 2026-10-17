@@ -259,6 +259,18 @@ class WindowIntegrationTests(unittest.TestCase):
             self.assertTrue(poll(lambda: ask.called))
             self.assertTrue(self.window.get_visible())
 
+    def test_fullscreen_menu_accelerator_and_key(self):
+        self.accelerate('<Control><Shift>F11')
+        self.assertTrue(self.window.terminal_bottom.is_maximized())
+        self.accelerate('<Control><Shift>F11')
+        self.assertFalse(self.window.terminal_bottom.is_maximized())
+        _, tab = self.open_file()
+        tab.view.grab_focus()
+        self.assertTrue(self.key('<Control><Shift>F11'))
+        self.assertTrue(self.window.terminal_bottom.is_maximized())
+        self.assertTrue(self.key('<Control><Shift>F11'))
+        self.assertFalse(self.window.terminal_bottom.is_maximized())
+
     def test_editor_focus_receives_commands_before_menu(self):
         path, tab = self.open_file(content='value = 1\n')
         # Finish initial terminal focus idles before assigning editor focus.

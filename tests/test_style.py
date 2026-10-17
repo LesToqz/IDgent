@@ -14,6 +14,7 @@ from idgent.editor import EditorPanel
 from idgent.explorer import ExplorerPanel
 from idgent.terminal import TerminalPanel
 from idgent.terminal_bar import TerminalBar
+from idgent.titlebar import TITLEBAR_CSS
 from gi.repository import Gtk, Vte
 
 
@@ -120,6 +121,11 @@ class StyleTest(unittest.TestCase):
         register.assert_called_once_with(style._screen, provider,
                                          Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
         self.assertTrue(Gtk.Settings.get_default().get_property('gtk-application-prefer-dark-theme'))
+
+    def test_titlebar_css_is_in_applied_theme(self):
+        self.assertIn(TITLEBAR_CSS, style.CSS)
+        style.apply_style()
+        self.assertIsNotNone(style._provider)
 
     def test_css_has_no_parsing_errors(self):
         provider = Gtk.CssProvider()

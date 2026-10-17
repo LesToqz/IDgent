@@ -6,6 +6,8 @@ gi.require_version('Gtk', '3.0')
 gi.require_version('Gdk', '3.0')
 from gi.repository import Gdk, GLib, Gtk
 
+from idgent.titlebar import TITLEBAR_CSS
+
 EDITOR_BG = '#1e1e1e'
 SIDEBAR_BG = '#252526'
 PANEL_BG = '#1e1e1e'
@@ -26,9 +28,6 @@ LIMIT_TINT = '#7d6f2a'
 CSS = f'''
 window, dialog, messagedialog {{ background-color: {EDITOR_BG}; color: {FOREGROUND}; }}
 .background {{ background-color: {EDITOR_BG}; color: {FOREGROUND}; }}
-menubar {{ background: {MENUBAR_BG}; color: {FOREGROUND}; padding: 0; border: 0; }}
-menubar > menuitem {{ padding: 4px 8px; }}
-menubar > menuitem:hover {{ background: #505050; }}
 menu {{ background: {SIDEBAR_BG}; color: {FOREGROUND}; border: 1px solid {BORDER}; padding: 4px; }}
 menuitem {{ padding: 4px 8px; }}
 menuitem:hover {{ background: {SELECTION_ACTIVE}; }}
@@ -111,6 +110,8 @@ paned.vertical > separator {{ border-top: 2px solid transparent; border-bottom: 
 .idgent-terminal-add.limit:hover {{ color: {WARNING}; }}
 .idgent-terminal-notice {{ color: {WARNING}; font-size: 12px; padding: 0 8px; }}
 '''
+
+CSS += TITLEBAR_CSS
 
 _provider = None
 _screen = None
