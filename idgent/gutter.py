@@ -10,7 +10,7 @@ import gi
 
 gi.require_version('Gtk', '3.0')
 gi.require_version('Gdk', '3.0')
-from gi.repository import Gdk, Gtk, Pango
+from gi.repository import Gdk, GLib, Gtk, Pango
 
 DEFAULT_CHROME = {
     'gutter_bg': '#1e1e1e', 'gutter_fg': '#858585', 'gutter_fg_active': '#c6c6c6',
@@ -66,6 +66,9 @@ class ViewChrome:
         self.font_size = 11
         self.labels: list[Gtk.Label] = []
         self.label_state: list[tuple | None] = []
+        self._sync_source = 0
+        self._syncing = False
+        self._css = None
         self.provider = Gtk.CssProvider()
         view.get_style_context().add_provider(self.provider, Gtk.STYLE_PROVIDER_PRIORITY_USER)
         self.line_tag = self.buffer.create_tag('idgent-current-line')
@@ -77,7 +80,11 @@ class ViewChrome:
         self.buffer.connect('mark-set', self._mark_set)
         view.connect('button-press-event', self._press)
         view.connect('size-allocate', self.update_labels)
+        view.connect('map', self.update_labels)
+        view.connect('style-updated', self._style_updated)
+        view.connect('destroy', self._destroy)
         self.adjustment = None
+        self._adjustment_handlers = []
         view.connect('notify::vadjustment', self._hook_adjustment)
         self._hook_adjustment()
         self.update_width()
@@ -87,9 +94,24 @@ class ViewChrome:
         # The ScrolledWindow swaps in its own adjustment when the view is added to it.
         adjustment = Gtk.Scrollable.get_vadjustment(self.view)
         if adjustment is not self.adjustment:
+            for handler in self._adjustment_handlers:
+                self.adjustment.disconnect(handler)
             self.adjustment = adjustment
-            adjustment.connect('value-changed', self.update_labels)
-            adjustment.connect('changed', self.update_labels)
+            self._adjustment_handlers = [
+                adjustment.connect(signal, self.update_labels)
+                for signal in ('value-changed', 'changed')]
+
+    def _destroy(self, *_: object) -> None:
+        if self._sync_source:
+            GLib.source_remove(self._sync_source)
+            self._sync_source = 0
+        for handler in self._adjustment_handlers:
+            self.adjustment.disconnect(handler)
+        self._adjustment_handlers = []
+
+    def _style_updated(self, *_: object) -> None:
+        self._load_css()
+        self.update_width()
 
     # --- colours and size -------------------------------------------------
     def apply(self, colors: dict[str, str]) -> None:
@@ -99,6 +121,7 @@ class ViewChrome:
         self.line_tag.set_property('paragraph-background', self.colors['current_line_bg'])
         self.bracket_tag.set_property('background', self.colors['bracket_bg'])
         self._load_css()
+        self.update_labels()
 
     def set_font_size(self, size: int) -> None:
         self.font_size = size
@@ -109,14 +132,17 @@ class ViewChrome:
     def _load_css(self) -> None:
         colors, size = self.colors, self.font_size
         family = self.view.get_style_context().get_property('font', Gtk.StateFlags.NORMAL).get_family()
-        self.provider.load_from_data(f'''
+        css = f'''
             textview, textview text {{ font-size: {size}pt; }}
             textview border.left {{ background-color: {colors['gutter_bg']};
                 border-right: 1px solid {colors['gutter_border']}; }}
             label.idgent-gutter-num {{ font-family: "{family}"; font-size: {size}pt;
                 color: {colors['gutter_fg']}; }}
             label.idgent-gutter-num.active {{ color: {colors['gutter_fg_active']}; }}
-        '''.encode())
+        '''.encode()
+        if css != self._css:
+            self._css = css
+            self.provider.load_from_data(css)
 
     def update_width(self) -> None:
         """Resize the left border window for the line count and the view's current font."""
@@ -204,7 +230,45 @@ class ViewChrome:
         return self.labels[index]
 
     def update_labels(self, *_: object) -> None:
-        """Place one label per visible line; only those lines are ever laid out or painted."""
+        """Update now, then reconcile after GTK's layout/scroll validation idles.
+
+        In particular a background tab has no useful layout until it is mapped.
+        Coalescing at low priority lets GTK validate the viewport first, without
+        validating the whole file or keeping a polling source alive.
+        """
+        if self._syncing:
+            return
+        self.active_line = self.buffer.get_iter_at_mark(self.buffer.get_insert()).get_line()
+        if not self.view.get_mapped():
+            return
+        if not self._sync_source:
+            self._sync_source = GLib.idle_add(self._settled_labels, priority=GLib.PRIORITY_LOW)
+        self._sync_labels()
+
+    def _settled_labels(self) -> bool:
+        self._sync_source = 0
+        if self.view.get_mapped():
+            self._sync_labels()
+            # A child created/moved inside size-allocate can have its resize
+            # request consumed by that same allocation. Requeue outside it,
+            # even when our cached target position has not changed.
+            rect = self.view.get_visible_rect()
+            for label, state in zip(self.labels, self.label_state):
+                if state is not None:
+                    allocation = label.get_allocation()
+                    if allocation.y != state[1] - rect.y or allocation.height < state[2]:
+                        self.view.queue_resize()
+                        break
+        return GLib.SOURCE_REMOVE
+
+    def _sync_labels(self) -> None:
+        self._syncing = True
+        try:
+            self._place_labels()
+        finally:
+            self._syncing = False
+
+    def _place_labels(self) -> None:
         view, buffer = self.view, self.buffer
         rect = view.get_visible_rect()
         self.active_line = buffer.get_iter_at_mark(buffer.get_insert()).get_line()
@@ -214,14 +278,18 @@ class ViewChrome:
         while True:
             line = iterator.get_line()
             top, height = view.get_line_yrange(iterator)
-            if top > rect.y + rect.height or height <= 0:
+            if top >= rect.y + rect.height or height <= 0:
                 break
-            # Unvalidated layouts can report every line at y == 0; never outgrow the viewport.
-            if used > rect.height // height + 2:
+            # A synchronous signal can precede validation. The low-priority
+            # reconciliation will retry; never walk an unvalidated whole file.
+            if used and top <= previous_top:
                 break
-            _, y = view.buffer_to_window_coords(Gtk.TextWindowType.LEFT, 0, top)
+            previous_top = top
             label = self._label(used)
-            state = (line, y, height, text_width, line == self.active_line)
+            # LEFT-window children scroll automatically: GTK subtracts yoffset
+            # from this position when allocating them. Passing window y here
+            # would subtract the scroll offset twice.
+            state = (line, top, height, text_width, line == self.active_line)
             if self.label_state[used] != state:
                 old = self.label_state[used]
                 if old is None or old[0] != line:
@@ -231,8 +299,8 @@ class ViewChrome:
                 if old is None or old[4] != state[4]:
                     context = label.get_style_context()
                     (context.add_class if state[4] else context.remove_class)('active')
-                if old is None or old[1] != y:
-                    view.move_child(label, PADDING_LEFT, y)
+                if old is None or old[1] != top:
+                    view.move_child(label, PADDING_LEFT, top)
                 self.label_state[used] = state
             label.show()
             used += 1
