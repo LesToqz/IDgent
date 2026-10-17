@@ -172,10 +172,10 @@ class TerminalPanelTest(unittest.TestCase):
         middle = self.panel._panes[1]
         self.wait_spawn(middle)
         self.assertIs(self.panel._panes[2], second)
-        self.assertTrue(poll(lambda: all(p.slot.get_child_revealed() for p in self.panel._panes)))
+        self.assertTrue(poll(lambda: all(p.page.get_opacity() == 1 for p in self.panel._panes)))
         self.assertTrue(poll(lambda: middle.page.get_allocated_width() > 1))
-        allocations = [p.slot.get_allocation() for p in self.panel._panes]
-        xs = [p.slot.translate_coordinates(self.panel, 0, 0)[0] for p in self.panel._panes]
+        allocations = [p.page.get_allocation() for p in self.panel._panes]
+        xs = [p.page.translate_coordinates(self.panel, 0, 0)[0] for p in self.panel._panes]
         self.assertEqual(len({a.y for a in allocations}), 1)
         self.assertLess(xs[0], xs[1])
         self.assertLess(xs[1], xs[2])

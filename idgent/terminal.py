@@ -41,7 +41,6 @@ class _Pane:
     # Closing panes are already out of TerminalPanel._panes but still on screen.
     closing: bool = False
     id: int = 0
-    slot: Gtk.Revealer | None = None
     timer: int | None = None
 
 
@@ -180,19 +179,13 @@ class TerminalPanel(Gtk.Box):
         pane = _Pane(page, terminal, Gio.Cancellable(), id=self._next_id)
         self._next_id += 1
         animated = self._animated()
-        slot = Gtk.Revealer()
-        slot.set_transition_type(Gtk.RevealerTransitionType.SLIDE_RIGHT)
-        slot.set_transition_duration(self.ANIMATION_MS if animated else 0)
-        slot.set_reveal_child(not animated)
-        slot.add(page)
-        pane.slot = slot
         active = self._current_pane()
         index = self._panes.index(active) + 1 if active else len(self._panes)
-        slots = self._body.get_children()
-        position = slots.index(self._panes[index].slot) if index < len(self._panes) else len(slots)
+        children = self._body.get_children()
+        position = children.index(self._panes[index].page) if index < len(self._panes) else len(children)
         self._panes.insert(index, pane)
-        self._body.pack_start(slot, True, True, 0)
-        self._body.reorder_child(slot, position)
+        self._body.pack_start(page, True, True, 0)
+        self._body.reorder_child(page, position)
         divider = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL)
         divider.set_size_request(1, -1)
         divider.get_style_context().add_class("idgent-terminal-sep")
@@ -203,15 +196,15 @@ class TerminalPanel(Gtk.Box):
         terminal.connect("focus-in-event", self._focus_changed, pane, True)
         terminal.connect("focus-out-event", self._focus_changed, pane, False)
         self._set_active(pane)
+        if animated:
+            page.set_opacity(0.0)
         page.show_all()
-        slot.show()
         self._update_dividers()
         self.bar.add_chip(pane.id, index, os.path.basename(shell),
                           self.ANIMATION_MS if animated else 0)
         self._sync_bar()
         if animated:
-            fade(slot, 0.0, 1.0, self.ANIMATION_MS)
-            slot.set_reveal_child(True)
+            fade(page, 0.0, 1.0, self.ANIMATION_MS)
         env = dict(os.environ, TERM="xterm-256color", COLORTERM="truecolor")
         terminal.spawn_async(
             Vte.PtyFlags.DEFAULT, safe_cwd(self._cwd), [shell, "-i"],
@@ -303,9 +296,7 @@ class TerminalPanel(Gtk.Box):
             pane.closing = True
             self._closing.append(pane)
             self.bar.remove_chip(pane.id, self.ANIMATION_MS)
-            pane.slot.set_transition_duration(self.ANIMATION_MS)
-            pane.slot.set_reveal_child(False)
-            fade(pane.slot, 1.0, 0.0, self.ANIMATION_MS)
+            fade(pane.page, 1.0, 0.0, self.ANIMATION_MS)
             # A timeout rather than the revealer signal: it also fires if frames stall.
             pane.timer = GLib.timeout_add(self.ANIMATION_MS + 30, self._finish_close, pane)
         else:
@@ -320,9 +311,9 @@ class TerminalPanel(Gtk.Box):
             self._closing.remove(pane)
         if self._destroyed:
             return GLib.SOURCE_REMOVE
-        cancel_fade(pane.slot)
-        self._body.remove(pane.slot)
-        pane.slot.destroy()
+        cancel_fade(pane.page)
+        self._body.remove(pane.page)
+        pane.page.destroy()
         if not self._panes and not self._closing:
             self.emit("last-closed")
         return GLib.SOURCE_REMOVE
@@ -358,10 +349,10 @@ class TerminalPanel(Gtk.Box):
         self._maximized = pane
         for other in self._panes + self._closing:
             if other is not pane:
-                other.slot.set_no_show_all(True)
-                other.slot.hide()
-        pane.slot.set_no_show_all(False)
-        pane.slot.show()
+                other.page.set_no_show_all(True)
+                other.page.hide()
+        pane.page.set_no_show_all(False)
+        pane.page.show()
         self._update_dividers()
         self.bar.set_maximized(pane.id)
         self._set_active(pane)
@@ -377,8 +368,8 @@ class TerminalPanel(Gtk.Box):
         if self._destroyed:
             return
         for pane in self._panes:
-            pane.slot.set_no_show_all(False)
-            pane.slot.show()
+            pane.page.set_no_show_all(False)
+            pane.page.show()
         self._update_dividers()
         self.bar.set_maximized(None)
         self.focus_terminal()
