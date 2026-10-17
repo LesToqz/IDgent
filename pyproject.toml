@@ -1,0 +1,9 @@
+[project]
+name = "idgent"
+version = "0.1.0"
+description = "A GTK desktop IDE for Linux"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+idgent = "idgent.app:main"
