@@ -1,0 +1,300 @@
+"""Lazy filesystem explorer. Hidden files use the same styling as other files."""
+
+import os
+from collections.abc import Callable
+
+import gi
+
+gi.require_version("Gtk", "3.0")
+gi.require_version("Gdk", "3.0")
+from gi.repository import Gdk, GObject, Gtk
+
+from . import fsops
+
+
+class ExplorerPanel(Gtk.Box):
+    __gsignals__ = {
+        "file-activated": (GObject.SignalFlags.RUN_LAST, None, (str,)),
+        "path-renamed": (GObject.SignalFlags.RUN_LAST, None, (str, str)),
+        "path-deleted": (GObject.SignalFlags.RUN_LAST, None, (str,)),
+    }
+
+    def __init__(self, root: str):
+        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        self.root = ""
+        self._loaded: set[str] = set()
+        self.store = Gtk.TreeStore(str, str, str)
+        self.tree = Gtk.TreeView(model=self.store)
+        self.tree.set_headers_visible(False)
+        column = Gtk.TreeViewColumn()
+        icon = Gtk.CellRendererPixbuf()
+        column.pack_start(icon, False)
+        column.add_attribute(icon, "icon-name", 0)
+        label = Gtk.CellRendererText()
+        column.pack_start(label, True)
+        column.add_attribute(label, "text", 1)
+        self.tree.append_column(column)
+        self.tree.connect("row-expanded", self._on_expanded)
+        self.tree.connect("row-activated", self._on_activated)
+        self.tree.connect("button-press-event", self._on_button)
+        self.connect("key-press-event", self._on_key)
+        self.tree.connect("popup-menu", self._on_popup)
+        toolbar = Gtk.Box(spacing=3)
+        title = Gtk.Label(label="EXPLORER", xalign=0)
+        toolbar.pack_start(title, True, True, 6)
+        for name, tooltip, callback in (
+            ("document-new", "New File", lambda *_: self._new_dialog(False)),
+            ("folder-new", "New Folder", lambda *_: self._new_dialog(True)),
+            ("view-refresh", "Refresh", lambda *_: self.refresh()),
+        ):
+            button = Gtk.Button.new_from_icon_name(name, Gtk.IconSize.MENU)
+            button.set_relief(Gtk.ReliefStyle.NONE)
+            button.set_tooltip_text(tooltip)
+            button.connect("clicked", callback)
+            toolbar.pack_start(button, False, False, 0)
+        self.pack_start(toolbar, False, False, 0)
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        scroll.add(self.tree)
+        self.pack_start(scroll, True, True, 0)
+        self.set_root(root)
+
+    def set_root(self, path: str) -> None:
+        self.root = os.path.abspath(path)
+        self._rebuild({self.root}, None)
+
+    def refresh(self) -> None:
+        self._rebuild(self._expanded_paths(), self._selected_path())
+
+    def _expanded_paths(self) -> set[str]:
+        expanded: set[str] = set()
+        self.tree.map_expanded_rows(
+            lambda tree, path, data: expanded.add(self.store[path][2]), None
+        )
+        return expanded
+
+    def _rebuild(self, expanded: set[str], selected: str | None) -> None:
+        self.store.clear()
+        self._loaded.clear()
+        root = self.store.append(None, ["folder", os.path.basename(self.root) or self.root, self.root])
+        self.store.append(root, [None, "", ""])
+        self._restore(root, expanded)
+        if selected:
+            self._select(selected)
+
+    def _restore(self, row: Gtk.TreeIter, expanded: set[str]) -> None:
+        if self.store[row][2] not in expanded:
+            return
+        self.tree.expand_row(self.store.get_path(row), False)
+        child = self.store.iter_children(row)
+        while child is not None:
+            self._restore(child, expanded)
+            child = self.store.iter_next(child)
+
+    def _load(self, row: Gtk.TreeIter) -> None:
+        path = self.store[row][2]
+        if not path or path in self._loaded:
+            return
+        self._loaded.add(path)
+        placeholder = self.store.iter_children(row)
+        entries: list[tuple[bool, str, str]] = []
+        try:
+            with os.scandir(path) as listing:
+                for entry in listing:
+                    try:
+                        # Directory symlinks remain leaf entries, avoiding cycles.
+                        entries.append((entry.is_dir(follow_symlinks=False), entry.name, entry.path))
+                    except OSError:
+                        continue
+        except OSError:
+            pass
+        for directory, name, full_path in sorted(entries, key=lambda item: (not item[0], item[1].casefold(), item[1])):
+            child = self.store.append(row, ["folder" if directory else "text-x-generic", name, full_path])
+            if directory:
+                self.store.append(child, [None, "", ""])
+        # Keep the placeholder until real rows exist, or GTK collapses the row.
+        if placeholder is not None:
+            self.store.remove(placeholder)
+
+    def _on_expanded(self, tree: Gtk.TreeView, row: Gtk.TreeIter, path: Gtk.TreePath) -> None:
+        self._load(row)
+
+    def _on_activated(self, tree: Gtk.TreeView, path: Gtk.TreePath, column: Gtk.TreeViewColumn) -> None:
+        row = self.store.get_iter(path)
+        full_path = self.store[row][2]
+        if self.store[row][0] == "folder":
+            if tree.row_expanded(path):
+                tree.collapse_row(path)
+            else:
+                tree.expand_row(path, False)
+        elif full_path:
+            self.emit("file-activated", full_path)
+
+    def _selected_path(self) -> str | None:
+        model, row = self.tree.get_selection().get_selected()
+        return model[row][2] if row is not None else None
+
+    def _target_folder(self) -> str:
+        selected = self._selected_path()
+        if not selected:
+            return self.root
+        return selected if os.path.isdir(selected) and not os.path.islink(selected) else os.path.dirname(selected)
+
+    def _find(self, path: str) -> Gtk.TreeIter | None:
+        found: list[Gtk.TreeIter] = []
+
+        def visit(model: Gtk.TreeModel, tree_path: Gtk.TreePath, row: Gtk.TreeIter, data: object) -> bool:
+            if model[row][2] == path:
+                found.append(row.copy())
+                return True
+            return False
+
+        self.store.foreach(visit, None)
+        return found[0] if found else None
+
+    def _select(self, path: str) -> None:
+        row = self._find(path)
+        if row is not None:
+            tree_path = self.store.get_path(row)
+            self.tree.set_cursor(tree_path)
+            self.tree.scroll_to_cell(tree_path, None, False, 0, 0)
+
+    def _create(self, parent: str, name: str, folder: bool = False) -> str:
+        result = (fsops.create_folder if folder else fsops.create_file)(parent, name)
+        expanded = self._expanded_paths() | {parent, self.root}
+        self._rebuild(expanded, result)
+        return result
+
+    def _rename(self, path: str, name: str) -> str:
+        if os.path.abspath(path) == self.root:
+            raise fsops.FsOpError("The project root cannot be renamed.")
+        expanded = self._expanded_paths()
+        result = fsops.rename(path, name)
+        expanded = {result + old[len(path):] if old == path or old.startswith(path + os.sep) else old for old in expanded}
+        self._rebuild(expanded, result)
+        self.emit("path-renamed", path, result)
+        return result
+
+    def _delete(self, path: str) -> str:
+        if os.path.abspath(path) == self.root:
+            raise fsops.FsOpError("The project root cannot be deleted.")
+        result = fsops.delete(path, project_root=self.root)
+        self.refresh()
+        self.emit("path-deleted", result)
+        return result
+
+    def _window(self) -> Gtk.Window | None:
+        widget = self.get_toplevel()
+        return widget if isinstance(widget, Gtk.Window) else None
+
+    def _name_dialog(self, title: str, initial: str, action: Callable[[str], str]) -> None:
+        dialog = Gtk.Dialog(title=title, transient_for=self._window(), modal=True)
+        dialog.add_buttons("Cancel", Gtk.ResponseType.CANCEL, "OK", Gtk.ResponseType.OK)
+        dialog.set_default_response(Gtk.ResponseType.OK)
+        content = dialog.get_content_area()
+        content.set_spacing(8)
+        content.set_border_width(12)
+        entry = Gtk.Entry(text=initial, activates_default=True)
+        entry.set_size_request(280, -1)
+        error_label = Gtk.Label(xalign=0, wrap=True)
+        content.add(entry)
+        content.add(error_label)
+        dialog.show_all()
+        entry.grab_focus()
+        stem = os.path.splitext(initial)[0]
+        entry.select_region(0, len(stem) if stem else -1)
+        try:
+            while dialog.run() == Gtk.ResponseType.OK:
+                try:
+                    action(entry.get_text())
+                    break
+                except fsops.FsOpError as error:
+                    error_label.set_text(str(error))
+        finally:
+            dialog.destroy()
+
+    def _new_dialog(self, folder: bool) -> None:
+        parent = self._target_folder()
+        self._name_dialog("New Folder" if folder else "New File", "", lambda name: self._create(parent, name, folder))
+
+    def _rename_dialog(self) -> None:
+        path = self._selected_path()
+        if path and path != self.root:
+            self._name_dialog("Rename", os.path.basename(path), lambda name: self._rename(path, name))
+
+    def _delete_dialog(self) -> None:
+        path = self._selected_path()
+        if not path or path == self.root:
+            return
+        dialog = Gtk.MessageDialog(
+            transient_for=self._window(), modal=True, message_type=Gtk.MessageType.WARNING,
+            buttons=Gtk.ButtonsType.OK_CANCEL, text=f'Delete "{os.path.basename(path)}"?',
+        )
+        dialog.format_secondary_text("Folders and their contents are deleted recursively. This cannot be undone.")
+        accepted = dialog.run() == Gtk.ResponseType.OK
+        dialog.destroy()
+        if accepted:
+            try:
+                self._delete(path)
+            except fsops.FsOpError as error:
+                message = Gtk.MessageDialog(transient_for=self._window(), modal=True,
+                                            message_type=Gtk.MessageType.ERROR, buttons=Gtk.ButtonsType.CLOSE,
+                                            text=str(error))
+                message.run()
+                message.destroy()
+
+    def _copy_path(self) -> None:
+        Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).set_text(self._selected_path() or self.root, -1)
+
+    def _menu(self, event: Gdk.EventButton | None = None) -> None:
+        menu = Gtk.Menu()
+        selected = self._selected_path()
+        for title, callback in (
+            ("New File...", lambda *_: self._new_dialog(False)),
+            ("New Folder...", lambda *_: self._new_dialog(True)),
+            ("Rename...", lambda *_: self._rename_dialog()),
+            ("Delete", lambda *_: self._delete_dialog()),
+            ("Refresh", lambda *_: self.refresh()),
+            ("Copy Path", lambda *_: self._copy_path()),
+        ):
+            item = Gtk.MenuItem(label=title)
+            item.connect("activate", callback)
+            if title in ("Rename...", "Delete"):
+                item.set_sensitive(bool(selected and selected != self.root))
+            menu.append(item)
+        menu.show_all()
+        menu.attach_to_widget(self.tree, None)
+        menu.connect("selection-done", lambda widget: widget.destroy())
+        if event:
+            menu.popup_at_pointer(event)
+        else:
+            menu.popup_at_widget(self.tree, Gdk.Gravity.CENTER, Gdk.Gravity.NORTH_WEST, None)
+
+    def _on_button(self, tree: Gtk.TreeView, event: Gdk.EventButton) -> bool:
+        if event.button != 3:
+            return False
+        hit = tree.get_path_at_pos(int(event.x), int(event.y))
+        if hit:
+            tree.set_cursor(hit[0])
+        else:
+            tree.get_selection().unselect_all()
+        tree.grab_focus()
+        self._menu(event)
+        return True
+
+    def _on_popup(self, tree: Gtk.TreeView) -> bool:
+        self._menu()
+        return True
+
+    def _on_key(self, tree: Gtk.TreeView, event: Gdk.EventKey) -> bool:
+        if event.keyval == Gdk.KEY_F2:
+            self._rename_dialog()
+        elif event.keyval in (Gdk.KEY_Delete, Gdk.KEY_KP_Delete):
+            self._delete_dialog()
+        elif event.keyval == Gdk.KEY_F5:
+            self.refresh()
+        elif event.keyval in (Gdk.KEY_n, Gdk.KEY_N) and event.state & Gdk.ModifierType.CONTROL_MASK and event.state & Gdk.ModifierType.SHIFT_MASK:
+            self._new_dialog(True)
+        else:
+            return False
+        return True
