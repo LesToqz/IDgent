@@ -13,6 +13,8 @@ gi.require_version('Gtk', '3.0')
 gi.require_version('Gdk', '3.0')
 from gi.repository import Gdk, Gtk, Pango
 
+from idgent import highlight
+
 MAX_FILE_SIZE = 5 * 1024 * 1024
 COMMENT_EXTENSIONS = {'.py', '.sh', '.toml', '.yaml', '.yml', '.conf'}
 
@@ -130,6 +132,8 @@ class _EditorTab:
         tabs = Pango.TabArray.new(1, True)
         tabs.set_tab(0, Pango.TabAlign.LEFT, layout.get_pixel_size()[0])
         self.view.set_tabs(tabs)
+        self.highlighter = highlight.Highlighter(self.buffer, panel.syntax_style)
+        self.detect_language()
         self.page = Gtk.ScrolledWindow()
         self.page.add(self.view)
         self.label = Gtk.Label()
@@ -151,6 +155,21 @@ class _EditorTab:
         self.buffer.connect('modified-changed', lambda *_: self.update_title())
         self.buffer.connect('mark-set', lambda *_: panel._update_status())
         self.view.connect('key-press-event', panel._key_press, self)
+        self.update_title()
+
+    @property
+    def language(self) -> str:
+        return highlight.language_name(self.highlighter.lexer)
+
+    def detect_language(self) -> None:
+        start = self.buffer.get_start_iter()
+        end = start.copy()
+        end.forward_to_line_end()
+        self.highlighter.set_lexer(highlight.lexer_for(self.path, self.buffer.get_text(start, end, False)[:200]))
+
+    def set_path(self, path: str) -> None:
+        self.path = path
+        self.detect_language()
         self.update_title()
 
     def update_title(self) -> None:
@@ -203,6 +222,7 @@ class EditorPanel(Gtk.Box):
     def __init__(self):
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
         self.get_style_context().add_class('idgent-editor')
+        self.syntax_style: dict[str, highlight.SyntaxStyle] = dict(highlight.DARK_PLUS)
         self.tabs: list[_EditorTab] = []
         self.stack = Gtk.Stack()
         self.placeholder = Gtk.Label(label='IDgent  -  open a file from the explorer')
@@ -232,6 +252,12 @@ class EditorPanel(Gtk.Box):
         self.show_all()
         self.stack.set_visible_child_name('empty')
         self._update_status()
+
+    def set_syntax_style(self, styles: dict[str, highlight.SyntaxStyle]) -> None:
+        """Recolour every open tab, and every tab opened later, with a kind -> SyntaxStyle dict."""
+        self.syntax_style = dict(styles)
+        for tab in self.tabs:
+            tab.highlighter.set_style(self.syntax_style)
 
     def _current(self) -> _EditorTab | None:
         page = self.notebook.get_nth_page(self.notebook.get_current_page())
@@ -299,8 +325,8 @@ class EditorPanel(Gtk.Box):
         old, new = os.path.abspath(old), os.path.abspath(new)
         for tab in self.tabs:
             if tab.path == old or tab.path.startswith(old + os.sep):
-                tab.path = new + tab.path[len(old):]
-                tab.update_title()
+                tab.set_path(new + tab.path[len(old):])
+        self._update_status()
 
     def on_path_deleted(self, path: str) -> None:
         path = os.path.abspath(path)
@@ -316,6 +342,7 @@ class EditorPanel(Gtk.Box):
             if answer == 'cancel' or (answer == 'save' and not self._save(tab)):
                 return False
         self.tabs.remove(tab)
+        tab.highlighter.destroy()
         self.notebook.remove_page(self.notebook.page_num(tab.page))
         tab.page.destroy()
         if not self.tabs:
@@ -331,7 +358,7 @@ class EditorPanel(Gtk.Box):
         cursor = tab.buffer.get_iter_at_mark(tab.buffer.get_insert()) if tab else None
         self.status.set_text(f'Ln {cursor.get_line() + 1 if cursor else 1}, Col '
                              f'{cursor.get_line_offset() + 1 if cursor else 1}  |  UTF-8  |  '
-                             f'{tab.ending if tab else "LF"}')
+                             f'{tab.ending if tab else "LF"}  |  {tab.language if tab else "Plain Text"}')
 
     def _edit(self, tab: _EditorTab, command: str) -> None:
         buffer = tab.buffer

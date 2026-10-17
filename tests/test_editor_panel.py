@@ -131,7 +131,7 @@ class EditorPanelTest(unittest.TestCase):
         other.write_bytes(b'one\r\ntwo')
         self.open(other)
         self.panel.notebook.set_current_page(0)
-        self.assertEqual(self.panel.status.get_text(), 'Ln 2, Col 7  |  UTF-8  |  LF')
+        self.assertEqual(self.panel.status.get_text(), 'Ln 2, Col 7  |  UTF-8  |  LF  |  Python')
         self.panel.notebook.set_current_page(1)
         self.assertIn('CRLF', self.panel.status.get_text())
 
