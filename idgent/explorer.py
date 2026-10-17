@@ -7,7 +7,7 @@ import gi
 
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
-from gi.repository import Gdk, GObject, Gtk
+from gi.repository import Gdk, GObject, Gtk, Pango
 
 from . import fsops
 
@@ -33,10 +33,11 @@ class ExplorerPanel(Gtk.Box):
         column.pack_start(icon, False)
         column.add_attribute(icon, "icon-name", 0)
         label = Gtk.CellRendererText()
-        label.set_fixed_size(-1, 20)
+        self._text_cell = label
         column.pack_start(label, True)
         column.add_attribute(label, "text", 1)
         self.tree.append_column(column)
+        self.set_font_size(10)
         self.tree.connect("row-expanded", self._on_expanded)
         self.tree.connect("row-activated", self._on_activated)
         self.tree.connect("button-press-event", self._on_button)
@@ -63,6 +64,18 @@ class ExplorerPanel(Gtk.Box):
         scroll.add(self.tree)
         self.pack_start(scroll, True, True, 0)
         self.set_root(root)
+
+    def set_font_size(self, size: int) -> None:
+        """Resize file names and reserve enough height for their Pango metrics."""
+        self.font_size = size
+        self._text_cell.set_property("size-points", size)
+        description = self.tree.get_pango_context().get_font_description().copy()
+        description.set_size(size * Pango.SCALE)
+        metrics = self.tree.get_pango_context().get_metrics(description, None)
+        height = (metrics.get_ascent() + metrics.get_descent()) / Pango.SCALE
+        self._text_cell.set_fixed_size(-1, max(20, int(height + .999) + 4))
+        self.tree.columns_autosize()
+        self.tree.queue_resize()
 
     def set_root(self, path: str) -> None:
         self.root = os.path.abspath(path)

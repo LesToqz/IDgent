@@ -15,6 +15,7 @@ from idgent.explorer import ExplorerPanel
 from idgent.editor import EditorPanel
 from idgent.terminal import TerminalPanel
 from idgent.titlebar import TitleBar
+from idgent.settings_dialog import SettingsDialog
 
 
 class MainWindow(Gtk.ApplicationWindow):
@@ -27,10 +28,16 @@ class MainWindow(Gtk.ApplicationWindow):
         self._fullscreen_layout = None
         self.theme = theme if theme is not None else get_theme(settings.get_theme_id())
 
+        self._settings_dialog = None
+        self._font_sizes = settings.get_font_sizes()
         self.explorer = ExplorerPanel(self.root)
         self.editor = EditorPanel()
-        self.terminal_bottom = TerminalPanel(self.root)
-        self.terminal_right = TerminalPanel(self.root, autostart=False, stacked=True)
+        self.explorer.set_font_size(self._font_sizes["explorer_font_size"])
+        self.editor.set_font_size(self._font_sizes["editor_font_size"])
+        terminal_size = self._font_sizes["terminal_font_size"]
+        self.terminal_bottom = TerminalPanel(self.root, font_size=terminal_size)
+        self.terminal_right = TerminalPanel(self.root, autostart=False, stacked=True,
+                                            font_size=terminal_size)
         self.terminal_right.set_no_show_all(True)
         for panel in (self.terminal_bottom, self.terminal_right):
             panel.connect("last-closed", self._hide_terminal)
@@ -87,6 +94,7 @@ class MainWindow(Gtk.ApplicationWindow):
         item(file_menu, "Open Folder…", self.open_folder)
         item(file_menu, "Save", lambda: self.editor.save_current(), "<Control>s")
         item(file_menu, "Save All", lambda: self.editor.save_all(), "<Control><Shift>s")
+        item(file_menu, "Settings…", self.open_settings, "<Control>comma")
         item(file_menu, "Quit", self.close, "<Control>q")
         item(view_menu, "Terminal Below", self.toggle_terminal_bottom, "<Control>grave")
         item(view_menu, "Terminal on Right", self.toggle_terminal_right, "<Control><Alt>grave")
@@ -94,25 +102,32 @@ class MainWindow(Gtk.ApplicationWindow):
         item(view_menu, "Toggle Terminal Fullscreen", self.toggle_terminal_fullscreen,
              "<Control><Shift>F11")
         item(view_menu, "Toggle Explorer Sidebar", self.toggle_explorer, "<Control>b")
-        theme_menu = Gtk.Menu()
-        theme_entry = Gtk.MenuItem(label="Theme")
-        theme_entry.set_submenu(theme_menu)
-        view_menu.append(theme_entry)
-        self._theme_items = {}
-        group = None
-        for theme in THEMES:
-            entry = Gtk.RadioMenuItem.new_with_label(group, theme.name)
-            group = entry.get_group()
-            entry.set_active(theme.id == self.theme.id)
-            entry.connect("toggled", self._theme_toggled, theme.id)
-            theme_menu.append(entry)
-            self._theme_items[theme.id] = entry
-        item(view_menu, "Next Theme", self.next_theme, "<Control><Alt>t")
+        key, modifiers = Gtk.accelerator_parse("<Control><Alt>t")
+        accelerators.connect(key, modifiers, Gtk.AccelFlags.VISIBLE,
+                             lambda *_: (self.next_theme(), True)[1])
         return bar
 
-    def _theme_toggled(self, entry: Gtk.RadioMenuItem, theme_id: str) -> None:
-        if entry.get_active() and theme_id != self.theme.id:
-            self.set_theme(theme_id)
+    def open_settings(self) -> None:
+        """Present the window's reusable, non-modal live settings dialog."""
+        if self._settings_dialog is None:
+            self._settings_dialog = SettingsDialog(
+                parent=self, theme_id=self.theme.id, sizes=self._font_sizes)
+            self._settings_dialog.connect("theme-selected",
+                                          lambda _, theme_id: self.set_theme(theme_id))
+            self._settings_dialog.connect("font-size-changed", self._font_size_changed)
+        self._settings_dialog.show_all()
+        self._settings_dialog.present()
+
+    def _font_size_changed(self, _dialog, key: str, size: int) -> None:
+        self._font_sizes[key] = size
+        if key == "terminal_font_size":
+            for panel in (self.terminal_bottom, self.terminal_right):
+                panel.set_font_size(size)
+        elif key == "editor_font_size":
+            self.editor.set_font_size(size)
+        elif key == "explorer_font_size":
+            self.explorer.set_font_size(size)
+        settings.set_font_size(key, size)
 
     def set_theme(self, theme_id: str, persist: bool = True) -> None:
         """Recolour existing widgets and defaults without restarting any shells."""
@@ -124,7 +139,8 @@ class MainWindow(Gtk.ApplicationWindow):
         for panel in (self.terminal_bottom, self.terminal_right):
             panel.apply_palette(colors.foreground, colors.background, colors.ansi, colors.cursor)
         self.theme = theme
-        self._theme_items[theme.id].set_active(True)
+        if self._settings_dialog is not None:
+            self._settings_dialog.set_theme_id(theme.id)
         if persist:
             settings.set_theme_id(theme.id)
 

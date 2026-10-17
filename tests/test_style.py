@@ -10,6 +10,8 @@ from unittest.mock import patch
 os.environ["GDK_BACKEND"] = "x11"
 
 from idgent import style
+from idgent.settings_dialog import build_css as build_settings_css
+from idgent.search import build_css as build_search_css
 from idgent.editor import EditorPanel
 from idgent.explorer import ExplorerPanel
 from idgent.terminal import TerminalPanel
@@ -49,6 +51,8 @@ class StyleTest(unittest.TestCase):
                 provider.load_from_data(style.build_css(theme).encode('utf-8'))
                 self.assertEqual(errors, [])
                 self.assertIn('.idgent-resize-gate', style.build_css(theme))
+                self.assertIn(build_settings_css(theme.ui), style.build_css(theme))
+                self.assertIn(build_search_css(theme.ui), style.build_css(theme))
 
     def test_live_switch_uses_one_provider_and_updates_widgets(self):
         style.apply_style()

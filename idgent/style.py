@@ -7,6 +7,8 @@ from gi.repository import Gdk, GLib, Gtk
 
 from idgent.themes import Theme, get_theme
 from idgent.titlebar import build_titlebar_css
+from idgent.settings_dialog import build_css as build_settings_css
+from idgent.search import build_css as build_search_css
 
 
 def build_css(theme: Theme) -> str:
@@ -110,7 +112,7 @@ tooltip, tooltip.background {{ background: {ui['panel_bg']}; color: {ui['foregro
 tooltip label {{ color: {ui['foreground']}; }}
 dialog .dialog-action-area, messagedialog .dialog-action-area {{ padding: 8px; }}
 .idgent-resize-gate {{ background: {ui['panel_bg']}; }}
-''' + build_titlebar_css(ui)
+''' + build_titlebar_css(ui) + build_settings_css(ui) + build_search_css(ui)
 
 
 # Compatibility for existing consumers and strict CSS parser tests.
