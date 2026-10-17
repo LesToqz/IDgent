@@ -42,9 +42,10 @@ The bottom dock starts open; the right dock starts hidden. View → Terminal Bel
 and Terminal on Right toggle each dock. Hiding a dock preserves its running
 shells. Showing an empty dock starts a shell. Closing the final pane hides its
 dock after its exit animation. Each dock has equal-width horizontal panes and a
-bar with chips named bash1, bash2, bash3 (or the selected shell's name). Each chip
-has fullscreen and delete icons; the "+" button adds a terminal. Each dock allows
-three terminals independently; a fourth shows "Cannot add terminal (limit 3)".
+bar with chips numbered by position: bash1, bash2, bash3 from left to right (or
+the selected shell's name), renumbering when one is closed. Each chip has fullscreen
+and delete icons; the "+" button adds a terminal. Each dock allows three terminals
+independently; a fourth shows "Cannot add terminal (limit 3)".
 Adding and deleting panes animates the pane and chip.
 
 A chip's fullscreen icon fills the whole content area, keeping the top bar visible.

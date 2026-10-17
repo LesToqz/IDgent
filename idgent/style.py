@@ -105,9 +105,10 @@ paned.vertical > separator {{ border-top: 2px solid transparent; border-bottom: 
 .idgent-terminal-chip button:hover {{ background: #3a3d3e; }}
 .idgent-terminal-chip .idgent-terminal-chip-label {{ min-width: 0; padding: 0 6px 0 2px; font-size: 12px; }}
 .idgent-terminal-chip .idgent-terminal-chip-label:hover {{ background: transparent; }}
-.idgent-terminal-add {{ margin: 0 2px; }}
-.idgent-terminal-add.limit {{ color: {LIMIT_TINT}; }}
-.idgent-terminal-add.limit:hover {{ color: {WARNING}; }}
+.idgent-terminal-bar .idgent-terminal-add {{ margin: 0 2px; color: {FOREGROUND}; }}
+.idgent-terminal-bar .idgent-terminal-add:hover {{ background: {HOVER}; color: white; }}
+.idgent-terminal-bar .idgent-terminal-add.limit {{ color: {LIMIT_TINT}; }}
+.idgent-terminal-bar .idgent-terminal-add.limit:hover {{ color: {WARNING}; }}
 .idgent-terminal-notice {{ color: {WARNING}; font-size: 12px; padding: 0 8px; }}
 '''
 

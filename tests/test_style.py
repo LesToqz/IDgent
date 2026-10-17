@@ -107,6 +107,38 @@ class StyleTest(unittest.TestCase):
         flat = bar.chip(1).delete_button.get_style_context()
         self.assertEqual(flat.get_border(Gtk.StateFlags.NORMAL).left, 0)
 
+    def test_realized_add_button_normal_hover_and_limit_colours(self):
+        style.apply_style()
+        window = Gtk.Window()
+        self.addCleanup(window.destroy)
+        bar = TerminalBar()
+        window.add(bar)
+        window.show_all()
+        self.assertTrue(self.poll(lambda: bar.add_button.get_mapped()))
+        context = bar.add_button.get_style_context()
+
+        def assert_colour(expected, *, hover=False, background=False):
+            bar.add_button.unset_state_flags(Gtk.StateFlags.PRELIGHT)
+            if hover:
+                bar.add_button.set_state_flags(Gtk.StateFlags.PRELIGHT, False)
+            getter = context.get_background_color if background else context.get_color
+
+            def matches():
+                actual = getter(context.get_state())
+                return all(abs(channel - value / 255) < 0.005
+                           for channel, value in zip((actual.red, actual.green, actual.blue), expected))
+
+            self.assertTrue(self.poll(matches), getter(context.get_state()).to_string())
+
+        assert_colour((0xcc, 0xcc, 0xcc))
+        assert_colour((255, 255, 255), hover=True)
+        assert_colour((0x2a, 0x2d, 0x2e), hover=True, background=True)
+        bar.set_full(True)
+        assert_colour((0x7d, 0x6f, 0x2a))
+        assert_colour((0xcc, 0xa7, 0), hover=True)
+        bar.set_full(False)
+        assert_colour((0xcc, 0xcc, 0xcc))
+
     def test_apply_is_idempotent(self):
         # Start unregistered even if an application test already applied the theme.
         if style._provider is not None:
