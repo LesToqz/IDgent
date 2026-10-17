@@ -42,6 +42,7 @@ class Match(NamedTuple):
 
 @dataclass
 class FileGroup:
+    """Content hits for one absolute path, in source order."""
     path: str
     relative_path: str
     matches: list[Match]
@@ -50,6 +51,11 @@ class FileGroup:
 
 @dataclass
 class SearchResults:
+    """Content groups followed by separate absolute basename hits.
+
+    Totals describe retained content matches only. Cancelled scans return their
+    partial results; truncated indicates an actual match omitted by a limit.
+    """
     groups: list[FileGroup] = field(default_factory=list)
     file_names: list[str] = field(default_factory=list)
     truncated: bool = False
@@ -213,6 +219,11 @@ SEARCH_CSS = build_css(get_theme(None).ui)
 
 
 class SearchPanel(Gtk.Box):
+    """Wrap Explorer content; emit absolute paths and zero-based match locations.
+
+    Install SEARCH_CSS (or build_css(theme.ui)) in the application's provider.
+    Public widget methods, including search_now, run on GTK's main thread.
+    """
     __gsignals__ = {
         'result-activated': (GObject.SignalFlags.RUN_LAST, None, (str, int, int, int)),
     }
@@ -301,6 +312,7 @@ class SearchPanel(Gtk.Box):
             self._changed()
 
     def set_text_provider(self, provider):
+        """Set path -> live text | None; callbacks always run on GTK's thread."""
         self.text_provider = provider
         self._changed()
 
@@ -337,6 +349,7 @@ class SearchPanel(Gtk.Box):
                     current_path=self.current_path, text_provider=provider)
 
     def search_now(self, query=None):
+        """Cancel pending work and search synchronously; display query errors."""
         if query is not None:
             self.entry.set_text(query)
         self._invalidate()
