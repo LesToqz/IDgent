@@ -88,8 +88,10 @@ class TerminalPanel(Gtk.Box):
     # Height of the header row; the "+" overlay and the limit toast are placed against it.
     HEADER_HEIGHT = 30
 
-    def __init__(self, cwd: str, autostart: bool = True, stacked: bool = False):
+    def __init__(self, cwd: str, autostart: bool = True, stacked: bool = False,
+                 font_size: int = 11):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        self.font_size = font_size
         self._cwd = cwd
         self.stacked = stacked
         self._destroyed = False
@@ -309,6 +311,25 @@ class TerminalPanel(Gtk.Box):
         GLib.idle_add(self._focus_idle, pane)
         return True
 
+    def set_font_size(self, size: int) -> None:
+        """Set the base font for existing and future panes, retaining zoom."""
+        self.font_size = size
+        for pane in self._panes + self._closing:
+            terminal = pane.terminal
+            # Font metrics change the PTY grid even at the same pixel allocation.
+            # Use the gate's non-reflow policy for this discrete layout change too.
+            rewrap = terminal.get_property("rewrap-on-resize")
+            gated = isinstance(pane.frame, ResizeGate) and not pane.frame.REFLOW_VTE
+            if gated:
+                terminal.set_property("rewrap-on-resize", False)
+            try:
+                terminal.set_font(Pango.FontDescription(f"Monospace {size}"))
+            finally:
+                if gated:
+                    terminal.set_property("rewrap-on-resize", rewrap)
+            pane.frame.queue_resize()
+        self._commit_layout()
+
     def apply_palette(self, foreground: str, background: str, ansi: list[str],
                       cursor: str | None = None) -> None:
         """Use these colours for every terminal, existing and future."""
@@ -329,7 +350,7 @@ class TerminalPanel(Gtk.Box):
         terminal.set_margin_end(8)
         terminal.set_margin_top(8)
         terminal.set_margin_bottom(8)
-        terminal.set_font(Pango.FontDescription("Monospace 11"))
+        terminal.set_font(Pango.FontDescription(f"Monospace {self.font_size}"))
         self._apply_colors(terminal)
         terminal.set_cursor_blink_mode(Vte.CursorBlinkMode.ON)
         terminal.set_scrollback_lines(10000)

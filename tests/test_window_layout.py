@@ -77,23 +77,23 @@ class WindowLayoutTests(unittest.TestCase):
             os.kill(pid, signal.SIGKILL)
         self.assertTrue(exited, "shell survived window destruction")
 
-    def test_theme_menu_order_selection_persistence_and_reopen(self):
+    def test_settings_theme_selection_persistence_and_reopen(self):
         view_menu = self.window.titlebar.menu_bar.get_children()[1].get_submenu()
-        theme_menu = next(item.get_submenu() for item in view_menu.get_children()
-                          if item.get_label() == "Theme")
-        entries = theme_menu.get_children()
-        self.assertEqual([item.get_label() for item in entries], [t.name for t in THEMES])
-        self.assertTrue(all(isinstance(item, Gtk.RadioMenuItem) for item in entries))
-        self.assertEqual([item.get_active() for item in entries],
-                         [t.id == DEFAULT_THEME_ID for t in THEMES])
-        entries[1].activate()
+        self.assertFalse({'Theme', 'Next Theme'} &
+                         {item.get_label() for item in view_menu.get_children()})
+        self.window.open_settings()
+        dialog = self.window._settings_dialog
+        self.assertEqual(list(dialog.theme_rows), [t.id for t in THEMES])
+        self.assertEqual(dialog.theme_id, DEFAULT_THEME_ID)
+        dialog.theme_list.select_row(dialog.theme_rows[THEMES[1].id])
         self.assertIs(self.window.theme, THEMES[1])
         self.assertEqual(settings.get_theme_id(), THEMES[1].id)
         other = MainWindow(self.application, self.folder.name)
         self.addCleanup(other.destroy)
         self.assertFalse(other.get_realized())
         self.assertIs(other.theme, THEMES[1])
-        self.assertTrue(other._theme_items[THEMES[1].id].get_active())
+        other.open_settings()
+        self.assertEqual(other._settings_dialog.theme_id, THEMES[1].id)
         self.assertIs(style.current_theme(), THEMES[1])
 
     def test_theme_fallback_and_nonpersisting_switch(self):
@@ -115,11 +115,12 @@ class WindowLayoutTests(unittest.TestCase):
         self.assertEqual(settings.get_theme_id(), DEFAULT_THEME_ID)
 
     def test_next_theme_accelerator_cycles_and_wraps(self):
+        self.window.open_settings()
         key, modifiers = Gtk.accelerator_parse("<Control><Alt>t")
         for theme in (*THEMES[1:], THEMES[0]):
             self.assertTrue(Gtk.accel_groups_activate(self.window, key, modifiers))
             self.assertIs(self.window.theme, theme)
-            self.assertTrue(self.window._theme_items[theme.id].get_active())
+            self.assertEqual(self.window._settings_dialog.theme_id, theme.id)
             self.assertEqual(settings.get_theme_id(), theme.id)
 
     def test_default_layout_and_title(self) -> None:
