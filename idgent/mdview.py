@@ -94,7 +94,7 @@ def _quote(line, limit=32):
 
 def _cells(line):
     # Bound grid expansion (one very wide cell must not multiply a huge table).
-    return [part.strip().replace('\\|', '|')[:120]
+    return [part.strip().replace('\\|', '|')
             for part in re.split(r'(?<!\\)\|', line.strip().strip('|'), maxsplit=31)]
 
 
@@ -155,10 +155,11 @@ def parse_blocks(text: str):
                     rows.append(_cells(_quote(lines[i])[1]))
                     i += 1
                 columns = max(map(len, rows))
-                widths = [max((len(row[c]) if c < len(row) else 0) for row in rows) for c in range(columns)]
+                widths = [min(120, max((len(row[c]) if c < len(row) else 0) for row in rows)) for c in range(columns)]
                 for n, row in enumerate(rows):
                     grid = '│ ' + ' │ '.join((row[c] if c < len(row) else '').ljust(widths[c]) for c in range(columns)) + ' │'
-                    yield Block('table', grid + '\n', quote=quote)
+                    for start in range(0, len(grid), CHUNK):
+                        yield Block('table', grid[start:start + CHUNK] + '\n', quote=quote)
                     if n == 0:
                         yield Block('table', '├─' + '─┼─'.join('─' * w for w in widths) + '─┤\n', quote=quote)
                 if i >= count or '|' not in lines[i] or not lines[i].strip():

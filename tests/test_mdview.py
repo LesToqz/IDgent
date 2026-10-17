@@ -75,6 +75,8 @@ class ParserTest(unittest.TestCase):
         long_table = list(mdview.parse_blocks('| A | B |\n| --- | --- |\n' + '| row | cell |\n' * 300))
         self.assertTrue(all(b.kind == 'table' for b in long_table))
         self.assertEqual(sum('row' in b.text for b in long_table), 300)
+        wide_table = list(mdview.parse_blocks('| A | B |\n| --- | --- |\n| ' + 'x' * 1000 + ' | tail |'))
+        self.assertEqual(sum(b.text.count('x') for b in wide_table), 1000)
 
     def test_raw_html_and_images_remain_inert(self):
         spans = mdview.parse_inline('<script>alert(1)</script> ![a cat](https://invalid/image.png)')
