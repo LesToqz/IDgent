@@ -15,7 +15,8 @@ gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
 from gi.repository import Gdk, Gio, Gtk
 
-from idgent.titlebar import TITLEBAR_CSS, TitleBar
+from idgent.titlebar import TITLEBAR_CSS, TitleBar, build_titlebar_css
+from idgent.themes import THEMES, get_theme
 from idgent.window import MainWindow
 from tests.test_integration import alive, poll
 
@@ -52,6 +53,19 @@ class TitleBarTests(unittest.TestCase):
             if alive(pid):
                 os.kill(pid, signal.SIGKILL)
         self.assertTrue(stopped, "shell survived window destruction")
+
+    def test_builder_matches_legacy_dark_plus_and_parses_all_themes(self):
+        self.assertEqual(TITLEBAR_CSS, build_titlebar_css(get_theme(None).ui))
+        for theme in THEMES:
+            with self.subTest(theme=theme.id):
+                provider = Gtk.CssProvider()
+                errors = []
+                provider.connect('parsing-error', lambda _, section, error: errors.append(str(error)))
+                css = build_titlebar_css(theme.ui)
+                provider.load_from_data(css.encode('utf-8'))
+                self.assertEqual(errors, [])
+                self.assertIn(theme.ui['titlebar_bg'], css)
+                self.assertIn(theme.ui['close_hover'], css)
 
     def test_menus_share_header_and_leave_content(self):
         bar = self.window.get_titlebar()
