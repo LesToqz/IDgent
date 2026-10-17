@@ -6,26 +6,33 @@ gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk
 
 
-TITLEBAR_CSS = """
-headerbar.idgent-titlebar {
-    background: #333333; color: #cccccc; min-height: 34px;
+def build_titlebar_css(ui: dict[str, str]) -> str:
+    """Build the titlebar rules from the same roles as the application theme."""
+    return f"""
+headerbar.idgent-titlebar {{
+    background: {ui['titlebar_bg']}; color: {ui['titlebar_fg']}; min-height: 34px;
     padding: 0; border: 0; border-radius: 0; box-shadow: none;
-}
-.idgent-titlebar .idgent-title { color: #9d9d9d; font-size: 12px; }
-.idgent-titlebar menubar {
-    background: transparent; color: #cccccc; padding: 0; border: 0;
-}
-.idgent-titlebar menubar > menuitem { padding: 4px 8px; }
-.idgent-titlebar menubar > menuitem:hover { background: #505050; }
-.idgent-titlebar button.titlebutton {
-    background: transparent; color: #cccccc; border: 0; border-radius: 0;
+}}
+.idgent-titlebar .idgent-title {{ color: {ui['title_fg']}; font-size: 12px; }}
+.idgent-titlebar menubar {{
+    background: transparent; color: {ui['titlebar_fg']}; padding: 0; border: 0;
+}}
+.idgent-titlebar menubar > menuitem {{ padding: 4px 8px; }}
+.idgent-titlebar menubar > menuitem:hover {{ background: {ui['button_hover']}; }}
+.idgent-titlebar button.titlebutton {{
+    background: transparent; color: {ui['titlebar_fg']}; border: 0; border-radius: 0;
     box-shadow: none; text-shadow: none; min-height: 32px; min-width: 32px;
     padding: 0; margin: 0;
-}
-.idgent-titlebar button.titlebutton:hover { background: #505050; }
-.idgent-titlebar button.titlebutton.close:hover { background: #c42b1c; color: white; }
-.idgent-titlebar separator { background: transparent; min-width: 0; margin: 0; }
+}}
+.idgent-titlebar button.titlebutton:hover {{ background: {ui['button_hover']}; }}
+.idgent-titlebar button.titlebutton.close:hover {{ background: {ui['close_hover']}; color: {ui['close_fg']}; }}
+.idgent-titlebar separator {{ background: transparent; min-width: 0; margin: 0; }}
 """
+
+
+from idgent.themes import get_theme
+
+TITLEBAR_CSS = build_titlebar_css(get_theme(None).ui)
 
 
 class TitleBar(Gtk.HeaderBar):
