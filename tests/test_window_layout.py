@@ -31,8 +31,8 @@ class WindowLayoutTests(unittest.TestCase):
         self.window = MainWindow(self.application, self.folder.name)
         self.window.show_all()
         self.addCleanup(self.destroy_window)
-        self.assertTrue(self.poll(lambda: self.window.terminal._tabs[0].pid is not None))
-        self.shell_pid = self.window.terminal._tabs[0].pid
+        self.assertTrue(self.poll(lambda: self.window.terminal_bottom._panes[0].pid is not None))
+        self.shell_pid = self.window.terminal_bottom._panes[0].pid
 
     @staticmethod
     def poll(predicate):
@@ -65,80 +65,73 @@ class WindowLayoutTests(unittest.TestCase):
         self.assertTrue(exited, "shell survived window destruction")
 
     def test_default_layout_and_title(self) -> None:
-        self.assertEqual(self.window.terminal_position, "bottom")
-        self.assertEqual(self.window.dock.get_orientation(), Gtk.Orientation.VERTICAL)
+        self.assertTrue(self.window.terminal_bottom.get_visible())
+        self.assertFalse(self.window.terminal_right.get_visible())
+        self.assertEqual(self.window.terminal_right.terminal_count(), 0)
+        self.assertEqual(self.window.dock.get_orientation(), Gtk.Orientation.HORIZONTAL)
+        self.assertEqual(self.window.dock_bottom.get_orientation(), Gtk.Orientation.VERTICAL)
+        self.assertIs(self.window.dock.get_child1(), self.window.dock_bottom)
+        self.assertIs(self.window.dock.get_child2(), self.window.terminal_right)
+        self.assertIs(self.window.dock_bottom.get_child2(), self.window.terminal_bottom)
         self.assertEqual(self.window.get_default_size(), (1200, 750))
         self.assertIn(Path(self.folder.name).name, self.window.get_title())
         self.assertEqual(self.window.sidebar.get_position(), 260)
 
-    def test_move_preserves_terminal(self) -> None:
-        terminal = self.window.terminal
-        for position, orientation, label in (
-            ("right", Gtk.Orientation.HORIZONTAL, "Move Terminal to Bottom"),
-            ("bottom", Gtk.Orientation.VERTICAL, "Move Terminal to Right"),
-        ):
-            self.window.toggle_terminal_position()
-            self.assertEqual(self.window.terminal_position, position)
-            self.assertEqual(self.window.dock.get_orientation(), orientation)
-            self.assertIs(self.window.terminal, terminal)
-            self.assertIs(self.window.dock.get_child2(), terminal)
-            self.assertIs(terminal.get_parent(), self.window.dock)
-            self.assertEqual(self.window.move_terminal_item.get_label(), label)
-
-    def test_terminal_hide_move_show(self) -> None:
-        self.window.toggle_terminal()
-        self.assertFalse(self.window.terminal.get_visible())
-        self.window.toggle_terminal_position()
-        self.window.show_all()
-        self.assertFalse(self.window.terminal.get_visible())
-        self.window.toggle_terminal()
-        self.assertTrue(self.window.terminal.get_visible())
-
     def settle_layout(self) -> None:
-        deadline = time.monotonic() + 1
+        deadline = time.monotonic() + .2
         self.assertTrue(self.poll(lambda: time.monotonic() >= deadline))
 
     def assert_right_terminal_size(self, window) -> None:
-        width = window.terminal.get_allocated_width()
+        width = window.terminal_right.get_allocated_width()
         dock_width = window.dock.get_allocated_width()
         self.assertGreaterEqual(width, 380)
         self.assertLessEqual(width, dock_width * .6)
         self.assertAlmostEqual(width, max(380, round(dock_width * .4)), delta=1)
+        self.assertGreaterEqual(window.editor.get_allocated_width(), 300)
+        self.assertGreaterEqual(window.editor.get_allocated_height(), 150)
 
-    def test_allocated_terminal_dock_sizes(self) -> None:
-        self.window.resize(1200, 750)
-        terminal = self.window.terminal
-        self.window.toggle_terminal_position()
+    def test_both_docks_allocated(self) -> None:
+        self.window.toggle_terminal_right()
         self.settle_layout()
+        self.assertTrue(self.window.terminal_bottom.get_visible())
+        self.assertTrue(self.window.terminal_right.get_visible())
         self.assert_right_terminal_size(self.window)
-        self.window.toggle_terminal_position()
-        self.settle_layout()
-        height = terminal.get_allocated_height()
+        height = self.window.terminal_bottom.get_allocated_height()
         self.assertGreaterEqual(height, 150)
-        self.assertAlmostEqual(height, self.window.dock.get_allocated_height() * .3,
+        self.assertAlmostEqual(height, self.window.dock_bottom.get_allocated_height() * .3,
                                delta=1)
-        self.assertIs(self.window.terminal, terminal)
 
-    def test_move_before_realize(self) -> None:
+    def test_show_right_before_realize(self) -> None:
         window = MainWindow(self.application, self.folder.name)
         self.addCleanup(window.destroy)
         self.assertFalse(window.get_realized())
-        window.toggle_terminal_position()
+        window.toggle_terminal_right()
         window.show_all()
         self.settle_layout()
         self.assert_right_terminal_size(window)
 
-    def test_hidden_terminal_dock_size(self) -> None:
-        self.window.toggle_terminal()
-        self.window.toggle_terminal_position()
-        self.settle_layout()
-        self.window.toggle_terminal()
+    def test_hidden_dock_stays_hidden_after_show_all(self) -> None:
+        self.window.toggle_terminal_bottom()
+        self.window.toggle_terminal_right()
+        self.window.show_all()
+        self.assertFalse(self.window.terminal_bottom.get_visible())
+        self.assertTrue(self.window.terminal_right.get_visible())
         self.window.toggle_explorer()
         self.settle_layout()
         self.assert_right_terminal_size(self.window)
-        self.window.toggle_explorer()
-        self.settle_layout()
-        self.assertGreaterEqual(self.window.terminal.get_allocated_width(), 380)
+        self.window.toggle_terminal_bottom()
+        self.assertTrue(self.window.terminal_bottom.get_visible())
+
+    def test_last_closed_hides_each_dock_and_show_respawns(self) -> None:
+        self.window.toggle_terminal_right()
+        for panel, toggle in ((self.window.terminal_right, self.window.toggle_terminal_right),
+                              (self.window.terminal_bottom, self.window.toggle_terminal_bottom)):
+            panel.close_current()
+            self.assertFalse(panel.get_visible())
+            self.assertEqual(panel.terminal_count(), 0)
+            toggle()
+            self.assertTrue(panel.get_visible())
+            self.assertEqual(panel.terminal_count(), 1)
 
     def test_explorer_toggle(self) -> None:
         self.window.toggle_explorer()
@@ -160,10 +153,12 @@ class WindowLayoutTests(unittest.TestCase):
     def test_folder_change(self) -> None:
         with tempfile.TemporaryDirectory(prefix="idgent-new-root-") as root, \
              patch.object(self.window.explorer, "set_root") as explorer, \
-             patch.object(self.window.terminal, "set_cwd") as terminal:
+             patch.object(self.window.terminal_bottom, "set_cwd") as terminal, \
+             patch.object(self.window.terminal_right, "set_cwd") as right:
             self.window.set_root(root)
             explorer.assert_called_once_with(root)
             terminal.assert_called_once_with(root)
+            right.assert_called_once_with(root)
             self.assertEqual(self.window.get_title(), f"IDgent - {Path(root).name}")
 
     def test_quit_confirmation(self) -> None:
