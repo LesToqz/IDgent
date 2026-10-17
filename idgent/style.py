@@ -70,13 +70,16 @@ tab:hover .idgent-tab-close, tab:checked .idgent-tab-close,
 .idgent-find-bar > revealer > box {{ background: {SIDEBAR_BG}; border-top: 1px solid {BORDER};
     border-bottom: 0; box-shadow: none; padding: 6px; }}
 .idgent-status {{ background: {ACCENT}; color: white; font-size: 12px; padding: 3px 10px; }}
-scrollbar {{ background: transparent; border: 0; }}
-scrollbar trough {{ background: transparent; border: 0; }}
+scrollbar, scrollbar trough {{ background: transparent; border: 0;
+    box-shadow: none; padding: 0; margin: 0; min-width: 0; min-height: 0; }}
 scrollbar slider {{ background: #424242; border: 0; border-radius: 0;
-    min-width: 10px; min-height: 10px; margin: 0; }}
-scrollbar slider:hover, scrollbar slider:active {{ background: #4f4f4f; }}
+    box-shadow: none; min-width: 8px; min-height: 8px; padding: 0; margin: 0; }}
+scrollbar.vertical slider {{ min-height: 24px; }}
+scrollbar.horizontal slider {{ min-width: 24px; }}
+scrollbar slider:hover {{ background: #4f4f4f; }}
+scrollbar slider:active {{ background: #686868; }}
 scrollbar button {{ min-width: 0; min-height: 0; padding: 0; border: 0;
-    background: transparent; -gtk-icon-source: none; }}
+    margin: 0; box-shadow: none; background: transparent; -gtk-icon-source: none; }}
 paned > separator {{ background-color: {BORDER}; background-image: none;
     -gtk-icon-source: none; min-width: 1px; min-height: 1px;
     border: 0; padding: 0; margin: 0; }}

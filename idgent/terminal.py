@@ -90,8 +90,40 @@ class TerminalPanel(Gtk.Box):
         self._configure(terminal)
         page = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
         page.pack_start(terminal, True, True, 0)
-        page.pack_start(Gtk.Scrollbar(orientation=Gtk.Orientation.VERTICAL,
-                                   adjustment=terminal.get_vadjustment()), False, False, 0)
+        adjustment = terminal.get_vadjustment()
+        scrollbar = Gtk.Scrollbar(orientation=Gtk.Orientation.VERTICAL,
+                                  adjustment=adjustment)
+        # Keep the narrow gutter allocated so history never reflows terminal text.
+        gutter = Gtk.Box()
+        gutter.set_size_request(8, -1)
+        gutter.set_no_show_all(True)
+        # show_all() must not reveal a scrollbar for a screen without history.
+        scrollbar.set_no_show_all(True)
+        def update_scrollbar(adjustment):
+            has_history = adjustment.get_upper() > adjustment.get_page_size()
+            scrollbar.set_visible(has_history)
+            gutter.set_visible(not has_history)
+        # VTE updates its adjustment during allocation. Reconcile visibility in
+        # an idle so GTK can finish that allocation before resizing the pane.
+        refresh_pending = False
+        def adjustment_changed(adjustment):
+            nonlocal refresh_pending
+            if refresh_pending:
+                return
+            refresh_pending = True
+            def refresh():
+                nonlocal refresh_pending
+                refresh_pending = False
+                if page.get_parent() is not None:
+                    update_scrollbar(adjustment)
+                    page.queue_resize()
+                return GLib.SOURCE_REMOVE
+            GLib.idle_add(refresh)
+        adjustment.connect("changed", adjustment_changed)
+        adjustment.connect("value-changed", adjustment_changed)
+        update_scrollbar(adjustment)
+        page.pack_start(scrollbar, False, False, 0)
+        page.pack_start(gutter, False, False, 0)
         pane = _Pane(page, terminal, Gio.Cancellable())
         active = self._current_pane()
         index = self._panes.index(active) + 1 if active else len(self._panes)
