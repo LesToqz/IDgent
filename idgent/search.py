@@ -70,18 +70,26 @@ def _read_text(path):
         return None
 
 
-def iter_project_files(root):
-    """Yield absolute eligible text-file paths in stable relative-path order."""
+def _project_files(root, cancel=None):
     root = os.path.abspath(root)
     paths = []
     for directory, dirs, files in os.walk(root, followlinks=False):
+        if cancel is not None and cancel.is_set():
+            return
         dirs[:] = [d for d in dirs if d not in SKIP_DIRS
                    and not os.path.islink(os.path.join(directory, d))]
         paths.extend(os.path.join(directory, name) for name in files)
     paths.sort(key=lambda p: (os.path.relpath(p, root).casefold(), os.path.relpath(p, root)))
     for path in paths:
+        if cancel is not None and cancel.is_set():
+            return
         if _read_text(path) is not None:
             yield path
+
+
+def iter_project_files(root):
+    """Yield absolute eligible text-file paths in stable relative-path order."""
+    yield from _project_files(root)
 
 
 def _pattern(query, case_sensitive, regex):
@@ -151,7 +159,8 @@ def _search_updates(root, query, *, case_sensitive, regex, current_path=None,
     yield result
     if not root:
         return
-    for path in iter_project_files(root):
+    paths = _project_files(root, cancel) if cancel is not None else iter_project_files(root)
+    for path in paths:
         if cancelled():
             return
         if query.casefold() in os.path.basename(path).casefold():
@@ -245,6 +254,7 @@ class SearchPanel(Gtk.Box):
         self.tree = Gtk.TreeView(model=self.store, headers_visible=False)
         self.tree.get_style_context().add_class('idgent-search-results')
         self.tree.set_enable_search(False)
+        self.tree.set_activate_on_single_click(True)
         column = Gtk.TreeViewColumn()
         icon = Gtk.CellRendererPixbuf()
         column.pack_start(icon, False)
@@ -268,7 +278,6 @@ class SearchPanel(Gtk.Box):
         self.entry.connect('key-press-event', self._key)
         self.tree.connect('key-press-event', self._key)
         self.tree.connect('row-activated', lambda tree, path, column: self._activate(path))
-        self.tree.connect('button-release-event', self._click)
         self.connect('destroy', self._destroy)
         self.show_all()
         self.stack.set_visible_child_name('content')
@@ -387,7 +396,8 @@ class SearchPanel(Gtk.Box):
             self._error(error)
             return False
         self._searching = True
-        self._render(first)
+        self._render(SearchResults(list(first.groups), list(first.file_names), first.truncated,
+                                   first.total_matches, first.total_files))
 
         def post(result, done=False):
             snapshot = SearchResults(list(result.groups), list(result.file_names), result.truncated,
@@ -464,14 +474,6 @@ class SearchPanel(Gtk.Box):
                 self.tree.expand_row(path, False)
         else:
             self.emit('result-activated', row[3], row[4], row[5], row[6])
-
-    def _click(self, tree, event):
-        if event.button == 1 and event.type == Gdk.EventType.BUTTON_RELEASE:
-            hit = tree.get_path_at_pos(int(event.x), int(event.y))
-            if hit:
-                # Double-click activation is handled by row-activated.
-                self._activate(hit[0])
-        return False
 
     def _entry_activate(self, *_):
         self.search_now()
