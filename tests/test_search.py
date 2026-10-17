@@ -10,7 +10,7 @@ from unittest.mock import patch
 from idgent.search import (MAX_FILE_SIZE, SKIP_DIRS, SEARCH_CSS, SearchError,
                            SearchPanel, build_css, find_in_text, iter_project_files, search)
 from idgent.themes import THEMES
-from gi.repository import Gdk, GLib, Gtk
+from gi.repository import Gdk, GLib, Gtk, Pango
 
 
 def pump_until(condition, timeout=3):
@@ -70,7 +70,7 @@ class CoreTests(FilesFixture):
 
     def test_literal_case_regex_and_multiple_matches(self):
         self.assertEqual(find_in_text('A.b aXb a.b', 'a.b'),
-                         [(0, 0, 3, 'A.b aXb a.b'), (0, 8, 3, 'A.b aXb a.b')])
+                         [(0, 0, 3, 'A.b aXb a.b'), (0, 8, 3, 'aXb a.b')])
         self.assertEqual(len(find_in_text('A.b aXb a.b', 'a.b', True)), 1)
         self.assertEqual(len(find_in_text('A.b aXb a.b', 'a.b', regex=True)), 3)
         self.assertEqual(find_in_text('abc', ''), [])
@@ -89,6 +89,41 @@ class CoreTests(FilesFixture):
         start = match.column - match.preview_offset
         self.assertEqual(match.line_text[start:start + match.length], '<needle>')
         self.assertEqual(find_in_text('needle  ', 'needle')[0].line_text, 'needle')
+
+    def assert_preview(self, line, query, offset, preview):
+        match = find_in_text('header\n' + line, query)[0]
+        self.assertEqual(match[:3], (1, line.index(query), len(query)))
+        self.assertEqual(match.preview_offset, offset)
+        self.assertEqual(match.line_text, preview)
+        start = match.column - match.preview_offset
+        self.assertLessEqual(start, 4)
+        self.assertEqual(match.line_text[start:start + match.length], query)
+
+    def test_late_match_in_line_shorter_than_preview_limit(self):
+        line = 'x' * 120 + 'needle' + 'y' * 64
+        self.assertEqual(len(line), 190)
+        self.assert_preview(line, 'needle', 116, line[116:])
+
+    def test_early_match_and_indentation(self):
+        self.assert_preview('  foo needle tail  ', 'needle', 2, 'foo needle tail')
+        self.assert_preview('needle tail', 'needle', 0, 'needle tail')
+
+    def test_match_at_end_does_not_restore_dropped_context(self):
+        line = 'context ' * 20 + 'needle'
+        self.assert_preview(line, 'needle', 156, line[156:])
+
+    def test_wide_characters_use_original_character_offsets(self):
+        line = '　\té界🙂' * 30 + '針é' + '尾' * 10
+        self.assert_preview(line, '針é', 147, line[147:])
+
+    def test_very_long_line_keeps_preview_bounded(self):
+        line = 'x' * 10000 + 'needle' + 'y' * 10000
+        self.assert_preview(line, 'needle', 9996, line[9996:10196])
+        self.assertEqual(len(find_in_text(line, 'needle')[0].line_text), 200)
+
+    def test_tabs_trimmed_but_matched_whitespace_retained(self):
+        self.assert_preview('\t\tfoo\tneedle\t', 'needle', 2, 'foo\tneedle')
+        self.assert_preview('\t\tneedle\t ', '\tneedle\t ', 1, '\tneedle\t ')
 
     def test_order_and_basename_literal_matches(self):
         a = self.write('a.txt', 'needle')
@@ -249,6 +284,55 @@ class WidgetTests(FilesFixture):
         markup = self.panel.store['0:0'][2]
         self.assertIn('<b><u>&lt;needle&gt;</u></b>', markup)
         self.assertIn('&amp;', markup)
+
+    def test_narrow_result_keeps_late_match_near_start_and_ellipsizes_tail(self):
+        provider = Gtk.CssProvider()
+        provider.load_from_data(SEARCH_CSS.encode())
+        screen = Gdk.Screen.get_default()
+        Gtk.StyleContext.add_provider_for_screen(
+            screen, provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+        self.addCleanup(Gtk.StyleContext.remove_provider_for_screen, screen, provider)
+        line = 'context ' * 15 + 'needle' + ' tail' * 12 + ' end'
+        self.assertEqual((line.index('needle'), len(line)), (120, 190))
+        self.write('a.py', line)
+        self.window.destroy()
+        self.window = Gtk.OffscreenWindow()
+        self.panel = SearchPanel(Gtk.Label(label='Explorer tree'), str(self.root))
+        self.window.add(self.panel)
+        self.window.set_default_size(260, 350)
+        self.window.show_all()
+        self.addCleanup(self.window.destroy)
+        self.panel.set_font_size(10)  # Explorer's default.
+        self.panel.search_now('needle')
+        column = self.panel.tree.get_column(0)
+        row = self.panel.store.get_iter_from_string('0:0')
+        column.cell_set_cell_data(self.panel.store, row, False, False)
+        number, preview = self.panel._cells
+        # Read the text produced by the renderer's markup parser.
+        displayed = preview.get_property('text')
+        self.assertTrue(displayed.startswith('…'))
+        self.assertLess(displayed.index('needle'), 30)
+        self.assertIn('<b><u>needle</u></b>', self.panel.store[row][2])
+        self.assertEqual(tuple(self.panel.store[row][4:7]), (0, 120, 6))
+        self.assertEqual(preview.get_property('ellipsize'), Pango.EllipsizeMode.END)
+        self.assertEqual(number.get_property('ellipsize'), Pango.EllipsizeMode.NONE)
+        pump_until(lambda: self.panel.tree.get_allocated_width() == 260)
+        scroll = self.panel.tree.get_parent()
+        adjustment = scroll.get_hadjustment()
+        self.assertLessEqual(adjustment.get_upper(), adjustment.get_page_size())
+        self.assertFalse(scroll.get_hscrollbar().get_child_visible())
+        self.assertGreater(column.cell_get_position(number)[1], 0)
+
+    def test_trimmed_markup_escapes_context_and_match(self):
+        self.write('a.py', '    ' + 'x' * 120 + ' & <needle> tail')
+        self.panel.search_now('<needle>')
+        markup = self.panel.store['0:0'][2]
+        self.assertTrue(markup.startswith('…'))
+        self.assertIn('&amp;', markup)
+        self.assertIn('<b><u>&lt;needle&gt;</u></b>', markup)
+        self.write('a.py', '<needle>')
+        self.panel.search_now('<needle>')
+        self.assertFalse(self.panel.store['0:0'][2].startswith('…'))
 
     def test_current_results_before_slow_scan_and_superseding_query(self):
         entered, release, finished = threading.Event(), threading.Event(), threading.Event()
