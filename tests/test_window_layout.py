@@ -16,7 +16,8 @@ os.environ["GDK_BACKEND"] = "x11"
 import gi
 
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gio, GLib, GObject, Gtk
+gi.require_version("Gdk", "3.0")
+from gi.repository import Gdk, Gio, GLib, GObject, Gtk
 
 from idgent.window import MainWindow
 
@@ -179,13 +180,13 @@ class WindowLayoutTests(unittest.TestCase):
                     else:
                         self.assertFalse(window.editor.get_visible())
                         self.assertFalse(window.terminal_right.get_visible())
-                    self.assertFalse(panel._panes[1].page.get_visible())
+                    self.assertFalse(panel._panes[1].frame.get_visible())
                     self.assertEqual(panel.get_allocated_width(), window.sidebar.get_allocated_width())
                     self.assertEqual(panel.get_allocated_height(), window.sidebar.get_allocated_height())
                     self.fullscreen_button(panel).clicked()
                     self.settle_layout()
                     self.assertEqual(self.layout_state(), before)
-                    self.assertTrue(panel._panes[1].page.get_visible())
+                    self.assertTrue(panel._panes[1].frame.get_visible())
 
     def test_fullscreen_command_target_and_empty_layout(self):
         window = self.window
@@ -459,6 +460,101 @@ print("scenario-ok")
             with patch.object(self.window.editor, "has_unsaved", side_effect=[True, False]), \
                  patch.object(self.window.editor, "save_all", return_value=True):
                 self.assertFalse(self.window._on_delete(self.window, None))
+
+
+class WindowResizeRegressionTests(unittest.TestCase):
+    """Real app docks, real shells; the ungated run guards the reproduction."""
+
+    def test_both_dock_drags_preserve_six_prompts(self):
+        from idgent import style
+        from idgent.terminal import TerminalPanel, Vte
+        from tests.test_resizegate import BashDrag, PS1, poll, spin
+
+        application = Gtk.Application.get_default() or Gtk.Application(
+            application_id="dev.idgent.ResizeRegression", flags=Gio.ApplicationFlags.NON_UNIQUE)
+        if not application.get_is_registered():
+            self.assertTrue(application.register(None))
+        style.apply_style()
+        measurements = []
+        original_spawn = Vte.Terminal.spawn_async
+        with tempfile.TemporaryDirectory(prefix="idgent-window-resize-") as folder:
+            cwd = Path(folder) / "projects" / "long-prompt-directory"
+            cwd.mkdir(parents=True)
+            for gated in (False, True):
+                pending = []
+
+                def defer_spawn(terminal, *args, **kwargs):
+                    pending.append((terminal, args, kwargs))
+
+                with patch.object(TerminalPanel, "RESIZE_GATE", gated), \
+                     patch.object(TerminalPanel, "ANIMATION_MS", 0), \
+                     patch.object(Vte.Terminal, "spawn_async", defer_spawn):
+                    window = MainWindow(application, str(cwd))
+                    window.set_default_size(1400, 850)
+                    window.show_all()
+                    window.toggle_terminal_right()
+                    for panel in (window.terminal_bottom, window.terminal_right):
+                        while not panel.is_full():
+                            panel.new_terminal()
+                    window.dock.set_position(400)
+                    window.dock_bottom.set_position(350)
+                    spin(350)
+                terminals = [p.terminal for panel in (window.terminal_bottom, window.terminal_right)
+                             for p in panel._panes]
+                harness = BashDrag.__new__(BashDrag)
+                harness.terminals, harness.cwd = terminals, cwd
+                harness.logs = [Path(folder) / f"unused-{i}" for i in range(6)]
+                try:
+                    for terminal, args, kwargs in pending:
+                        args = list(args)
+                        args[2] = ["/bin/bash", "--norc", "-i"]
+                        environment = dict(os.environ, PS1=PS1, TERM="xterm-256color",
+                                           COLORTERM="truecolor",
+                                           PROMPT_COMMAND="printf '\\n%.0s' {1..100}; unset PROMPT_COMMAND")
+                        args[3] = [f"{k}={v}" for k, v in environment.items()]
+                        original_spawn(terminal, *args, **kwargs)
+                    self.assertTrue(poll(lambda: all("long-prompt-directory" in BashDrag.text(t)
+                                                    for t in terminals)))
+                    spin(150)
+                    initial = harness.metrics()
+                    self.assertTrue(all(m["history_copies"] == 1 and not m["garbage"]
+                                        for m in initial), initial)
+                    for dock, start, end in ((window.dock, 400, 900),
+                                             (window.dock_bottom, 350, 650)):
+                        for sweep in range(3):
+                            first, last = (start, end) if sweep % 2 == 0 else (end, start)
+                            step = 4 if last > first else -4
+                            for position in range(first, last + step, step):
+                                dock.set_position(position)
+                                spin(8)
+                        spin(250)
+                    metrics = harness.metrics()
+                    measurements.append(metrics)
+                    print("WINDOW", "AFTER" if gated else "BASELINE",
+                          [{k: v for k, v in m.items() if k != "text"} for m in metrics],
+                          flush=True)
+                    shots = Path(__file__).resolve().parent.parent / ".ceo" / "shots"
+                    shots.mkdir(parents=True, exist_ok=True)
+                    pixbuf = Gdk.pixbuf_get_from_window(window.get_window(), 0, 0,
+                                                       window.get_allocated_width(),
+                                                       window.get_allocated_height())
+                    pixbuf.savev(str(shots / ("after-drag-gated.png" if gated else
+                                             "after-drag-control.png")), "png", [], [])
+                    if gated:
+                        for metric in metrics:
+                            self.assertEqual(metric["copies"], 1, metric)
+                            self.assertEqual(metric["history_copies"], 1, metric)
+                            self.assertFalse(metric["garbage"], metric)
+                            self.assertEqual(metric["prompt_ends"], 1, metric)
+                finally:
+                    pids = [p.pid for panel in (window.terminal_bottom, window.terminal_right)
+                            for p in panel._panes if p.pid]
+                    window.destroy()
+                    self.assertTrue(poll(lambda: all(not Path(f"/proc/{pid}").exists()
+                                                    for pid in pids)))
+        before = sum(m["history_copies"] for m in measurements[0])
+        after = sum(m["history_copies"] for m in measurements[1])
+        self.assertGreater(before, after, measurements)
 
 
 if __name__ == "__main__":

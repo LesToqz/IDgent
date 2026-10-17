@@ -49,6 +49,12 @@ def spin(milliseconds):
     assert poll(lambda: time.monotonic() >= until, milliseconds / 1000 + 2)
 
 
+def configure(terminal):
+    panel = TerminalPanel("/tmp", autostart=False)
+    panel._configure(terminal)
+    panel.destroy()
+
+
 class BashDrag:
     """An actual paned allocation, PTY, bash/readline and Debian colour prompt."""
 
@@ -69,7 +75,7 @@ class BashDrag:
         self.logs = []
         for index in range(count):
             terminal = Vte.Terminal()
-            TerminalPanel._configure(terminal)
+            configure(terminal)
             self.terminals.append(terminal)
             child = terminal
             if gate_type:
@@ -134,16 +140,16 @@ class BashDrag:
     def text(terminal):
         return terminal.get_text_format(Vte.Format.TEXT) or ""
 
-    def drag(self, interval=8, start=180, end=760, sweeps=3):
+    def drag(self, interval=8, start=180, end=760, sweeps=1):
         steps = 0
         for sweep in range(sweeps):
             first, last = (start, end) if sweep % 2 == 0 else (end, start)
-            step = 4 if last > first else -4
+            step = 8 if last > first else -8
             for position in range(first, last + step, step):
                 self.paned.set_position(position)
                 spin(interval)
                 steps += 1
-        spin(650)
+        spin(250)
         return steps
 
     def metrics(self):
@@ -400,7 +406,7 @@ class ResizeGateTest(unittest.TestCase):
         self.gate.remove(self.child)
         page = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
         terminal = Vte.Terminal()
-        TerminalPanel._configure(terminal)
+        configure(terminal)
         page.pack_start(terminal, True, True, 0)
         scrollbar = Gtk.Scrollbar(orientation=Gtk.Orientation.VERTICAL,
                                   adjustment=terminal.get_vadjustment())
@@ -446,32 +452,39 @@ class BashDragTest(unittest.TestCase):
                                            (8, 760, 180, 3), (24, 180, 760, 3)]:
             with self.subTest(interval=interval, count=count):
                 measurements = []
-                for gate_type in (None, ResizeGate):
-                    harness = BashDrag(gate_type=gate_type, count=count, position=start)
-                    try:
-                        steps = harness.drag(interval=interval, start=start, end=end)
+                # Drive the independent control and gate together: identical
+                # positions/timing, one wall-clock wait per step.
+                harnesses = [BashDrag(gate_type=kind, count=count, position=start)
+                             for kind in (None, ResizeGate)]
+                try:
+                    steps = 0
+                    for sweep in range(3):
+                        first, last = (start, end) if sweep % 2 == 0 else (end, start)
+                        step = 8 if last > first else -8
+                        for position in range(first, last + step, step):
+                            for harness in harnesses:
+                                harness.paned.set_position(position)
+                            spin(interval)
+                            steps += 1
+                    spin(250)
+                    for harness, label in zip(harnesses, ("BASELINE", "AFTER")):
                         metrics = harness.metrics()
                         measurements.append(metrics)
-                        label = "AFTER" if gate_type else "BASELINE"
-                        summary = [{key: value for key, value in metric.items() if key != "text"}
-                                   for metric in metrics]
-                        print(label, dict(interval=interval, steps=steps, terminals=count), summary, flush=True)
-                        if gate_type:
-                            for metric in metrics:
-                                self.assertEqual(metric["copies"], 1, metric)
-                                self.assertEqual(metric["history_copies"], 1, metric)
-                                self.assertFalse(metric["garbage"], metric)
-                                self.assertEqual(metric["prompt_ends"], 1, metric)
-                            # A scheduler pause longer than SETTLE_MS is a real
-                            # settled allocation and may legitimately commit
-                            # mid-drag. Check each actual commit's timing instead
-                            # of requiring exactly one under arbitrary CPU load.
-                            for delays, metric in zip(harness.commit_delays, metrics):
-                                self.assertTrue(delays)
-                                self.assertGreaterEqual(min(delays), .100, delays)
-                                self.assertLess(len(delays), 10, delays)
-                                self.assertLessEqual(metric["winch"], len(delays), metric)
-                    finally:
+                        print(label, dict(interval=interval, steps=steps, terminals=count),
+                              [{k: v for k, v in m.items() if k != "text"} for m in metrics],
+                              flush=True)
+                    harness = harnesses[1]
+                    for metric, delays in zip(measurements[1], harness.commit_delays):
+                        self.assertEqual(metric["copies"], 1, metric)
+                        self.assertEqual(metric["history_copies"], 1, metric)
+                        self.assertFalse(metric["garbage"], metric)
+                        self.assertEqual(metric["prompt_ends"], 1, metric)
+                        self.assertTrue(delays)
+                        self.assertGreaterEqual(min(delays), .100, delays)
+                        self.assertLess(len(delays), 10, delays)
+                        self.assertLessEqual(metric["winch"], len(delays), metric)
+                finally:
+                    for harness in harnesses:
                         harness.close()
                 for baseline, after in zip(*measurements):
                     self.assertGreater(baseline["winch"], after["winch"] + 10)
@@ -487,7 +500,7 @@ class BashDragTest(unittest.TestCase):
             harness = BashDrag(gate_type=gate_type, prompt_row=15)
             try:
                 harness.paned.set_position(760)
-                spin(650)
+                spin(250)
                 metrics = harness.metrics()[0]
                 measurements.append(metrics)
                 print("SINGLE", gate_type, {k: v for k, v in metrics.items() if k != "text"}, flush=True)

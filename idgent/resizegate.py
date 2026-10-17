@@ -1,7 +1,7 @@
 """A clipped GTK container which debounces allocation of its single child.
 
 Wrap the complete terminal page so terminal and scrollbar keep their committed
-geometry together. This module deliberately has no application integration.
+geometry together.
 """
 from __future__ import annotations
 
@@ -26,6 +26,8 @@ class ResizeGate(Gtk.Bin):
     """
 
     SETTLE_MS = 120
+    # Application layouts can retain the wrapped page's original size requests.
+    CHILD_MINIMUM = False
     # A single large reflow can also confuse readline's cursor bookkeeping.
     # Suppress VTE reflow for the committed allocation, then restore the caller's
     # setting. Set True on an instance to retain normal reflow instead.
@@ -71,19 +73,27 @@ class ResizeGate(Gtk.Bin):
 
     def do_get_preferred_width(self):
         child = self.get_child()
-        return 0, child.get_preferred_width()[1] if child and child.get_visible() else 0
+        return (child.get_preferred_width() if self.CHILD_MINIMUM else
+                (0, child.get_preferred_width()[1])) if child and child.get_visible() else (0, 0)
 
     def do_get_preferred_height(self):
         child = self.get_child()
-        return 0, child.get_preferred_height()[1] if child and child.get_visible() else 0
+        return (child.get_preferred_height() if self.CHILD_MINIMUM else
+                (0, child.get_preferred_height()[1])) if child and child.get_visible() else (0, 0)
 
     def do_get_preferred_width_for_height(self, height):
         child = self.get_child()
-        return 0, child.get_preferred_width_for_height(max(1, height))[1] if child and child.get_visible() else 0
+        if not child or not child.get_visible():
+            return 0, 0
+        minimum, natural = child.get_preferred_width_for_height(max(1, height))
+        return minimum if self.CHILD_MINIMUM else 0, natural
 
     def do_get_preferred_height_for_width(self, width):
         child = self.get_child()
-        return 0, child.get_preferred_height_for_width(max(1, width))[1] if child and child.get_visible() else 0
+        if not child or not child.get_visible():
+            return 0, 0
+        minimum, natural = child.get_preferred_height_for_width(max(1, width))
+        return minimum if self.CHILD_MINIMUM else 0, natural
 
     def do_realize(self):
         self.set_realized(True)
