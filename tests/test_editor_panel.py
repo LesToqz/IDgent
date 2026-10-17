@@ -325,6 +325,59 @@ class EditorPanelTest(unittest.TestCase):
         self.assertEqual(len(self.panel.tabs), 1)
 
 
+    def test_open_file_at_selects_clamps_and_reports(self):
+        self.panel.open_file_at(str(self.path), 1, 2, 3)
+        tab = self.panel._current()
+        self.assertEqual(tab.buffer.get_text(*tab.buffer.get_selection_bounds(), True), 'con')
+        self.assertTrue(self.panel.status.get_text().startswith('Ln 2, Col 3'))
+        self.panel.open_file_at(str(self.path), 0, 3, 50)
+        self.assertEqual(tab.buffer.get_text(*tab.buffer.get_selection_bounds(), True), 'st')
+        self.panel.open_file_at(str(self.path), 99, 99, 99)
+        self.assertFalse(tab.buffer.get_has_selection())
+        self.assertEqual(len(self.panel.tabs), 1)
+        self.panel.open_file_at(str(self.root / 'missing.py'), 0)
+        self.message.assert_called_once()
+        self.assertEqual(len(self.panel.tabs), 1)
+
+    def test_current_file_signal_buffer_text_and_selected_text(self):
+        seen = []
+        self.panel.connect('current-file-changed', lambda _, path: seen.append(path))
+        self.assertIsNone(self.panel.current_path())
+        first = self.open()
+        other = self.root / 'other.py'
+        other.write_text('other')
+        second = self.open(other)
+        self.panel.notebook.set_current_page(self.panel.notebook.page_num(first.page))
+        self.panel._close_tab(first)
+        self.panel._close_tab(second)
+        self.assertEqual(seen, [str(self.path), str(other), str(self.path), str(other), ''])
+        self.assertIsNone(self.panel.current_path())
+        self.assertIsNone(self.panel.buffer_text(str(self.path)))
+        tab = self.open()
+        self.replace(tab, 'edited text')
+        self.assertEqual(self.panel.buffer_text(str(self.path)), 'edited text')
+        self.assertEqual(self.panel.selected_text(), '')
+        tab.buffer.select_range(tab.buffer.get_start_iter(), tab.buffer.get_iter_at_offset(6))
+        self.assertEqual(self.panel.selected_text(), 'edited')
+        self.panel.on_path_deleted(str(self.path))
+        self.assertIsNone(self.panel.buffer_text(str(self.path)))
+
+    def test_ctrl_zero_uses_default_size_and_ctrl_shift_f_is_not_in_file_find(self):
+        tab = self.open()
+        self.assertEqual(self.panel.default_font_size, editor.DEFAULT_FONT_SIZE)
+        self.panel.set_default_font_size(15)
+        self.panel.set_default_font_size(15)
+        self.key(tab, Gdk.KEY_0, ctrl=True)
+        self.assertEqual(self.panel.font_size, 15)
+        self.key(tab, Gdk.KEY_plus, ctrl=True)
+        self.key(tab, Gdk.KEY_0, ctrl=True)
+        self.assertEqual(self.panel.font_size, 15)
+        self.panel.set_default_font_size(1000)
+        self.assertEqual(self.panel.default_font_size, editor.MAX_FONT_SIZE)
+        self.assertFalse(self.key(tab, Gdk.KEY_F, ctrl=True, shift=True))
+        self.assertFalse(self.panel.search_bar.get_search_mode())
+
+
 class MarkdownEditorPanelTest(unittest.TestCase):
     setUp = EditorPanelTest.setUp
     open = EditorPanelTest.open

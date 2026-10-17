@@ -10,6 +10,7 @@ gi.require_version("Gdk", "3.0")
 from gi.repository import Gdk, GObject, Gtk, Pango
 
 from . import fsops
+from .search import SearchPanel
 
 
 class ExplorerPanel(Gtk.Box):
@@ -17,6 +18,9 @@ class ExplorerPanel(Gtk.Box):
         "file-activated": (GObject.SignalFlags.RUN_LAST, None, (str,)),
         "path-renamed": (GObject.SignalFlags.RUN_LAST, None, (str, str)),
         "path-deleted": (GObject.SignalFlags.RUN_LAST, None, (str,)),
+        # absolute path, zero-based line and column, match length in characters
+        "search-result-activated": (GObject.SignalFlags.RUN_LAST, None, (str, int, int, int)),
+        "search-escaped": (GObject.SignalFlags.RUN_LAST, None, ()),
     }
 
     def __init__(self, root: str):
@@ -37,7 +41,6 @@ class ExplorerPanel(Gtk.Box):
         column.pack_start(label, True)
         column.add_attribute(label, "text", 1)
         self.tree.append_column(column)
-        self.set_font_size(10)
         self.tree.connect("row-expanded", self._on_expanded)
         self.tree.connect("row-activated", self._on_activated)
         self.tree.connect("button-press-event", self._on_button)
@@ -59,10 +62,15 @@ class ExplorerPanel(Gtk.Box):
             button.connect("clicked", callback)
             toolbar.pack_start(button, False, False, 0)
         self.pack_start(toolbar, False, False, 0)
-        scroll = Gtk.ScrolledWindow()
-        scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
-        scroll.add(self.tree)
-        self.pack_start(scroll, True, True, 0)
+        self._scroll = Gtk.ScrolledWindow()
+        self._scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        self._scroll.add(self.tree)
+        # The search row sits directly under the header; the tree is its idle content.
+        self.search = SearchPanel(self._scroll, root)
+        self.search.connect("result-activated", lambda _, *match: self.emit("search-result-activated", *match))
+        self.search.connect("escaped", lambda _: self.emit("search-escaped"))
+        self.pack_start(self.search, True, True, 0)
+        self.set_font_size(10)
         self.set_root(root)
 
     def set_font_size(self, size: int) -> None:
@@ -76,13 +84,42 @@ class ExplorerPanel(Gtk.Box):
         self._text_cell.set_fixed_size(-1, max(20, int(height + .999) + 4))
         self.tree.columns_autosize()
         self.tree.queue_resize()
+        self.search.set_font_size(size)
 
     def set_root(self, path: str) -> None:
         self.root = os.path.abspath(path)
         self._rebuild({self.root}, None)
+        self.search.set_root(self.root)
 
     def refresh(self) -> None:
         self._rebuild(self._expanded_paths(), self._selected_path())
+        self._refresh_search()
+
+    def set_current_file(self, path: str | None) -> None:
+        """Name the file whose search results are listed first (the active editor tab)."""
+        self.search.set_current_file(path or None)
+
+    def set_text_provider(self, provider: Callable[[str], str | None] | None) -> None:
+        """Provide live (possibly unsaved) text for a path, or None to read the disk."""
+        self.search.set_text_provider(provider)
+
+    def focus_search(self, query: str | None = None) -> None:
+        """Focus the search entry; a given query replaces its text and runs at once."""
+        self.search.focus_search()
+        if query:
+            self.search.search_now(query)
+            self.search.entry.set_position(-1)
+
+    def clear_search(self) -> None:
+        self.search.clear()
+
+    def focus_tree(self) -> None:
+        self.tree.grab_focus()
+
+    def _refresh_search(self) -> None:
+        # Never leave results pointing at renamed or deleted files.
+        if self.search.query:
+            self.search.search_now()
 
     def _expanded_paths(self) -> set[str]:
         expanded: set[str] = set()
@@ -181,6 +218,7 @@ class ExplorerPanel(Gtk.Box):
         result = (fsops.create_folder if folder else fsops.create_file)(parent, name)
         expanded = self._expanded_paths() | {parent, self.root}
         self._rebuild(expanded, result)
+        self._refresh_search()
         return result
 
     def _rename(self, path: str, name: str) -> str:
@@ -191,14 +229,17 @@ class ExplorerPanel(Gtk.Box):
         expanded = {result + old[len(path):] if old == path or old.startswith(path + os.sep) else old for old in expanded}
         self._rebuild(expanded, result)
         self.emit("path-renamed", path, result)
+        # After the signal, so open tabs already carry their new paths.
+        self._refresh_search()
         return result
 
     def _delete(self, path: str) -> str:
         if os.path.abspath(path) == self.root:
             raise fsops.FsOpError("The project root cannot be deleted.")
         result = fsops.delete(path, project_root=self.root)
-        self.refresh()
+        self._rebuild(self._expanded_paths(), self._selected_path())
         self.emit("path-deleted", result)
+        self._refresh_search()
         return result
 
     def _window(self) -> Gtk.Window | None:
@@ -304,7 +345,16 @@ class ExplorerPanel(Gtk.Box):
         self._menu()
         return True
 
+    def _search_has_focus(self) -> bool:
+        top = self.get_toplevel()
+        focus = top.get_focus() if isinstance(top, Gtk.Window) else None
+        # The file tree itself lives inside the search panel's stack.
+        return (focus is not None and focus.is_ancestor(self.search)
+                and not focus.is_ancestor(self._scroll))
+
     def _on_key(self, tree: Gtk.TreeView, event: Gdk.EventKey) -> bool:
+        if self._search_has_focus():
+            return False
         if event.keyval == Gdk.KEY_F2:
             self._rename_dialog()
         elif event.keyval in (Gdk.KEY_Delete, Gdk.KEY_KP_Delete):

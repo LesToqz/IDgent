@@ -185,5 +185,54 @@ class ExplorerTests(unittest.TestCase):
                 action.assert_called_once_with(*args)
 
 
+    def test_search_box_under_header_and_forwarding(self):
+        children = self.panel.get_children()
+        self.assertIs(children[1], self.panel.search)
+        self.assertIs(self.panel.search.get_children()[0].get_children()[0], self.panel.search.entry)
+        received = []
+        self.panel.connect('search-result-activated', lambda _, *args: received.append(args))
+        self.panel.search.emit('result-activated', str(self.root / 'b.py'), 3, 4, 5)
+        self.assertEqual(received, [(str(self.root / 'b.py'), 3, 4, 5)])
+        escaped = []
+        self.panel.connect('search-escaped', lambda *_: escaped.append(1))
+        self.panel.search.emit('escaped')
+        self.assertEqual(escaped, [1])
+        self.panel.set_current_file(str(self.root / 'A.py'))
+        self.assertEqual(self.panel.search.current_path, str(self.root / 'A.py'))
+        self.panel.set_current_file(None)
+        self.assertIsNone(self.panel.search.current_path)
+        self.panel.set_font_size(13)
+        self.assertEqual(self.panel.search.font_size, 13)
+        other = self.root / 'Zdir'
+        self.panel.set_root(str(other))
+        self.assertEqual(self.panel.search.root, str(other))
+
+    def test_focus_search_with_query_and_clear(self):
+        (self.root / 'b.py').write_text('needle')
+        self.panel.focus_search('needle')
+        self.assertEqual(self.panel.search.query, 'needle')
+        self.assertEqual(self.panel.search.results.total_matches, 1)
+        self.panel.clear_search()
+        self.assertEqual(self.panel.search.query, '')
+        self.assertEqual(self.panel.search.stack.get_visible_child_name(), 'content')
+
+    def test_shortcuts_ignored_when_search_has_focus(self):
+        window = Gtk.Window()
+        window.add(self.panel)
+        window.show_all()
+        self.addCleanup(window.destroy)
+        event = Gdk.Event.new(Gdk.EventType.KEY_PRESS)
+        event.keyval, event.state = Gdk.KEY_F2, 0
+        for widget in (self.panel.search.entry, self.panel.search.tree):
+            widget.grab_focus()
+            with patch.object(self.panel, '_rename_dialog') as action:
+                self.assertFalse(self.panel._on_key(self.panel.tree, event))
+                action.assert_not_called()
+        self.panel.tree.grab_focus()
+        with patch.object(self.panel, '_rename_dialog') as action:
+            self.assertTrue(self.panel._on_key(self.panel.tree, event))
+            action.assert_called_once()
+
+
 if __name__ == '__main__':
     unittest.main()

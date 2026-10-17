@@ -34,6 +34,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self.editor = EditorPanel()
         self.explorer.set_font_size(self._font_sizes["explorer_font_size"])
         self.editor.set_font_size(self._font_sizes["editor_font_size"])
+        self.editor.set_default_font_size(self._font_sizes["editor_font_size"])
         terminal_size = self._font_sizes["terminal_font_size"]
         self.terminal_bottom = TerminalPanel(self.root, font_size=terminal_size)
         self.terminal_right = TerminalPanel(self.root, autostart=False, stacked=True,
@@ -45,6 +46,13 @@ class MainWindow(Gtk.ApplicationWindow):
         self.explorer.connect("file-activated", lambda _, path: self.editor.open_file(path))
         self.explorer.connect("path-renamed", lambda _, old, new: self.editor.on_path_renamed(old, new))
         self.explorer.connect("path-deleted", lambda _, path: self.editor.on_path_deleted(path))
+        self.explorer.connect("search-result-activated",
+                              lambda _, path, line, column, length:
+                              self.editor.open_file_at(path, line, column, length))
+        self.explorer.connect("search-escaped", self._search_escaped)
+        self.editor.connect("current-file-changed",
+                            lambda _, path: self.explorer.set_current_file(path or None))
+        self.explorer.set_text_provider(self.editor.buffer_text)
 
         self.dock_bottom = Gtk.Paned(orientation=Gtk.Orientation.VERTICAL)
         self.dock_bottom.pack1(self.editor, resize=True, shrink=True)
@@ -102,6 +110,7 @@ class MainWindow(Gtk.ApplicationWindow):
         item(view_menu, "Toggle Terminal Fullscreen", self.toggle_terminal_fullscreen,
              "<Control><Shift>F11")
         item(view_menu, "Toggle Explorer Sidebar", self.toggle_explorer, "<Control>b")
+        item(view_menu, "Search in Files", self.search_in_files, "<Control><Shift>f")
         key, modifiers = Gtk.accelerator_parse("<Control><Alt>t")
         accelerators.connect(key, modifiers, Gtk.AccelFlags.VISIBLE,
                              lambda *_: (self.next_theme(), True)[1])
@@ -125,6 +134,7 @@ class MainWindow(Gtk.ApplicationWindow):
                 panel.set_font_size(size)
         elif key == "editor_font_size":
             self.editor.set_font_size(size)
+            self.editor.set_default_font_size(size)
         elif key == "explorer_font_size":
             self.explorer.set_font_size(size)
         settings.set_font_size(key, size)
@@ -263,6 +273,20 @@ class MainWindow(Gtk.ApplicationWindow):
         self._restore_terminal_fullscreen()
         self._toggle(self.explorer)
 
+    def search_in_files(self) -> None:
+        """Show the explorer and focus its search box, seeded from a one-line selection."""
+        self._restore_terminal_fullscreen()
+        if not self.explorer.get_visible():
+            self._toggle(self.explorer)
+        seed = self.editor.selected_text()
+        if not seed.strip() or "\n" in seed or "\r" in seed or len(seed) > 200:
+            seed = ""
+        self.explorer.focus_search(seed)
+
+    def _search_escaped(self, _explorer: ExplorerPanel) -> None:
+        if not self.editor.focus_current():
+            self.explorer.focus_tree()
+
     def _update_title(self) -> None:
         self.set_title("IDgent")
 
@@ -298,6 +322,10 @@ class MainWindow(Gtk.ApplicationWindow):
         if (modifiers == Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.SHIFT_MASK
                 and event.keyval == Gdk.KEY_F11):
             self.toggle_terminal_fullscreen()
+            return True
+        if (modifiers == Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.SHIFT_MASK
+                and event.keyval in (Gdk.KEY_f, Gdk.KEY_F)):
+            self.search_in_files()
             return True
         if (modifiers == Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.SHIFT_MASK
                 and event.keyval in (Gdk.KEY_5, Gdk.KEY_percent)):
