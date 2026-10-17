@@ -1,5 +1,6 @@
 """Filesystem actions shared by the explorer and its tests."""
 
+import ctypes
 import os
 from pathlib import Path
 import shutil
@@ -49,6 +50,20 @@ def create_folder(parent: str, name: str) -> str:
     return path
 
 
+def _rename_no_replace(source: str, target: str) -> None:
+    """Linux renameat2 closes the check/rename race without replacing any entry."""
+    library = ctypes.CDLL(None, use_errno=True)
+    try:
+        operation = library.renameat2
+    except AttributeError as error:
+        raise FsOpError("Safe rename is unavailable on this system.") from error
+    operation.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+    operation.restype = ctypes.c_int
+    if operation(-100, os.fsencode(source), -100, os.fsencode(target), 1) != 0:
+        code = ctypes.get_errno()
+        raise OSError(code, os.strerror(code), target)
+
+
 def rename(path: str, new_name: str) -> str:
     validate_name(new_name)
     source = _absolute(path)
@@ -58,7 +73,7 @@ def rename(path: str, new_name: str) -> str:
             raise FileNotFoundError(source)
         if os.path.lexists(target):
             raise FileExistsError(target)
-        os.rename(source, target)
+        _rename_no_replace(source, target)
     except OSError as error:
         raise _error(error, target) from error
     return target
@@ -69,7 +84,7 @@ def delete(path: str, project_root: str | None = None) -> str:
     target = _absolute(path)
     resolved = os.path.realpath(target)
     # A symlink is an entry to unlink, even when it points at a protected root.
-    if target == os.path.abspath(os.sep) or (
+    if (project_root is not None and target == _absolute(project_root)) or target == os.path.abspath(os.sep) or (
         not os.path.islink(target)
         and (resolved == os.path.abspath(os.sep)
              or (project_root is not None and resolved == os.path.realpath(project_root)))

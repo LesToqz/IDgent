@@ -37,7 +37,7 @@ class ExplorerPanel(Gtk.Box):
         self.tree.connect("row-expanded", self._on_expanded)
         self.tree.connect("row-activated", self._on_activated)
         self.tree.connect("button-press-event", self._on_button)
-        self.tree.connect("key-press-event", self._on_key)
+        self.connect("key-press-event", self._on_key)
         self.tree.connect("popup-menu", self._on_popup)
         toolbar = Gtk.Box(spacing=3)
         title = Gtk.Label(label="EXPLORER", xalign=0)
@@ -138,7 +138,7 @@ class ExplorerPanel(Gtk.Box):
         selected = self._selected_path()
         if not selected:
             return self.root
-        return selected if os.path.isdir(selected) else os.path.dirname(selected)
+        return selected if os.path.isdir(selected) and not os.path.islink(selected) else os.path.dirname(selected)
 
     def _find(self, path: str) -> Gtk.TreeIter | None:
         found: list[Gtk.TreeIter] = []
@@ -176,6 +176,8 @@ class ExplorerPanel(Gtk.Box):
         return result
 
     def _delete(self, path: str) -> str:
+        if os.path.abspath(path) == self.root:
+            raise fsops.FsOpError("The project root cannot be deleted.")
         result = fsops.delete(path, project_root=self.root)
         self.refresh()
         self.emit("path-deleted", result)
