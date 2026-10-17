@@ -1,7 +1,5 @@
 """Compact client-side titlebar with the application's existing menus."""
 
-from pathlib import Path
-
 import gi
 
 gi.require_version("Gtk", "3.0")
@@ -42,9 +40,4 @@ class TitleBar(Gtk.HeaderBar):
         self.title_label = Gtk.Label()
         self.title_label.get_style_context().add_class("idgent-title")
         self.set_custom_title(self.title_label)
-        self.set_folder("/")
-
-    def set_folder(self, root: str) -> None:
-        """Show the folder's basename, preserving the filesystem root."""
-        folder = Path(root)
-        self.title_label.set_text(f"IDgent - {folder.name or str(folder)}")
+        self.title_label.set_text("IDgent")

@@ -24,6 +24,7 @@ EDITOR_FOREGROUND = '#d4d4d4'
 EDITOR_SELECTION = '#264f78'
 WARNING = '#cca700'
 LIMIT_TINT = '#7d6f2a'
+TOAST_BG = '#3a331a'
 
 CSS = f'''
 window, dialog, messagedialog {{ background-color: {EDITOR_BG}; color: {FOREGROUND}; }}
@@ -91,25 +92,25 @@ paned.vertical > separator {{ border-top: 2px solid transparent; border-bottom: 
 .idgent-terminal {{ background: {PANEL_BG}; color: {FOREGROUND}; }}
 .idgent-terminal-sep {{ background: {BORDER}; min-width: 1px; min-height: 1px; border: 0; }}
 .idgent-vte {{ padding: 6px; }}
-.idgent-terminal-bar {{ background: {PANEL_BG}; color: {MUTED}; border: 0;
-    border-bottom: 1px solid {BORDER}; box-shadow: none; min-height: 29px; padding: 0 4px; }}
-.idgent-terminal-bar button {{ background: transparent; color: {MUTED}; border: 0; border-radius: 2px;
-    box-shadow: none; text-shadow: none; min-height: 22px; min-width: 22px; padding: 0; }}
-.idgent-terminal-bar button:hover {{ background: {HOVER}; color: {FOREGROUND}; }}
-.idgent-terminal-chip {{ background: transparent; color: {MUTED}; border: 0;
-    border-bottom: 2px solid transparent; margin: 0 2px 0 0; padding: 0 2px 0 4px;
-    transition: background 120ms ease-in-out, color 120ms ease-in-out; }}
-.idgent-terminal-chip:hover {{ background: {HOVER}; color: {FOREGROUND}; }}
-.idgent-terminal-chip.active {{ color: {FOREGROUND}; border-bottom-color: {ACCENT}; }}
-.idgent-terminal-chip.active button {{ color: {FOREGROUND}; }}
-.idgent-terminal-chip button:hover {{ background: #3a3d3e; }}
-.idgent-terminal-chip .idgent-terminal-chip-label {{ min-width: 0; padding: 0 6px 0 2px; font-size: 12px; }}
-.idgent-terminal-chip .idgent-terminal-chip-label:hover {{ background: transparent; }}
-.idgent-terminal-bar .idgent-terminal-add {{ margin: 0 2px; color: {FOREGROUND}; }}
-.idgent-terminal-bar .idgent-terminal-add:hover {{ background: {HOVER}; color: white; }}
-.idgent-terminal-bar .idgent-terminal-add.limit {{ color: {LIMIT_TINT}; }}
-.idgent-terminal-bar .idgent-terminal-add.limit:hover {{ color: {WARNING}; }}
-.idgent-terminal-notice {{ color: {WARNING}; font-size: 12px; padding: 0 8px; }}
+.idgent-terminal-header {{ background: {PANEL_BG}; color: {MUTED}; border: 0;
+    border-bottom: 1px solid {BORDER}; box-shadow: none; min-height: 29px; padding: 0 4px 0 0; }}
+.idgent-terminal-header.corner {{ padding-right: 34px; }}
+.idgent-terminal-header button {{ background: transparent; color: {MUTED}; border: 0; border-radius: 2px;
+    box-shadow: none; text-shadow: none; min-height: 22px; min-width: 22px; padding: 0; margin: 3px 0 3px 2px; }}
+.idgent-terminal-header button:hover {{ background: {HOVER}; color: {FOREGROUND}; }}
+.idgent-terminal-header .idgent-terminal-header-label {{ min-width: 0; margin: 0; padding: 0 10px;
+    border-radius: 0; font-size: 12px; }}
+.idgent-terminal-header .idgent-terminal-header-label:hover {{ background: transparent; color: {FOREGROUND}; }}
+.idgent-terminal-header.active {{ color: {FOREGROUND}; border-bottom-color: {ACCENT}; }}
+.idgent-terminal-header.active button {{ color: {FOREGROUND}; }}
+.idgent-terminal-add {{ background: transparent; border: 0; border-radius: 2px; box-shadow: none;
+    text-shadow: none; min-height: 22px; min-width: 24px; padding: 0; margin: 3px 4px 0 0;
+    color: {FOREGROUND}; }}
+.idgent-terminal-add:hover {{ background: {HOVER}; color: white; }}
+.idgent-terminal-add.limit {{ color: {LIMIT_TINT}; }}
+.idgent-terminal-add.limit:hover {{ color: {WARNING}; }}
+.idgent-terminal-toast {{ background: {TOAST_BG}; color: {WARNING}; font-size: 12px;
+    border: 1px solid {LIMIT_TINT}; border-radius: 3px; padding: 4px 10px; }}
 '''
 
 CSS += TITLEBAR_CSS

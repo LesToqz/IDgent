@@ -1,4 +1,4 @@
-"""Top bar of a terminal dock: one chip per terminal, a "+" button and a limit notice."""
+"""Widgets of a terminal dock: per-pane header, "+" button and limit toast."""
 from __future__ import annotations
 
 import gi
@@ -48,7 +48,7 @@ class _IconButton(Gtk.Button):
     def __init__(self, icon_name: str, glyph: str, tooltip: str):
         super().__init__()
         self.set_relief(Gtk.ReliefStyle.NONE)
-        # Clicking the bar must not steal keyboard focus from the terminal.
+        # Clicking a header must not steal keyboard focus from the terminal.
         self.set_focus_on_click(False)
         self.set_tooltip_text(tooltip)
         self.icon_name = icon_name
@@ -68,214 +68,133 @@ class _IconButton(Gtk.Button):
         self.add(content)
 
 
-class _Chip:
-    """Label, fullscreen and delete controls of one terminal."""
+class PaneHeader(Gtk.Box):
+    """Label, fullscreen and delete controls sitting directly above one terminal."""
 
-    def __init__(self, pane_id: int, shell_name: str):
-        self.id = pane_id
+    __gsignals__ = {
+        "focus-requested": (GObject.SignalFlags.RUN_LAST, None, ()),
+        "fullscreen-requested": (GObject.SignalFlags.RUN_LAST, None, ()),
+        "delete-requested": (GObject.SignalFlags.RUN_LAST, None, ()),
+    }
+
+    def __init__(self, shell_name: str = "bash"):
+        super().__init__(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
         self.shell_name = shell_name
-        self.closing = False
-        self.revealer = Gtk.Revealer()
-        self.revealer.set_transition_type(Gtk.RevealerTransitionType.SLIDE_RIGHT)
-        self.box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
-        self.box.get_style_context().add_class("idgent-terminal-chip")
-        self.label = Gtk.Label()
-        # Ellipsizing keeps chips shrinkable in a narrow dock.
+        self.get_style_context().add_class("idgent-terminal-header")
+        self.set_hexpand(True)
+        self.label = Gtk.Label(xalign=0)
+        # Ellipsizing keeps headers shrinkable in a narrow dock.
         self.label.set_ellipsize(Pango.EllipsizeMode.END)
         self.label_button = Gtk.Button()
         self.label_button.set_relief(Gtk.ReliefStyle.NONE)
         self.label_button.set_focus_on_click(False)
-        self.label_button.get_style_context().add_class("idgent-terminal-chip-label")
+        self.label_button.get_style_context().add_class("idgent-terminal-header-label")
         self.label_button.add(self.label)
+        self.label_button.connect("clicked", lambda _b: self.emit("focus-requested"))
         self.fullscreen_button = _IconButton("view-fullscreen-symbolic", "□", "Fullscreen")
+        self.fullscreen_button.connect("clicked", lambda _b: self.emit("fullscreen-requested"))
         self.delete_button = _IconButton("edit-delete-symbolic", "✕", "Kill terminal")
-        for widget in (self.label_button, self.fullscreen_button, self.delete_button):
-            self.box.pack_start(widget, False, False, 0)
-        self.revealer.add(self.box)
-        self.revealer.show_all()
+        self.delete_button.connect("clicked", lambda _b: self.emit("delete-requested"))
+        self.pack_start(self.label_button, False, True, 0)
+        # pack_end puts the first widget at the far right and later ones to its left.
+        self.pack_end(self.delete_button, False, False, 0)
+        self.pack_end(self.fullscreen_button, False, False, 0)
+        self.set_number(1)
+        self.set_maximized(False)
 
     @property
     def text(self) -> str:
         return self.label.get_text()
 
+    def set_number(self, position: int) -> None:
+        """Label the header `<shell><position>` (1-based)."""
+        self.label.set_text(f"{self.shell_name}{position}")
 
-class TerminalBar(Gtk.Box):
-    __gsignals__ = {
-        "add-requested": (GObject.SignalFlags.RUN_LAST, None, ()),
-        "focus-requested": (GObject.SignalFlags.RUN_LAST, None, (int,)),
-        "fullscreen-requested": (GObject.SignalFlags.RUN_LAST, None, (int,)),
-        "delete-requested": (GObject.SignalFlags.RUN_LAST, None, (int,)),
-    }
+    def set_active(self, active: bool) -> None:
+        self._set_class("active", active)
 
-    NOTICE_MS = 2500
-    NOTICE_FADE_MS = 300
+    def set_corner(self, corner: bool) -> None:
+        """Reserve room on the right for the dock's "+" button."""
+        self._set_class("corner", corner)
+
+    def set_maximized(self, maximized: bool) -> None:
+        if maximized:
+            self.fullscreen_button.set_icon("view-restore-symbolic", "❐")
+            self.fullscreen_button.set_tooltip_text("Restore")
+        else:
+            self.fullscreen_button.set_icon("view-fullscreen-symbolic", "□")
+            self.fullscreen_button.set_tooltip_text("Fullscreen")
+
+    def _set_class(self, name: str, on: bool) -> None:
+        context = self.get_style_context()
+        if on:
+            context.add_class(name)
+        else:
+            context.remove_class(name)
+
+
+class AddButton(_IconButton):
+    """The dock's "+" button; marked `limit` when no more terminals fit."""
 
     def __init__(self, limit: int = 3):
-        super().__init__(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+        super().__init__("list-add-symbolic", "+", "New terminal")
         self._limit = limit
-        self._destroyed = False
-        self._chips: list[_Chip] = []
-        self._closing: list[_Chip] = []
-        self._timers: set[int] = set()
-        self._notice_timer: int | None = None
-        self._maximized: int | None = None
-        self.get_style_context().add_class("idgent-terminal-bar")
-        self.set_hexpand(True)
-        self._chip_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
-        self.pack_start(self._chip_box, False, True, 0)
-        self.add_button = _IconButton("list-add-symbolic", "+", "New terminal")
-        self.add_button.get_style_context().add_class("idgent-terminal-add")
-        self.add_button.connect("clicked", lambda _b: self.emit("add-requested"))
-        # pack_end puts the first widget at the far right and later ones to its left.
-        self.pack_end(self.add_button, False, False, 0)
-        self.notice = Gtk.Label(label=self._notice_text())
-        self.notice.get_style_context().add_class("idgent-terminal-notice")
-        self.notice.set_no_show_all(True)
-        self.pack_end(self.notice, False, False, 0)
-        self.connect("destroy", self._on_destroy)
-
-    def _notice_text(self) -> str:
-        return f"Cannot add terminal (limit {self._limit})"
-
-    # -- chips ---------------------------------------------------------------
-
-    def chip_labels(self) -> list[str]:
-        """Labels of the live chips in pane order."""
-        return [chip.text for chip in self._chips]
-
-    def chip(self, pane_id: int) -> _Chip | None:
-        return next((chip for chip in self._chips if chip.id == pane_id), None)
-
-    def add_chip(self, pane_id: int, index: int | None = None, shell_name: str = "bash",
-                 duration: int = 0) -> str:
-        """Add a chip at live position `index` (default: end); returns its label."""
-        chip = _Chip(pane_id, shell_name)
-        chip.label_button.connect("clicked", lambda _b: self.emit("focus-requested", pane_id))
-        chip.fullscreen_button.connect("clicked", lambda _b: self.emit("fullscreen-requested", pane_id))
-        chip.delete_button.connect("clicked", lambda _b: self.emit("delete-requested", pane_id))
-        index = len(self._chips) if index is None else max(0, min(index, len(self._chips)))
-        position = (self._chip_box.get_children().index(self._chips[index].revealer)
-                    if index < len(self._chips) else len(self._chip_box.get_children()))
-        self._chips.insert(index, chip)
-        animated = duration > 0 and self.get_mapped()
-        chip.revealer.set_transition_duration(duration if animated else 0)
-        chip.revealer.set_reveal_child(not animated)
-        self._chip_box.pack_start(chip.revealer, False, True, 0)
-        self._chip_box.reorder_child(chip.revealer, position)
-        chip.revealer.connect("child-notify::position", self._renumber_chips)
-        self._renumber_chips()
-        if animated:
-            fade(chip.revealer, 0.0, 1.0, duration)
-            chip.revealer.set_reveal_child(True)
-        self._apply_maximized(chip)
-        return chip.text
-
-    def _renumber_chips(self, *_args) -> None:
-        """Follow widget order, excluding chips that are fading out."""
-        children = self._chip_box.get_children()
-        self._chips.sort(key=lambda chip: children.index(chip.revealer))
-        for position, chip in enumerate(self._chips, 1):
-            chip.label.set_text(f"{chip.shell_name}{position}")
-
-    def remove_chip(self, pane_id: int, duration: int = 0) -> None:
-        chip = self.chip(pane_id)
-        if chip is None:
-            return
-        self._chips.remove(chip)
-        self._renumber_chips()
-        if self._maximized == pane_id:
-            self._maximized = None
-        if duration > 0 and self.get_mapped() and not self._destroyed:
-            chip.closing = True
-            self._closing.append(chip)
-            chip.revealer.set_transition_duration(duration)
-            chip.revealer.set_reveal_child(False)
-            fade(chip.revealer, 1.0, 0.0, duration)
-            self._later(duration + 30, self._finish_remove, chip)
-        else:
-            self._finish_remove(chip)
-
-    def _finish_remove(self, chip: _Chip) -> None:
-        if chip in self._closing:
-            self._closing.remove(chip)
-        if not self._destroyed:
-            self._chip_box.remove(chip.revealer)
-            chip.revealer.destroy()
-
-    def set_active(self, pane_id: int | None) -> None:
-        for chip in self._chips:
-            context = chip.box.get_style_context()
-            if chip.id == pane_id:
-                context.add_class("active")
-            else:
-                context.remove_class("active")
-
-    def set_maximized(self, pane_id: int | None) -> None:
-        self._maximized = pane_id
-        for chip in self._chips:
-            self._apply_maximized(chip)
-
-    def _apply_maximized(self, chip: _Chip) -> None:
-        if chip.id == self._maximized:
-            chip.fullscreen_button.set_icon("view-restore-symbolic", "❐")
-            chip.fullscreen_button.set_tooltip_text("Restore")
-        else:
-            chip.fullscreen_button.set_icon("view-fullscreen-symbolic", "□")
-            chip.fullscreen_button.set_tooltip_text("Fullscreen")
-
-    # -- limit ---------------------------------------------------------------
+        self.get_style_context().add_class("idgent-terminal-add")
+        self.set_halign(Gtk.Align.END)
+        self.set_valign(Gtk.Align.START)
 
     def set_full(self, full: bool) -> None:
-        context = self.add_button.get_style_context()
+        context = self.get_style_context()
         if full:
             context.add_class("limit")
-            self.add_button.set_tooltip_text(f"Cannot add terminal (limit {self._limit})")
+            self.set_tooltip_text(f"Cannot add terminal (limit {self._limit})")
         else:
             context.remove_class("limit")
-            self.add_button.set_tooltip_text("New terminal")
+            self.set_tooltip_text("New terminal")
 
-    def show_limit_notice(self) -> None:
-        """Show the notice; it fades out after NOTICE_MS (timer restarts on repeats)."""
+
+class LimitToast(Gtk.Label):
+    """Small amber notice that fades out by itself; meant to live in a Gtk.Overlay."""
+
+    SHOW_MS = 2500
+    FADE_MS = 300
+
+    def __init__(self, limit: int = 3):
+        super().__init__(label=f"Cannot add terminal (limit {limit})")
+        self._timer: int | None = None
+        self._destroyed = False
+        self.get_style_context().add_class("idgent-terminal-toast")
+        self.set_halign(Gtk.Align.END)
+        self.set_valign(Gtk.Align.START)
+        self.set_no_show_all(True)
+        self.connect("destroy", self._on_destroy)
+
+    def popup(self) -> None:
+        """Show the toast; it fades after SHOW_MS (the timer restarts on repeats)."""
         if self._destroyed:
             return
-        self._cancel_notice()
-        cancel_fade(self.notice)
-        self.notice.set_opacity(1.0)
-        self.notice.show()
-        self._notice_timer = GLib.timeout_add(self.NOTICE_MS, self._fade_notice)
+        self._cancel()
+        cancel_fade(self)
+        self.set_opacity(1.0)
+        self.show()
+        self._timer = GLib.timeout_add(self.SHOW_MS, self._fade)
 
-    def _fade_notice(self) -> bool:
-        self._notice_timer = None
+    def _fade(self) -> bool:
+        self._timer = None
         if not self._destroyed:
-            fade(self.notice, 1.0, 0.0, self.NOTICE_FADE_MS, self._hide_notice)
+            fade(self, 1.0, 0.0, self.FADE_MS, self._hide)
         return GLib.SOURCE_REMOVE
 
-    def _hide_notice(self) -> None:
+    def _hide(self) -> None:
         if not self._destroyed:
-            self.notice.hide()
-            self.notice.set_opacity(1.0)
+            self.hide()
+            self.set_opacity(1.0)
 
-    def _cancel_notice(self) -> None:
-        if self._notice_timer is not None:
-            GLib.source_remove(self._notice_timer)
-            self._notice_timer = None
-
-    # -- plumbing ------------------------------------------------------------
-
-    def _later(self, delay_ms: int, callback, *args) -> None:
-        def run():
-            self._timers.discard(source)
-            if not self._destroyed:
-                callback(*args)
-            return GLib.SOURCE_REMOVE
-        source = GLib.timeout_add(delay_ms, run)
-        self._timers.add(source)
+    def _cancel(self) -> None:
+        if self._timer is not None:
+            GLib.source_remove(self._timer)
+            self._timer = None
 
     def _on_destroy(self, _widget: Gtk.Widget) -> None:
         self._destroyed = True
-        self._cancel_notice()
-        for source in self._timers:
-            GLib.source_remove(source)
-        self._timers.clear()
-        self._chips.clear()
-        self._closing.clear()
+        self._cancel()

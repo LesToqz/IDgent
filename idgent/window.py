@@ -26,7 +26,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self.explorer = ExplorerPanel(self.root)
         self.editor = EditorPanel()
         self.terminal_bottom = TerminalPanel(self.root)
-        self.terminal_right = TerminalPanel(self.root, autostart=False)
+        self.terminal_right = TerminalPanel(self.root, autostart=False, stacked=True)
         self.terminal_right.set_no_show_all(True)
         for panel in (self.terminal_bottom, self.terminal_right):
             panel.connect("last-closed", self._hide_terminal)
@@ -35,12 +35,11 @@ class MainWindow(Gtk.ApplicationWindow):
         self.explorer.connect("path-renamed", lambda _, old, new: self.editor.on_path_renamed(old, new))
         self.explorer.connect("path-deleted", lambda _, path: self.editor.on_path_deleted(path))
 
-        self.editor.set_size_request(300, 150)
         self.dock_bottom = Gtk.Paned(orientation=Gtk.Orientation.VERTICAL)
-        self.dock_bottom.pack1(self.editor, resize=True, shrink=False)
+        self.dock_bottom.pack1(self.editor, resize=True, shrink=True)
         self.dock_bottom.pack2(self.terminal_bottom, resize=False, shrink=True)
         self.dock = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
-        self.dock.pack1(self.dock_bottom, resize=True, shrink=False)
+        self.dock.pack1(self.dock_bottom, resize=True, shrink=True)
         self.dock.pack2(self.terminal_right, resize=False, shrink=True)
         self._size_pending = {self.terminal_bottom: True, self.terminal_right: True}
         self.dock_bottom.connect_after("size-allocate", self._size_terminal, self.terminal_bottom)
@@ -208,9 +207,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self._toggle(self.explorer)
 
     def _update_title(self) -> None:
-        folder = Path(self.root)
-        self.set_title(f"IDgent - {folder.name or str(folder)}")
-        self.titlebar.set_folder(self.root)
+        self.set_title("IDgent")
 
     def set_root(self, path: str) -> None:
         self._restore_terminal_fullscreen()

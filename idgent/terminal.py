@@ -1,4 +1,4 @@
-"""Side-by-side VTE terminals, independent of their docking location."""
+"""VTE terminals with a header above each one, side by side or stacked."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -12,7 +12,7 @@ gi.require_version("Gdk", "3.0")
 gi.require_version("Vte", "2.91")
 from gi.repository import Gdk, Gio, GLib, GObject, Gtk, Pango, Vte
 
-from idgent.terminal_bar import TerminalBar, cancel_fade, fade
+from idgent.terminal_bar import AddButton, LimitToast, PaneHeader, cancel_fade, fade
 
 MAX_TERMINALS = 3
 
@@ -33,9 +33,13 @@ def safe_cwd(path: str) -> str:
 
 @dataclass(eq=False)
 class _Pane:
+    # page = [inner, divider]; inner = [header, content]; content = [terminal, scrollbar, gutter].
     page: Gtk.Box
     terminal: Vte.Terminal
     cancellable: Gio.Cancellable
+    header: PaneHeader
+    content: Gtk.Box
+    divider: Gtk.Separator
     pid: int | None = None
     closed: bool = False
     # Closing panes are already out of TerminalPanel._panes but still on screen.
@@ -44,6 +48,8 @@ class _Pane:
     timer: int | None = None
 
 
+_FOREGROUND = "#d4d4d4"
+_BACKGROUND = "#1e1e1e"
 _PALETTE = (
     "#000000", "#cd3131", "#0dbc79", "#e5e510",
     "#2472c8", "#bc3fbc", "#11a8cd", "#e5e5e5",
@@ -74,32 +80,42 @@ class TerminalPanel(Gtk.Box):
         "maximize-toggled": (GObject.SignalFlags.RUN_LAST, None, (bool,)),
     }
 
-    # Milliseconds for pane and chip enter/exit animations; 0 makes them synchronous.
+    # Milliseconds for pane enter/exit animations; 0 makes them synchronous.
     ANIMATION_MS = 220
+    # Height of the header row; the "+" overlay and the limit toast are placed against it.
+    HEADER_HEIGHT = 30
 
-    def __init__(self, cwd: str, autostart: bool = True):
+    def __init__(self, cwd: str, autostart: bool = True, stacked: bool = False):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self._cwd = cwd
+        self.stacked = stacked
         self._destroyed = False
         self._panes: list[_Pane] = []
         self._closing: list[_Pane] = []
         self._active: _Pane | None = None
         self._maximized: _Pane | None = None
         self._next_id = 1
+        self._palette = (_FOREGROUND, _BACKGROUND, list(_PALETTE), None)
         self.get_style_context().add_class("idgent-terminal")
         self.set_hexpand(True)
         self.set_vexpand(True)
-        self.bar = TerminalBar(MAX_TERMINALS)
-        self.bar.connect("add-requested", lambda _bar: self.new_terminal())
-        self.bar.connect("focus-requested", self._chip_focus)
-        self.bar.connect("fullscreen-requested", lambda _bar, pane_id: self.toggle_maximize(
-            self._pane_by_id(pane_id)))
-        self.bar.connect("delete-requested", lambda _bar, pane_id: self._chip_delete(pane_id))
-        self.pack_start(self.bar, False, False, 0)
-        self._body = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0, homogeneous=True)
-        self.pack_start(self._body, True, True, 0)
-        self.bar.show_all()
+        orientation = Gtk.Orientation.VERTICAL if stacked else Gtk.Orientation.HORIZONTAL
+        self._body = Gtk.Box(orientation=orientation, spacing=0, homogeneous=True)
+        self.overlay = Gtk.Overlay()
+        self.overlay.add(self._body)
+        self.add_button = AddButton(MAX_TERMINALS)
+        self.add_button.connect("clicked", lambda _b: self.new_terminal())
+        self.toast = LimitToast(MAX_TERMINALS)
+        self.toast.set_margin_top(self.HEADER_HEIGHT + 6)
+        self.toast.set_margin_end(10)
+        for widget in (self.add_button, self.toast):
+            self.overlay.add_overlay(widget)
+        # The toast is informational; clicks go through to the terminal below it.
+        self.overlay.set_overlay_pass_through(self.toast, True)
+        self.pack_start(self.overlay, True, True, 0)
+        self.overlay.show()
         self._body.show()
+        self.add_button.show_all()
         self.connect("destroy", self._on_destroy)
         if autostart:
             self.new_terminal()
@@ -117,22 +133,40 @@ class TerminalPanel(Gtk.Box):
     def _animated(self) -> bool:
         return self.ANIMATION_MS > 0 and self.get_mapped() and not self._destroyed
 
-    def _pane_by_id(self, pane_id: int) -> _Pane | None:
-        return next((pane for pane in self._panes if pane.id == pane_id), None)
+    def header_labels(self) -> list[str]:
+        """Labels of the live panes in pane order."""
+        return [pane.header.text for pane in self._panes]
 
     def _set_active(self, pane: _Pane | None) -> None:
         self._active = pane
-        self.bar.set_active(pane.id if pane is not None else None)
+        for other in self._panes:
+            other.header.set_active(other is pane)
 
-    def _sync_bar(self) -> None:
-        self.bar.set_full(self.is_full())
+    def _update_layout(self) -> None:
+        """Renumber headers, move the "+" padding to the corner pane, fix dividers."""
+        for position, pane in enumerate(self._panes, 1):
+            pane.header.set_number(position)
+        shown = [pane for pane in self._pages() if pane.page.get_visible()]
+        corner = self._maximized or (shown[0] if self.stacked else shown[-1]) if shown else None
+        for pane in self._panes + self._closing:
+            pane.header.set_corner(pane is corner)
+            last = pane is shown[-1] if shown else True
+            visible = not last and self._maximized is None
+            pane.divider.set_no_show_all(not visible)
+            pane.divider.set_visible(visible)
+        self.add_button.set_full(self.is_full())
+
+    def _pages(self) -> list[_Pane]:
+        """Live and closing panes in on-screen order."""
+        by_page = {pane.page: pane for pane in self._panes + self._closing}
+        return [by_page[child] for child in self._body.get_children() if child in by_page]
 
     def new_terminal(self) -> bool:
         """Add a terminal; False when the dock is full or destroyed."""
         if self._destroyed:
             return False
         if self.is_full():
-            self.bar.show_limit_notice()
+            self.toast.popup()
             self.emit("limit-reached")
             return False
         if self._maximized is not None:
@@ -140,8 +174,8 @@ class TerminalPanel(Gtk.Box):
         shell = pick_shell()
         terminal = Vte.Terminal()
         self._configure(terminal)
-        page = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
-        page.pack_start(terminal, True, True, 0)
+        content = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        content.pack_start(terminal, True, True, 0)
         adjustment = terminal.get_vadjustment()
         scrollbar = Gtk.Scrollbar(orientation=Gtk.Orientation.VERTICAL,
                                   adjustment=adjustment)
@@ -166,18 +200,34 @@ class TerminalPanel(Gtk.Box):
             def refresh():
                 nonlocal refresh_pending
                 refresh_pending = False
-                if page.get_parent() is not None:
+                if content.get_parent() is not None:
                     update_scrollbar(adjustment)
-                    page.queue_resize()
+                    content.queue_resize()
                 return GLib.SOURCE_REMOVE
             GLib.idle_add(refresh)
         adjustment.connect("changed", adjustment_changed)
         adjustment.connect("value-changed", adjustment_changed)
         update_scrollbar(adjustment)
-        page.pack_start(scrollbar, False, False, 0)
-        page.pack_start(gutter, False, False, 0)
-        pane = _Pane(page, terminal, Gio.Cancellable(), id=self._next_id)
+        content.pack_start(scrollbar, False, False, 0)
+        content.pack_start(gutter, False, False, 0)
+        header = PaneHeader(os.path.basename(shell))
+        inner = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        inner.pack_start(header, False, False, 0)
+        inner.pack_start(content, True, True, 0)
+        # Columns are divided by a vertical line, stacked rows by a horizontal one.
+        divider = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL if self.stacked
+                                else Gtk.Orientation.VERTICAL)
+        divider.get_style_context().add_class("idgent-terminal-sep")
+        page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL if self.stacked
+                       else Gtk.Orientation.HORIZONTAL)
+        page.pack_start(inner, True, True, 0)
+        page.pack_start(divider, False, False, 0)
+        pane = _Pane(page, terminal, Gio.Cancellable(), header, content, divider,
+                     id=self._next_id)
         self._next_id += 1
+        header.connect("focus-requested", lambda _h: self._header_focus(pane))
+        header.connect("fullscreen-requested", lambda _h: self.toggle_maximize(pane))
+        header.connect("delete-requested", lambda _h: self._close_pane(pane))
         animated = self._animated()
         active = self._current_pane()
         index = self._panes.index(active) + 1 if active else len(self._panes)
@@ -186,10 +236,6 @@ class TerminalPanel(Gtk.Box):
         self._panes.insert(index, pane)
         self._body.pack_start(page, True, True, 0)
         self._body.reorder_child(page, position)
-        divider = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL)
-        divider.set_size_request(1, -1)
-        divider.get_style_context().add_class("idgent-terminal-sep")
-        page.pack_start(divider, False, False, 0)
         terminal.connect("child-exited", self._child_exited, pane)
         terminal.connect("key-press-event", self._key_press)
         terminal.connect("button-press-event", self._button_press)
@@ -199,10 +245,7 @@ class TerminalPanel(Gtk.Box):
         if animated:
             page.set_opacity(0.0)
         page.show_all()
-        self._update_dividers()
-        self.bar.add_chip(pane.id, index, os.path.basename(shell),
-                          self.ANIMATION_MS if animated else 0)
-        self._sync_bar()
+        self._update_layout()
         if animated:
             fade(page, 0.0, 1.0, self.ANIMATION_MS)
         env = dict(os.environ, TERM="xterm-256color", COLORTERM="truecolor")
@@ -216,15 +259,26 @@ class TerminalPanel(Gtk.Box):
         GLib.idle_add(self._focus_idle, pane)
         return True
 
-    @staticmethod
-    def _configure(terminal: Vte.Terminal) -> None:
+    def apply_palette(self, foreground: str, background: str, ansi: list[str],
+                      cursor: str | None = None) -> None:
+        """Use these colours for every terminal, existing and future."""
+        self._palette = (foreground, background, list(ansi), cursor)
+        for pane in self._panes + self._closing:
+            self._apply_colors(pane.terminal)
+
+    def _apply_colors(self, terminal: Vte.Terminal) -> None:
+        foreground, background, ansi, cursor = self._palette
+        terminal.set_colors(_color(foreground), _color(background), [_color(c) for c in ansi])
+        terminal.set_color_cursor(_color(cursor) if cursor else None)
+
+    def _configure(self, terminal: Vte.Terminal) -> None:
         terminal.get_style_context().add_class("idgent-vte")
         terminal.set_margin_start(8)
         terminal.set_margin_end(8)
         terminal.set_margin_top(8)
         terminal.set_margin_bottom(8)
         terminal.set_font(Pango.FontDescription("Monospace 11"))
-        terminal.set_colors(_color("#d4d4d4"), _color("#1e1e1e"), [_color(c) for c in _PALETTE])
+        self._apply_colors(terminal)
         terminal.set_cursor_blink_mode(Vte.CursorBlinkMode.ON)
         terminal.set_scrollback_lines(10000)
         terminal.set_scroll_on_output(False)
@@ -269,13 +323,6 @@ class TerminalPanel(Gtk.Box):
             context.remove_class("focused")
         return False
 
-    def _update_dividers(self):
-        for index, pane in enumerate(self._panes):
-            divider = pane.page.get_children()[-1]
-            visible = index < len(self._panes) - 1 and self._maximized is None
-            divider.set_no_show_all(not visible)
-            divider.set_visible(visible)
-
     def _close_pane(self, pane: _Pane) -> None:
         if pane.closed:
             return
@@ -290,17 +337,14 @@ class TerminalPanel(Gtk.Box):
         self._panes.remove(pane)
         if self._active is pane:
             self._set_active(self._panes[min(index, len(self._panes) - 1)] if self._panes else None)
-        self._update_dividers()
-        self._sync_bar()
         if self._animated():
             pane.closing = True
             self._closing.append(pane)
-            self.bar.remove_chip(pane.id, self.ANIMATION_MS)
+            self._update_layout()
             fade(pane.page, 1.0, 0.0, self.ANIMATION_MS)
             # A timeout rather than the revealer signal: it also fires if frames stall.
             pane.timer = GLib.timeout_add(self.ANIMATION_MS + 30, self._finish_close, pane)
         else:
-            self.bar.remove_chip(pane.id)
             self._finish_close(pane)
         if refocus and self.get_visible():
             GLib.idle_add(self._focus_idle)
@@ -314,23 +358,18 @@ class TerminalPanel(Gtk.Box):
         cancel_fade(pane.page)
         self._body.remove(pane.page)
         pane.page.destroy()
+        self._update_layout()
         if not self._panes and not self._closing:
             self.emit("last-closed")
         return GLib.SOURCE_REMOVE
 
-    def _chip_focus(self, _bar: TerminalBar, pane_id: int) -> None:
-        pane = self._pane_by_id(pane_id)
-        if pane is None:
+    def _header_focus(self, pane: _Pane) -> None:
+        if pane.closed:
             return
         if self._maximized is not None and pane is not self._maximized:
             self.toggle_maximize(pane)
         self._set_active(pane)
         self.focus_terminal()
-
-    def _chip_delete(self, pane_id: int) -> None:
-        pane = self._pane_by_id(pane_id)
-        if pane is not None:
-            self._close_pane(pane)
 
     def is_maximized(self) -> bool:
         return self._maximized is not None
@@ -353,8 +392,9 @@ class TerminalPanel(Gtk.Box):
                 other.page.hide()
         pane.page.set_no_show_all(False)
         pane.page.show()
-        self._update_dividers()
-        self.bar.set_maximized(pane.id)
+        self._update_layout()
+        for other in self._panes:
+            other.header.set_maximized(other is pane)
         self._set_active(pane)
         self.focus_terminal()
         if was_normal:
@@ -370,8 +410,9 @@ class TerminalPanel(Gtk.Box):
         for pane in self._panes:
             pane.page.set_no_show_all(False)
             pane.page.show()
-        self._update_dividers()
-        self.bar.set_maximized(None)
+        self._update_layout()
+        for pane in self._panes:
+            pane.header.set_maximized(False)
         self.focus_terminal()
         self.emit("maximize-toggled", False)
 
@@ -392,11 +433,12 @@ class TerminalPanel(Gtk.Box):
         required = Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.SHIFT_MASK
         key = Gdk.keyval_name(event.keyval).lower()
         if (event.state & mask == Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.MOD1_MASK
-                and key in ("left", "right")):
+                and key in (("left", "right", "up", "down") if self.stacked else ("left", "right"))):
             pane = next((p for p in self._panes if p.terminal is terminal), None)
             if pane:
                 index = self._panes.index(pane)
-                self._set_active(self._panes[(index + (1 if key == "right" else -1)) % len(self._panes)])
+                step = 1 if key in ("right", "down") else -1
+                self._set_active(self._panes[(index + step) % len(self._panes)])
                 if self._maximized not in (None, self._active):
                     self.toggle_maximize(self._active)
                 self.focus_terminal()
