@@ -4,6 +4,9 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+# Keep GTK on the Xvfb display even when WAYLAND_DISPLAY is inherited.
+os.environ["GDK_BACKEND"] = "x11"
+
 from idgent import fsops
 
 
