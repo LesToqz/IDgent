@@ -6,7 +6,12 @@ from typing import Callable
 import gi
 
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk
+gi.require_version("Gdk", "3.0")
+from gi.repository import Gdk, Gtk
+
+from idgent.explorer import ExplorerPanel
+from idgent.editor import EditorPanel
+from idgent.terminal import TerminalPanel
 
 
 class MainWindow(Gtk.ApplicationWindow):
@@ -15,20 +20,6 @@ class MainWindow(Gtk.ApplicationWindow):
         self.set_default_size(1200, 750)
         self.root = str(Path(root).resolve())
         self.terminal_position = "bottom"
-
-        # TODO(integration): remove fallback
-        try:
-            from idgent.explorer import ExplorerPanel
-        except ImportError:
-            from idgent._placeholder import ExplorerPanel
-        try:
-            from idgent.editor import EditorPanel
-        except ImportError:
-            from idgent._placeholder import EditorPanel
-        try:
-            from idgent.terminal import TerminalPanel
-        except ImportError:
-            from idgent._placeholder import TerminalPanel
 
         self.explorer = ExplorerPanel(self.root)
         self.editor = EditorPanel()
@@ -76,8 +67,8 @@ class MainWindow(Gtk.ApplicationWindow):
             entry.set_submenu(menu)
             bar.append(entry)
         item(file_menu, "Open Folder…", self.open_folder)
-        item(file_menu, "Save", self.editor.save_current, "<Control>s")
-        item(file_menu, "Save All", self.editor.save_all, "<Control><Shift>s")
+        item(file_menu, "Save", lambda: self.editor.save_current(), "<Control>s")
+        item(file_menu, "Save All", lambda: self.editor.save_all(), "<Control><Shift>s")
         item(file_menu, "Quit", self.close, "<Control>q")
         item(view_menu, "Toggle Terminal", self.toggle_terminal, "<Control>grave")
         self.move_terminal_item = item(view_menu, "Move Terminal to Right", self.toggle_terminal_position)
@@ -136,9 +127,21 @@ class MainWindow(Gtk.ApplicationWindow):
         finally:
             dialog.destroy()
 
-    def _on_delete(self, _window: Gtk.Window, _event: object) -> bool:
-        if not self.editor.has_unsaved():
-            return False
+    def do_key_press_event(self, event: Gdk.EventKey) -> bool:
+        focus = self.get_focus()
+        modifiers = event.state & Gtk.accelerator_get_default_mod_mask()
+        if (focus is not None and focus.is_ancestor(self.editor)
+                and modifiers == Gdk.ModifierType.CONTROL_MASK
+                and event.keyval in (Gdk.KEY_s, Gdk.KEY_w, Gdk.KEY_slash)):
+            # Let the focused editor handle its commands before menu accelerators.
+            if self.propagate_key_event(event):
+                return True
+            if event.keyval == Gdk.KEY_s:
+                self.editor.save_current()
+                return True
+        return Gtk.ApplicationWindow.do_key_press_event(self, event)
+
+    def _ask_quit(self) -> int:
         dialog = Gtk.MessageDialog(transient_for=self, modal=True,
                                    message_type=Gtk.MessageType.WARNING,
                                    text="Save changes before quitting?")
@@ -151,6 +154,12 @@ class MainWindow(Gtk.ApplicationWindow):
             response = dialog.run()
         finally:
             dialog.destroy()
+        return response
+
+    def _on_delete(self, _window: Gtk.Window, _event: object) -> bool:
+        if not self.editor.has_unsaved():
+            return False
+        response = self._ask_quit()
         if response == Gtk.ResponseType.REJECT:
             return False
         if response == Gtk.ResponseType.ACCEPT:

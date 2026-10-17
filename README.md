@@ -1,23 +1,34 @@
 # IDgent
 
-IDgent is a VS Code-style desktop IDE for Linux, built with Python 3, GTK 3,
-and VTE 2.91. Its resizable layout has an explorer sidebar, a central editor,
-and a terminal dock that moves between the bottom and right side while keeping
-running shells alive. The editor uses plain Gtk.TextView; GtkSource is not required.
+A small Linux desktop editor built with Python, GTK 3 and VTE 2.91.
+It includes a file explorer (create, rename, delete and refresh), UTF-8 editor
+tabs with undo/redo, search, indentation and comment toggling, and tabbed shells.
+Renaming folders retargets open files; deleting them marks affected tabs deleted.
 
-Run from this directory with Python 3.10 or newer:
+Requirements: Python 3.10+, `python3-gi`, `gir1.2-gtk-3.0`, and
+`gir1.2-vte-2.91` (Debian/Ubuntu package names). No pip packages are needed.
+
+Run from the repository:
 
 ```sh
 python3 -m idgent [folder]
 ```
 
-The folder defaults to the current directory and must exist. GTK 3, PyGObject
-(`gi`), and VTE 2.91 must be provided by the Linux system. No pip or npm
-packages are required. The project also declares the `idgent` console entry point.
+The folder defaults to the current directory. File → Open Folder changes the
+explorer root and the working directory for **new** terminals. Existing shells
+keep their directories. Unsaved files prompt on quit.
 
-Use **File → Open Folder…** to change the explorer root and the working directory
-for new terminals. Quitting prompts to save, discard, or cancel when files have
-unsaved changes. Layout settings are not persisted yet.
+Install the desktop entry, icon and launcher for your user:
+
+```sh
+bash packaging/install.sh
+# Ensure ~/.local/bin is on PATH. Keep this repository at its current location.
+bash packaging/install.sh --uninstall
+```
+
+The resizable layout has an explorer on the left, editor in the center and
+terminal below. View → Move Terminal to Right / Bottom moves the same running
+terminal panel. View also toggles the terminal and explorer.
 
 | Shortcut | Command |
 | --- | --- |
@@ -26,47 +37,17 @@ unsaved changes. Layout settings are not persisted yet.
 | Ctrl+S | Save current file |
 | Ctrl+Shift+S | Save all files |
 | Ctrl+Q | Quit |
+| Ctrl+W | Close editor tab (editor focus) |
+| Ctrl+/ | Toggle line comments in supported text files (editor focus) |
 
-The View menu also has **Move Terminal to Right**, which changes to
-**Move Terminal to Bottom** after moving the dock.
-
-## Project layout
-
-```text
-idgent/
-  __init__.py       Empty package marker
-  __main__.py       Module entry point
-  app.py            CLI validation and Gtk.Application
-  window.py         Layout, menus, shortcuts, and panel wiring
-  _placeholder.py   Temporary contract-compatible stand-ins
-  explorer.py       Explorer panel (developed separately)
-  editor.py         Editor panel (developed separately)
-  terminal.py       VTE terminal panel (developed separately)
-tests/
-  test_window_layout.py
-packaging/          Reserved for packaging work
-pyproject.toml      Project metadata and console entry point
-```
-
-The shell loads panels when creating a window and uses stand-ins when their
-modules are unavailable. Integration will remove these fallbacks.
-
-## Panel contract
-
-All panels subclass `Gtk.Box` using Gtk 3.0. Paths are strings.
-
-| Panel | Constructor | Methods | Signals |
-| --- | --- | --- | --- |
-| `ExplorerPanel` | `(root: str)` | `set_root(path: str) -> None`, `refresh() -> None` | `file-activated(path: str)`, `path-renamed(old: str, new: str)`, `path-deleted(path: str)` |
-| `EditorPanel` | `()` | `open_file(path: str) -> None`, `save_current() -> bool`, `save_all() -> bool`, `has_unsaved() -> bool`, `on_path_renamed(old: str, new: str) -> None`, `on_path_deleted(path: str) -> None` | None |
-| `TerminalPanel` | `(cwd: str)` | `set_cwd(path: str) -> None`, `new_terminal() -> None`, `close_current() -> None` | None |
-
-The window forwards explorer signals to the editor. `TerminalPanel.set_cwd`
-affects new terminals. The window owns quit confirmation via `has_unsaved()`
-and keeps the same terminal panel instance when moving or hiding the dock.
-
-Run the layout and wiring tests with system-provided GTK and Xvfb:
+Code lives in `idgent/`: `window.py` wires the explorer, editor and terminal
+panels; `fsops.py` implements file operations. `packaging/` contains Linux desktop
+assets. Run all tests with system GTK, VTE and Xvfb:
 
 ```sh
-xvfb-run -a python3 -m unittest tests.test_window_layout -v
+xvfb-run -a python3 -m unittest discover -s tests
 ```
+
+Known limitations: no syntax highlighting, no persisted layout or session,
+and only regular UTF-8 text files up to 5 MB are editable. Comment toggling
+supports Python, shell, TOML, YAML and conf files. File deletion is permanent.
