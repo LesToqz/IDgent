@@ -138,9 +138,12 @@ class TerminalPanel(Gtk.Box):
             return
 
         def cancel_commit(widget):
-            clock.disconnect(widget._terminal_commit_tick)
+            handler = widget._terminal_commit_tick
+            if handler is not None and clock.handler_is_connected(handler):
+                clock.disconnect(handler)
             widget._terminal_commit_tick = None
-            widget.disconnect(destroy_handler)
+            if widget.handler_is_connected(destroy_handler):
+                widget.disconnect(destroy_handler)
 
         def after_layout(clock):
             widget = toplevel

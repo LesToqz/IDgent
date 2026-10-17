@@ -124,6 +124,7 @@ class TerminalPanelTest(unittest.TestCase):
         control.new_terminal()
         self.wait_spawn(control._panes[0])
         self.assertIs(control._panes[0].frame, control._panes[0].page)
+        control.destroy()
 
     def test_discrete_layout_commits_without_waiting_for_debounce(self):
         self.panel.new_terminal()
