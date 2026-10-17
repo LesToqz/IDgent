@@ -249,6 +249,16 @@ class ViewChrome:
         self._sync_source = 0
         if self.view.get_mapped():
             self._sync_labels()
+            # A child created/moved inside size-allocate can have its resize
+            # request consumed by that same allocation. Requeue outside it,
+            # even when our cached target position has not changed.
+            rect = self.view.get_visible_rect()
+            for label, state in zip(self.labels, self.label_state):
+                if state is not None:
+                    allocation = label.get_allocation()
+                    if allocation.y != state[1] - rect.y or allocation.height < state[2]:
+                        self.view.queue_resize()
+                        break
         return GLib.SOURCE_REMOVE
 
     def _sync_labels(self) -> None:
