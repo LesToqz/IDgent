@@ -114,8 +114,12 @@ def _matches(text, pattern):
             stripped = line.rstrip()
             # Retain whitespace that is itself part of the match.
             display = line[:max(len(stripped), found.end())]
-            offset = max(0, found.start() - 70) if len(display) > 200 else 0
-            offset = min(offset, max(0, len(display) - 200))
+            # Leave room for the highlighted match in a narrow Explorer sidebar.
+            # Preserve whitespace when it belongs to the match itself.
+            indent = len(display) - len(display.lstrip())
+            offset = max(min(indent, found.start()), found.start() - 4)
+            while offset < found.start() and display[offset].isspace():
+                offset += 1
             yield Match(line0, found.start(), found.end() - found.start(),
                         Preview(display[offset:offset + 200], offset))
 
@@ -195,7 +199,7 @@ import gi
 
 gi.require_version('Gtk', '3.0')
 gi.require_version('Gdk', '3.0')
-from gi.repository import Gdk, GLib, GObject, Gtk
+from gi.repository import Gdk, GLib, GObject, Gtk, Pango
 from .themes import get_theme
 
 
@@ -274,7 +278,7 @@ class SearchPanel(Gtk.Box):
         number = Gtk.CellRendererText(xalign=1, ypad=2)
         column.pack_start(number, False)
         column.add_attribute(number, 'markup', 1)
-        label = Gtk.CellRendererText(ypad=2)
+        label = Gtk.CellRendererText(ypad=2, ellipsize=Pango.EllipsizeMode.END)
         column.pack_start(label, True)
         column.add_attribute(label, 'markup', 2)
         self._cells = [number, label]
@@ -465,7 +469,9 @@ class SearchPanel(Gtk.Box):
                 preview = match.line_text
                 start = match.column - match.preview_offset
                 end = min(len(preview), start + match.length)
-                markup = (esc(preview[:start]) + '<b><u>' + esc(preview[start:end])
+                # The ellipsis is decoration, outside Preview's source coordinates.
+                prefix = '…' if match.preview_offset else ''
+                markup = (prefix + esc(preview[:start]) + '<b><u>' + esc(preview[start:end])
                           + '</u></b>' + esc(preview[end:]))
                 self.store.append(parent, [None, f'<span alpha="60%">{match.line + 1}</span>',
                                            markup, group.path, match.line, match.column,
