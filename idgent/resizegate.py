@@ -19,9 +19,17 @@ class ResizeGate(Gtk.Bin):
     latest allocation immediately; it never changes terminal contents or sends
     input to a child process. The private Gdk window clips even windowed children
     while the gate is smaller than their last committed allocation.
+
+    VTE descendants temporarily use non-reflow allocation to avoid a second
+    readline redraw bug even with one SIGWINCH. This preserves history bytes but
+    leaves old lines at their original wrapping. ``REFLOW_VTE = True`` opts out.
     """
 
     SETTLE_MS = 120
+    # A single large reflow can also confuse readline's cursor bookkeeping.
+    # Suppress VTE reflow for the committed allocation, then restore the caller's
+    # setting. Set True on an instance to retain normal reflow instead.
+    REFLOW_VTE = False
 
     def __init__(self):
         super().__init__()
@@ -139,7 +147,25 @@ class ResizeGate(Gtk.Bin):
                                child.get_margin_start() + child.get_margin_end() + 1)
         allocation.height = max(self._committed[1], child.get_preferred_height()[0],
                                 child.get_margin_top() + child.get_margin_bottom() + 1)
-        child.size_allocate(allocation)
+        terminals = []
+        if not self.REFLOW_VTE:
+            def suspend_reflow(widget):
+                # Property access avoids importing VTE into this GTK container
+                # and the Python deprecation warning on its equivalent methods.
+                if widget.find_property("rewrap-on-resize") is not None:
+                    previous = widget.get_property("rewrap-on-resize")
+                    if previous:
+                        terminals.append(widget)
+                        widget.set_property("rewrap-on-resize", False)
+                if isinstance(widget, Gtk.Container):
+                    for descendant in widget.get_children():
+                        suspend_reflow(descendant)
+            suspend_reflow(child)
+        try:
+            child.size_allocate(allocation)
+        finally:
+            for terminal in terminals:
+                terminal.set_property("rewrap-on-resize", True)
 
     def _cancel_timer(self):
         if self._timer is not None:

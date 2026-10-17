@@ -52,7 +52,7 @@ def spin(milliseconds):
 class BashDrag:
     """An actual paned allocation, PTY, bash/readline and Debian colour prompt."""
 
-    def __init__(self, gate_type=None, count=1, trap=True):
+    def __init__(self, gate_type=None, count=1, trap=True, position=180, prompt_row=15):
         self.directory = tempfile.TemporaryDirectory(prefix="idgent-resize-")
         self.cwd = Path(self.directory.name) / "projects" / "long-prompt-directory"
         self.cwd.mkdir(parents=True)
@@ -78,11 +78,18 @@ class BashDrag:
                 self.gates.append(child)
             box.pack_start(child, True, True, 0)
             self.logs.append(Path(self.directory.name) / f"winch-{index}")
-        self.paned.set_position(180)
+        self.paned.set_position(position)
         self.window.show_all()
         spin(200)
         for terminal, log in zip(self.terminals, self.logs):
-            environment = dict(os.environ, PS1=PS1, PROMPT_COMMAND="", TERM="xterm-256color",
+            # Start the prompt near the bottom: reflow then has to scroll the
+            # screen, which is essential to reproduce readline's stale redraw
+            # geometry. Install the trap before the FIRST prompt, without
+            # command echo or clear-screen sequences polluting the measurement.
+            setup = "trap 'printf \"%s\\n\" \"$COLUMNS\" >> \"$RESIZE_LOG\"' WINCH; " if trap else ""
+            setup += f"printf '\\n%.0s' {{1..{prompt_row}}}; " if prompt_row else ""
+            setup += "unset PROMPT_COMMAND"
+            environment = dict(os.environ, PS1=PS1, PROMPT_COMMAND=setup, TERM="xterm-256color",
                                COLORTERM="truecolor", RESIZE_LOG=str(log))
             def spawned(_terminal, pid, error, _data):
                 assert error is None, error
@@ -94,10 +101,6 @@ class BashDrag:
                 cancellable=None, callback=spawned, user_data=None)
         assert poll(lambda: len(self.pids) == count and
                     all("long-prompt-directory" in self.text(t) for t in self.terminals))
-        # Install instrumentation, then clear command echo and the startup prompt.
-        for terminal in self.terminals:
-            command = "trap 'printf \"%s\\n\" \"$COLUMNS\" >> \"$RESIZE_LOG\"' WINCH; " if trap else ""
-            terminal.feed_child((command + "printf '\\033[2J\\033[H'\n").encode())
         assert poll(lambda: all(self.text(t).count("long-prompt-directory") == 1 and
                                 "printf" not in self.text(t) for t in self.terminals))
         spin(150)
@@ -368,30 +371,66 @@ class ResizeGateTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.gate.set_background("not-a-colour")
 
+    def test_vte_page_reflow_setting_and_history_are_preserved(self):
+        self.gate.remove(self.child)
+        page = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        terminal = Vte.Terminal()
+        TerminalPanel._configure(terminal)
+        page.pack_start(terminal, True, True, 0)
+        scrollbar = Gtk.Scrollbar(orientation=Gtk.Orientation.VERTICAL,
+                                  adjustment=terminal.get_vadjustment())
+        page.pack_start(scrollbar, False, False, 0)
+        self.gate.add(page)
+        self.gate.show_all()
+        allocate(self.gate, 500, 200)
+        self.gate.commit()
+        line = "History-kept-" * 12
+        terminal.feed((line + "\r\n").encode())
+        self.assertTrue(poll(lambda: line in BashDrag.text(terminal)))
+        observed = []
+        terminal.connect("size-allocate", lambda terminal, _allocation:
+                         observed.append(terminal.get_property("rewrap-on-resize")))
+        allocate(self.gate, 180, 160)
+        self.gate.commit()
+        self.assertTrue(observed)
+        self.assertFalse(any(observed))
+        self.assertTrue(terminal.get_property("rewrap-on-resize"))
+        self.assertEqual(terminal.get_scrollback_lines(), 10000)
+        self.assertIs(scrollbar.get_adjustment(), terminal.get_vadjustment())
+        # Non-reflow rows retain their original cell positions. Their right
+        # portions become visible again when the page grows back.
+        allocate(self.gate, 500, 200)
+        self.gate.commit()
+        self.assertIn(line, BashDrag.text(terminal).replace("\n", ""))
+        terminal.set_property("rewrap-on-resize", False)
+        allocate(self.gate, 200, 160)
+        self.gate.commit()
+        self.assertFalse(terminal.get_property("rewrap-on-resize"))
+        terminal.set_property("rewrap-on-resize", True)
+        self.gate.REFLOW_VTE = True
+        observed.clear()
+        allocate(self.gate, 220, 160)
+        self.gate.commit()
+        self.assertTrue(all(observed))
+
 
 class BashDragTest(unittest.TestCase):
     def test_drag_comparison(self):
-        # Keep measurements visible in CI. Some bash/readline versions repair
-        # every redraw themselves; never manufacture corrupt shell output to
-        # make that baseline fail. Signal reduction remains independently tested.
-        for interval, start, end, count in [(8, 180, 760, 1), (24, 760, 180, 3)]:
+        # Keep the actual baseline visible in CI, alongside PTY signal counts.
+        for interval, start, end, count in [(8, 180, 760, 3), (24, 760, 180, 3),
+                                           (8, 760, 180, 3), (24, 180, 760, 3)]:
             with self.subTest(interval=interval, count=count):
                 measurements = []
                 for gate_type in (None, ResizeGate):
-                    harness = BashDrag(gate_type=gate_type, count=count)
+                    harness = BashDrag(gate_type=gate_type, count=count, position=start)
                     try:
-                        if start != 180:
-                            harness.paned.set_position(start)
-                            if harness.gates:
-                                spin(200)
-                            spin(200)
-                            for log in harness.logs:
-                                log.write_text("")
                         steps = harness.drag(interval=interval, start=start, end=end)
                         metrics = harness.metrics()
                         measurements.append(metrics)
                         label = "AFTER" if gate_type else "BASELINE"
-                        print(label, dict(interval=interval, steps=steps, terminals=count), metrics, flush=True)
+                        summary = [{key: value for key, value in metric.items() if key != "text"}
+                                   for metric in metrics]
+                        print(label, dict(interval=interval, steps=steps, terminals=count), summary, flush=True)
                         if gate_type:
                             for metric in metrics:
                                 self.assertEqual(metric["copies"], 1, metric)
@@ -403,17 +442,55 @@ class BashDragTest(unittest.TestCase):
                         harness.close()
                 for baseline, after in zip(*measurements):
                     self.assertGreater(baseline["winch"], after["winch"] + 10)
-                    self.assertGreaterEqual(baseline["copies"], after["copies"])
+                    self.assertGreater(baseline["history_copies"], after["history_copies"])
+                    self.assertTrue(baseline["garbage"], baseline)
+
+    def test_one_manual_resize_needs_reflow_mitigation(self):
+        class DebounceOnly(ResizeGate):
+            REFLOW_VTE = True
+
+        measurements = []
+        for gate_type in (None, DebounceOnly, ResizeGate):
+            harness = BashDrag(gate_type=gate_type, prompt_row=15)
+            try:
+                harness.paned.set_position(760)
+                spin(650)
+                metrics = harness.metrics()[0]
+                measurements.append(metrics)
+                print("SINGLE", gate_type, {k: v for k, v in metrics.items() if k != "text"}, flush=True)
+                self.assertEqual(metrics["winch"], 1)
+            finally:
+                harness.close()
+        for broken in measurements[:2]:
+            self.assertTrue(broken["garbage"], broken)
+            self.assertGreater(broken["copies"], 1)
+        self.assertEqual(measurements[2]["copies"], 1)
+        self.assertFalse(measurements[2]["garbage"], measurements[2])
 
     def test_fatal_criticals_subprocess(self):
+        code = """
+import unittest
+from tests.test_resizegate import ResizeGateTest, BashDrag, ResizeGate
+suite = unittest.defaultTestLoader.loadTestsFromTestCase(ResizeGateTest)
+assert unittest.TextTestRunner().run(suite).wasSuccessful()
+harness = BashDrag(gate_type=ResizeGate, count=3)
+try:
+    harness.drag()
+    for metric in harness.metrics():
+        assert metric['copies'] == metric['history_copies'] == 1, metric
+        assert not metric['garbage'], metric
+finally:
+    harness.close()
+"""
         result = subprocess.run(
-            [sys.executable, "-m", "unittest", "tests.test_resizegate.ResizeGateTest"],
+            [sys.executable, "-c", code],
             env=dict(os.environ, G_DEBUG="fatal-criticals"),
             capture_output=True, text=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertNotIn("Gtk-WARNING", result.stderr)
         self.assertNotIn("Gtk-CRITICAL", result.stderr)
         self.assertNotIn("Traceback", result.stderr)
+        self.assertNotIn("TypeError", result.stderr)
 
 
 if __name__ == "__main__":
