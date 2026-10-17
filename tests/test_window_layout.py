@@ -78,6 +78,7 @@ class WindowLayoutTests(unittest.TestCase):
         self.assertIs(self.window.dock_bottom.get_child2(), self.window.terminal_bottom)
         self.assertEqual(self.window.get_default_size(), (1200, 750))
         self.assertIn(Path(self.folder.name).name, self.window.get_title())
+        self.assertEqual(self.window.get_child().get_children(), [self.window.sidebar])
         self.assertEqual(self.window.sidebar.get_position(), 260)
 
     def settle_layout(self) -> None:
@@ -163,6 +164,7 @@ class WindowLayoutTests(unittest.TestCase):
             terminal.assert_called_once_with(root)
             right.assert_called_once_with(root)
             self.assertEqual(self.window.get_title(), f"IDgent - {Path(root).name}")
+            self.assertEqual(self.window.titlebar.title_label.get_text(), self.window.get_title())
 
     def test_quit_confirmation(self) -> None:
         self.assertFalse(self.window._on_delete(self.window, None))
