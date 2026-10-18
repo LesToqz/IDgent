@@ -102,3 +102,101 @@ def set_font_size(key: str, size: int | float) -> bool:
 def reset_font_size(key: str) -> bool:
     """Reset by explicitly writing the default; preserve unrelated settings."""
     return set_font_size(key, _font_size(key, None))
+
+
+def settings_path() -> Path:
+    """Where settings are stored (resolved from XDG_CONFIG_HOME at call time)."""
+    return _path()
+
+
+# Settings window keys (spec 5.3). The theme and font sizes keep their own
+# helpers above; get_value/set_value accept every key in DEFAULTS.
+ACCENT_PRESETS = ('#8a5cf5', '#3b82f6', '#0ea5a4', '#22a55b',
+                  '#d4a017', '#e8762d', '#e5484d', '#d6409f')
+CHOICES = {
+    'delete_mode': ('trash', 'permanent'),
+    'terminal_cursor': ('block', 'ibeam', 'underline'),
+}
+LIMITS = {
+    'indent_width': (2, 8),
+    'terminal_scrollback': (1000, 100000),
+}
+NEW_DEFAULTS = {
+    'accent': None,  # None follows the theme's own accent.
+    'reduce_motion': False,
+    'ui_font': '',  # Empty means the GTK/system interface font.
+    'editor_font': '',  # Empty means the default monospace font.
+    'line_numbers': True,
+    'highlight_line': True,
+    'md_default_preview': False,
+    'md_readable_width': True,
+    'indent_tabs': False,
+    'indent_width': 4,
+    'auto_pair': True,
+    'show_hidden': True,
+    'confirm_delete': True,
+    'delete_mode': 'permanent',  # Current explorer behaviour: no trash.
+    'terminal_cursor': 'block',
+    'terminal_blink': True,
+    'terminal_scrollback': 10000,
+    'terminal_autostart': True,
+}
+NEW_KEYS = tuple(NEW_DEFAULTS)
+DEFAULTS = {'theme': get_theme(None).id, **DEFAULT_FONT_SIZES, **NEW_DEFAULTS}
+LIMITS.update(FONT_SIZE_LIMITS)
+_FONT_NAME_MAX = 200
+
+
+def normalize(key: str, value: object) -> object:
+    """Validate one value: clamp numbers, otherwise invalid values use the default."""
+    if key == 'theme':
+        return get_theme(value if isinstance(value, str) else None).id
+    if key in FONT_KEYS:
+        return _font_size(key, value)
+    if key not in NEW_DEFAULTS:
+        raise ValueError(f'Unknown setting key: {key}')
+    default = NEW_DEFAULTS[key]
+    if key == 'accent':
+        if (isinstance(value, str) and len(value) == 7 and value[0] == '#'
+                and all(c in '0123456789abcdefABCDEF' for c in value[1:])):
+            return value.lower()
+        return None
+    if key in CHOICES:
+        return value if value in CHOICES[key] else default
+    if isinstance(default, bool):
+        return value if isinstance(value, bool) else default
+    if key in LIMITS:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return default
+        if isinstance(value, float) and not math.isfinite(value):
+            return default
+        low, high = LIMITS[key]
+        return round(max(low, min(high, value)))
+    # Font family names: printable text only, trimmed; '' means default.
+    if not isinstance(value, str) or len(value) > _FONT_NAME_MAX or not value.isprintable():
+        return default
+    return value.strip()
+
+
+def get_value(key: str) -> object:
+    return normalize(key, load().get(key))
+
+
+def get_values() -> dict:
+    """Every known key, validated, from one read of the file."""
+    data = load()
+    return {key: normalize(key, data.get(key)) for key in DEFAULTS}
+
+
+def set_value(key: str, value: object) -> bool:
+    """Save one validated value; unknown keys raise ValueError."""
+    return save({key: normalize(key, value)})
+
+
+def set_values(values: dict) -> bool:
+    """Save several validated values in one atomic write."""
+    return save({key: normalize(key, value) for key, value in values.items()})
+
+
+def reset_value(key: str) -> bool:
+    return set_value(key, DEFAULTS[key])
