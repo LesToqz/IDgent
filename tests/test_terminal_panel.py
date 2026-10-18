@@ -423,13 +423,47 @@ class TerminalPanelTest(unittest.TestCase):
         self.addCleanup(fresh.destroy)
         self.assertEqual(fresh._palette[:2], ("#d4d4d4", "#1e1e1e"))
 
+    def test_cursor_and_scrollback_apis_reach_existing_and_new_terminals(self):
+        first = self.panel._panes[0].terminal
+        self.assertEqual((first.get_cursor_shape(), first.get_cursor_blink_mode(),
+                          first.get_scrollback_lines()),
+                         (Vte.CursorShape.BLOCK, Vte.CursorBlinkMode.ON, 10000))
+        self.panel.set_cursor_shape("ibeam")
+        self.panel.set_cursor_blink(False)
+        self.panel.set_scrollback(25000)
+        self.assertEqual((first.get_cursor_shape(), first.get_cursor_blink_mode(),
+                          first.get_scrollback_lines()),
+                         (Vte.CursorShape.IBEAM, Vte.CursorBlinkMode.OFF, 25000))
+        self.panel.new_terminal()
+        second = self.wait_spawn(self.panel._panes[1])
+        self.assertEqual((second.get_cursor_shape(), second.get_cursor_blink_mode(),
+                          second.get_scrollback_lines()),
+                         (Vte.CursorShape.IBEAM, Vte.CursorBlinkMode.OFF, 25000))
+        self.panel.set_cursor_shape("underline")
+        self.panel.set_cursor_blink(True)
+        for terminal in (first, second):
+            self.assertEqual((terminal.get_cursor_shape(), terminal.get_cursor_blink_mode()),
+                             (Vte.CursorShape.UNDERLINE, Vte.CursorBlinkMode.ON))
+        # Scrollback is clamped to 1000-100000 lines.
+        for lines, expected in ((5, 1000), (-1, 1000), (10 ** 9, 100000), (1000, 1000), (100000, 100000)):
+            self.panel.set_scrollback(lines)
+            self.assertEqual([t.get_scrollback_lines() for t in (first, second)], [expected] * 2)
+        with self.assertRaises(ValueError):
+            self.panel.set_cursor_shape("beam")
+        self.assertEqual(first.get_cursor_shape(), Vte.CursorShape.UNDERLINE)
+        self.panel.set_cursor_shape("block")
+        self.assertEqual(second.get_cursor_shape(), Vte.CursorShape.BLOCK)
+
     def test_focus_events_toggle_style_class(self):
         terminal = self.panel._panes[0].terminal
         event = Gdk.Event.new(Gdk.EventType.FOCUS_CHANGE)
+        header = self.panel._panes[0].header.get_style_context()
         terminal.emit("focus-in-event", event)
         self.assertTrue(terminal.get_style_context().has_class("focused"))
+        self.assertTrue(header.has_class("focused"))
         terminal.emit("focus-out-event", event)
         self.assertFalse(terminal.get_style_context().has_class("focused"))
+        self.assertFalse(header.has_class("focused"))
 
     def test_copy_paste_shortcuts(self):
         terminal = self.panel._panes[0].terminal

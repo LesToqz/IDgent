@@ -18,9 +18,11 @@ gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
 from gi.repository import Gdk, GLib, Gtk
 
-from idgent import style
+from idgent import motion, style
 from idgent.terminal import MAX_TERMINALS, TerminalPanel
-from idgent.terminal_bar import AddButton, LimitToast, PaneHeader
+from idgent.terminal_bar import (GLYPH_OPACITY, AddButton, LimitToast, PaneHeader, build_css,
+                                 cancel_fade, fade)
+from idgent.themes import THEMES, _contrast, get_theme
 
 LIMIT_TEXT = "Cannot add terminal (limit 3)"
 
@@ -61,6 +63,40 @@ def rect(widget: Gtk.Widget, ref: Gtk.Widget) -> tuple[int, int, int, int]:
 
 def overlaps(a, b) -> bool:
     return a[0] < b[0] + b[2] and b[0] < a[0] + a[2] and a[1] < b[1] + b[3] and b[1] < a[1] + a[3]
+
+
+def pixel(widget: Gtk.Widget, x: int, y: int) -> tuple[int, int, int]:
+    """Rendered colour at widget-relative (x, y), read back from the toplevel window."""
+    toplevel = widget.get_toplevel()
+    wx, wy = widget.translate_coordinates(toplevel, x, y)
+    pixbuf = Gdk.pixbuf_get_from_window(toplevel.get_window(), wx, wy, 1, 1)
+    return tuple(pixbuf.get_pixels()[:3])
+
+
+def hex_rgb(value: str) -> tuple[int, int, int]:
+    return tuple(int(value[i:i + 2], 16) for i in (1, 3, 5))
+
+
+def near(a, b, tolerance: int = 3) -> bool:
+    return all(abs(x - y) <= tolerance for x, y in zip(a, b))
+
+
+def rgba(color: Gdk.RGBA) -> tuple[int, int, int, float]:
+    return (round(color.red * 255), round(color.green * 255), round(color.blue * 255),
+            round(color.alpha, 3))
+
+
+class ThemedTest(unittest.TestCase):
+    """Applies IDgent Dark for the test and restores the default theme afterwards."""
+
+    theme_id = "idgent-dark"
+
+    def setUp(self):
+        self.theme = get_theme(self.theme_id)
+        self.ui = self.theme.ui
+        style.apply_theme(self.theme)
+        self.addCleanup(style.apply_style)
+        self.addCleanup(motion.set_reduce_motion, False)
 
 
 class HeaderTest(unittest.TestCase):
@@ -174,6 +210,301 @@ class ToastTest(unittest.TestCase):
         self.window.destroy()
         pump(0.4)  # must not touch destroyed widgets
         self.assertIsNone(self.toast._timer)
+
+
+class ChromeCssTest(unittest.TestCase):
+    def test_css_parses_for_every_theme_without_state_transitions(self):
+        for theme in THEMES:
+            with self.subTest(theme=theme.id):
+                css = build_css(theme.ui)
+                provider = Gtk.CssProvider()
+                errors = []
+                provider.connect("parsing-error", lambda _p, _s, error: errors.append(str(error)))
+                provider.load_from_data(css.encode())
+                self.assertEqual(errors, [])
+                # Hover/active states are instant; glyph opacity is the only motion (StateFader).
+                self.assertNotIn("transition", css)
+                self.assertIn(f"background: alpha({theme.ui['overlay']}, 0.067)", css)
+                self.assertIn(f"inset 0 -2px {theme.ui['accent']}", css)
+
+    def test_notice_text_is_legible_on_black_in_every_theme(self):
+        import re
+        for theme in THEMES:
+            with self.subTest(theme=theme.id):
+                css = build_css(theme.ui)
+                rule = re.search(r"\.idgent-terminal-toast \{([^}]*)\}", css)[1]
+                colour = re.search(r"[^-]color: (#[0-9a-f]{6})", rule)[1]
+                self.assertGreaterEqual(_contrast(colour, "#1a1a1a"), 4.5)
+                if _contrast(theme.ui["warning"], "#1a1a1a") >= 4.5:
+                    self.assertEqual(colour, theme.ui["warning"])
+
+
+class HeaderChromeTest(ThemedTest):
+    """Pane header and clickable icons styled like Reference app's sidebar tab strips."""
+
+    def setUp(self):
+        super().setUp()
+        self.window = Gtk.Window()
+        self.window.set_default_size(400, 100)
+        self.addCleanup(self.window.destroy)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        self.inactive, self.active = PaneHeader(), PaneHeader()
+        for header in (self.inactive, self.active):
+            box.pack_start(header, False, False, 0)
+        self.active.set_active(True)
+        self.add_button = AddButton()
+        box.pack_start(self.add_button, False, False, 0)
+        self.window.add(box)
+        self.window.show_all()
+        self.assertTrue(poll(lambda: self.active.get_allocated_height() > 1))
+
+    def test_compact_secondary_strip_with_13px_labels(self):
+        for header in (self.inactive, self.active):
+            self.assertTrue(28 <= header.get_allocated_height() <= 32, header.get_allocated_height())
+            context = header.get_style_context()
+            self.assertEqual(rgba(context.get_background_color(Gtk.StateFlags.NORMAL)),
+                             hex_rgb(self.ui["sidebar_bg"]) + (1.0,))
+            label = header.label_button.get_style_context()
+            self.assertEqual(label.get_property("font-size", Gtk.StateFlags.NORMAL), 13)
+        self.assertEqual(self.inactive.get_allocated_height(), self.active.get_allocated_height())
+        muted = self.inactive.label_button.get_style_context().get_color(Gtk.StateFlags.NORMAL)
+        normal = self.active.label_button.get_style_context().get_color(Gtk.StateFlags.NORMAL)
+        self.assertEqual(rgba(muted)[:3], hex_rgb(self.ui["muted"]))
+        self.assertEqual(rgba(normal)[:3], hex_rgb(self.ui["foreground"]))
+        self.assertTrue(poll(lambda: near(pixel(self.inactive, 2, 2), hex_rgb(self.ui["sidebar_bg"]))))
+
+    def test_underline_only_on_the_focused_active_pane(self):
+        accent = hex_rgb(self.ui["accent"])
+
+        def underline(header):
+            button = header.label_button
+            height = button.get_allocated_height()
+            return [pixel(button, button.get_allocated_width() // 2, height - row) for row in (1, 2, 3)]
+
+        # Active but unfocused: normal label, no underline.
+        self.assertTrue(poll(lambda: not near(underline(self.active)[0], accent, 40), 1))
+        self.active.set_focused(True)
+        self.inactive.set_focused(False)
+        self.assertTrue(poll(lambda: all(near(p, accent) for p in underline(self.active)[:2])),
+                        underline(self.active))
+        # Exactly 2 px thick, and absent from the other header.
+        self.assertFalse(near(underline(self.active)[2], accent, 40))
+        self.assertFalse(any(near(p, accent, 40) for p in underline(self.inactive)))
+        self.active.set_focused(False)
+        self.assertTrue(poll(lambda: not near(underline(self.active)[0], accent, 40)))
+        # A focused but inactive pane (e.g. while closing) gets no underline either.
+        self.inactive.set_focused(True)
+        pump(0.1)
+        self.assertFalse(any(near(p, accent, 40) for p in underline(self.inactive)))
+
+    def test_clickable_icon_states(self):
+        overlay = hex_rgb(self.ui["overlay"])
+        for button in (self.active.fullscreen_button, self.active.delete_button):
+            context = button.get_style_context()
+            self.assertEqual(context.get_property("border-radius", Gtk.StateFlags.NORMAL), 4)
+            self.assertEqual(rgba(context.get_background_color(Gtk.StateFlags.NORMAL))[3], 0)
+            self.assertEqual(rgba(context.get_color(Gtk.StateFlags.NORMAL))[:3], hex_rgb(self.ui["muted"]))
+        fullscreen = self.active.fullscreen_button.get_style_context()
+        self.assertEqual(rgba(fullscreen.get_background_color(Gtk.StateFlags.PRELIGHT)), overlay + (0.067,))
+        self.assertEqual(rgba(fullscreen.get_color(Gtk.StateFlags.PRELIGHT))[:3], hex_rgb(self.ui["foreground"]))
+        delete = self.active.delete_button.get_style_context()
+        danger = hex_rgb(self.ui["danger"])
+        self.assertEqual(rgba(delete.get_background_color(Gtk.StateFlags.PRELIGHT)), danger + (0.15,))
+        self.assertEqual(rgba(delete.get_color(Gtk.StateFlags.PRELIGHT))[:3], danger)
+        # The hover background is drawn at once (pixel probe on the realised button).
+        button = self.active.fullscreen_button
+        base = hex_rgb(self.ui["sidebar_bg"])
+        # Left of the centred 16 px glyph and clear of the 4 px rounded corners.
+        probe = lambda: pixel(button, 2, button.get_allocated_height() // 2)
+        self.assertTrue(poll(lambda: near(probe(), base)), probe())
+        button.set_state_flags(Gtk.StateFlags.PRELIGHT, False)
+        blended = tuple(round(b + (o - b) * 0.067) for b, o in zip(base, overlay))
+        self.assertTrue(poll(lambda: near(probe(), blended, 2), 0.3), probe())
+        self.assertNotEqual(blended, base)
+
+    def test_glyph_opacity_fades_on_hover(self):
+        for button in (self.active.fullscreen_button, self.active.delete_button, self.add_button):
+            with self.subTest(button=button.icon_name):
+                glyph = button.get_child()
+                self.assertAlmostEqual(glyph.get_opacity(), GLYPH_OPACITY, places=2)
+                started = time.monotonic()
+                button.emit("enter-notify-event", Gdk.Event.new(Gdk.EventType.ENTER_NOTIFY))
+                self.assertLess(glyph.get_opacity(), 1.0)
+                self.assertTrue(poll(lambda: glyph.get_opacity() == 1.0, 1))
+                elapsed = time.monotonic() - started
+                self.assertGreater(elapsed, 0.08)
+                self.assertLess(elapsed, 0.6)
+                button.emit("leave-notify-event", Gdk.Event.new(Gdk.EventType.LEAVE_NOTIFY))
+                self.assertTrue(poll(lambda: abs(glyph.get_opacity() - GLYPH_OPACITY) < 0.01, 1))
+        # A replaced icon keeps the current glyph opacity.
+        self.active.set_maximized(True)
+        self.assertAlmostEqual(self.active.fullscreen_button.get_child().get_opacity(), GLYPH_OPACITY, places=2)
+
+    def test_glyph_hover_is_instant_with_reduced_motion(self):
+        motion.set_reduce_motion(True)
+        button = self.active.delete_button
+        button.emit("enter-notify-event", Gdk.Event.new(Gdk.EventType.ENTER_NOTIFY))
+        self.assertEqual(button.get_child().get_opacity(), 1.0)
+        button.emit("leave-notify-event", Gdk.Event.new(Gdk.EventType.LEAVE_NOTIFY))
+        self.assertAlmostEqual(button.get_child().get_opacity(), GLYPH_OPACITY, places=2)
+
+
+class NoticeToastTest(ThemedTest):
+    """The limit toast as an Reference app notice: style, motion and 4 s auto-hide."""
+
+    def setUp(self):
+        super().setUp()
+        self.window = Gtk.Window()
+        self.window.set_default_size(400, 200)
+        self.addCleanup(self.window.destroy)
+        overlay = Gtk.Overlay()
+        overlay.add(Gtk.Label(label="body"))
+        self.toast = LimitToast()
+        self.toast.set_margin_top(36)
+        self.toast.set_margin_end(10)
+        overlay.add_overlay(self.toast)
+        self.window.add(overlay)
+        self.window.show_all()
+        self.assertTrue(poll(lambda: self.window.get_mapped()))
+
+    def popup_with_fake_clock(self):
+        """popup(), capturing the auto-hide timer instead of waiting for it."""
+        timers = []
+        real = GLib.timeout_add
+
+        def capture(interval, callback, *args):
+            timers.append((interval, callback))
+            return real(3_600_000, callback, *args)
+
+        with patch.object(GLib, "timeout_add", capture):
+            self.toast.popup()
+        self.assertEqual(len(timers), 1)
+        return timers[0]
+
+    def test_notice_style(self):
+        context = self.toast.get_style_context()
+        self.assertEqual(rgba(context.get_background_color(Gtk.StateFlags.NORMAL)), (0, 0, 0, 0.9))
+        self.assertEqual(context.get_property("border-radius", Gtk.StateFlags.NORMAL), 8)
+        self.assertEqual(context.get_property("font-size", Gtk.StateFlags.NORMAL), 13)
+        padding = context.get_padding(Gtk.StateFlags.NORMAL)
+        self.assertEqual((padding.top, padding.right, padding.bottom, padding.left), (8, 12, 8, 12))
+        self.assertEqual(context.get_border(Gtk.StateFlags.NORMAL).left, 0)
+        self.assertEqual(rgba(context.get_color(Gtk.StateFlags.NORMAL))[:3], hex_rgb(self.ui["warning"]))
+        self.assertEqual(self.toast.get_text(), LIMIT_TEXT)
+
+    def test_timings_follow_the_spec(self):
+        self.assertEqual((LimitToast.SHOW_MS, LimitToast.ENTER_MS, LimitToast.FADE_MS), (4000, 100, 120))
+        interval, _callback = self.popup_with_fake_clock()
+        self.assertEqual(interval, 4000)
+
+    def test_slides_in_then_fades_out_and_hides(self):
+        interval, expire = self.popup_with_fake_clock()
+        # Entrance: starts transparent, SLIDE_PX lower, and settles within ~100 ms.
+        self.assertTrue(self.toast.get_visible())
+        self.assertEqual(self.toast.get_opacity(), 0.0)
+        self.assertEqual(self.toast.get_margin_top(), 36 + LimitToast.SLIDE_PX)
+        started = time.monotonic()
+        self.assertTrue(poll(lambda: self.toast.get_opacity() == 1.0
+                             and self.toast.get_margin_top() == 36, 1))
+        self.assertGreater(time.monotonic() - started, 0.05)
+        # Geometry: top-right, under the margins, 8 px corners drawn over the body.
+        self.assertTrue(poll(lambda: self.toast.get_allocated_width() > 1))
+        x, y = self.toast.translate_coordinates(self.window, 0, 0)
+        width = self.toast.get_allocated_width()
+        self.assertEqual((y, x + width), (36, self.window.get_allocated_width() - 10))
+        self.assertLessEqual(width, 300)
+        self.assertTrue(poll(lambda: max(pixel(self.toast, width // 2, 2)) < 40))
+        bg = hex_rgb(self.ui["bg"])
+        self.assertTrue(near(pixel(self.toast, 0, 0), bg, 25), pixel(self.toast, 0, 0))
+        # The "clock" reaches 4 s: the notice fades out over ~120 ms, then hides.
+        started = time.monotonic()
+        self.assertFalse(expire())
+        self.assertTrue(self.toast.get_visible())
+        self.assertTrue(poll(lambda: not self.toast.get_visible(), 1))
+        self.assertGreater(time.monotonic() - started, 0.08)
+        self.assertEqual(self.toast.get_opacity(), 1.0)
+        self.assertEqual(self.toast.get_margin_top(), 36)
+
+    def test_repeat_during_exit_brings_it_back(self):
+        _interval, expire = self.popup_with_fake_clock()
+        self.assertTrue(poll(lambda: self.toast.get_opacity() == 1.0, 1))
+        expire()
+        pump(0.05)
+        self.toast.popup()
+        self.assertTrue(poll(lambda: self.toast.get_opacity() == 1.0, 1))
+        pump(0.2)
+        self.assertTrue(self.toast.get_visible())
+        self.assertEqual(self.toast.get_margin_top(), 36)
+
+    def test_reduced_motion_is_instant(self):
+        motion.set_reduce_motion(True)
+        _interval, expire = self.popup_with_fake_clock()
+        self.assertTrue(self.toast.get_visible())
+        self.assertEqual((self.toast.get_opacity(), self.toast.get_margin_top()), (1.0, 36))
+        expire()
+        self.assertFalse(self.toast.get_visible())
+        self.assertEqual(self.toast.get_opacity(), 1.0)
+
+    def test_unmap_settles_a_running_notice(self):
+        self.toast.popup()
+        self.window.hide()
+        self.assertFalse(self.toast.get_visible())
+        self.assertIsNone(self.toast._timer)
+        self.assertEqual((self.toast.get_opacity(), self.toast.get_margin_top()), (1.0, 36))
+
+
+class FadeWrapperTest(ThemedTest):
+    """terminal_bar.fade() is a compatibility wrapper over motion.animate."""
+
+    def setUp(self):
+        super().setUp()
+        self.window = Gtk.Window()
+        self.addCleanup(self.window.destroy)
+        self.box = Gtk.Box()
+        self.box.set_size_request(50, 50)
+        self.window.add(self.box)
+        self.window.show_all()
+        self.assertTrue(poll(lambda: self.box.get_mapped()))
+
+    def test_animates_and_calls_done(self):
+        done = []
+        fade(self.box, 0.0, 1.0, 150, lambda: done.append(True))
+        self.assertEqual(self.box.get_opacity(), 0.0)
+        self.assertTrue(poll(lambda: 0 < self.box.get_opacity() < 1, 1))
+        self.assertTrue(poll(lambda: done == [True], 1))
+        self.assertEqual(self.box.get_opacity(), 1.0)
+
+    def test_cancel_leaves_the_current_opacity(self):
+        fade(self.box, 1.0, 0.0, 300)
+        self.assertTrue(poll(lambda: self.box.get_opacity() < 0.9, 1))
+        cancel_fade(self.box)
+        value = self.box.get_opacity()
+        pump(0.4)
+        self.assertEqual(self.box.get_opacity(), value)
+        self.assertGreater(value, 0)
+
+    def test_jumps_when_unmapped_disabled_or_reduced(self):
+        done = []
+        fade(self.box, 1.0, 0.0, 0, lambda: done.append(0))
+        self.assertEqual((self.box.get_opacity(), done), (0.0, [0]))
+        motion.set_reduce_motion(True)
+        fade(self.box, 0.0, 1.0, 200, lambda: done.append(1))
+        self.assertEqual((self.box.get_opacity(), done), (1.0, [0, 1]))
+        motion.set_reduce_motion(False)
+        self.window.hide()
+        fade(self.box, 1.0, 0.5, 200, lambda: done.append(2))
+        self.assertAlmostEqual(self.box.get_opacity(), 0.5, places=2)
+        self.assertEqual(done, [0, 1, 2])
+
+    def test_unmap_mid_fade_settles_at_the_end_value(self):
+        done = []
+        fade(self.box, 0.0, 1.0, 400, lambda: done.append(True))
+        self.assertTrue(poll(lambda: self.box.get_opacity() > 0, 1))
+        self.window.hide()
+        self.assertEqual((self.box.get_opacity(), done), (1.0, [True]))
+        self.window.show()
+        pump(0.2)
+        self.assertEqual(done, [True])
 
 
 class PanelFixture:
@@ -521,6 +852,23 @@ class PanelBarMixin(PanelFixture):
         second.terminal.emit("focus-in-event", Gdk.Event.new(Gdk.EventType.FOCUS_CHANGE))
         self.assertEqual(active(), [False, True])
 
+    def test_focus_moves_the_header_underline(self):
+        first, second = self.panel._panes[0], self.add()
+        event = Gdk.Event.new(Gdk.EventType.FOCUS_CHANGE)
+        focused = lambda: [p.header.get_style_context().has_class("focused") for p in self.panel._panes]
+        first.terminal.emit("focus-in-event", event)
+        self.assertEqual(focused(), [True, False])
+        self.assertIs(self.panel._active, first)
+        first.terminal.emit("focus-out-event", event)
+        second.terminal.emit("focus-in-event", event)
+        self.assertEqual(focused(), [False, True])
+        self.assertIs(self.panel._active, second)
+        second.terminal.emit("focus-out-event", event)
+        self.assertEqual(focused(), [False, False])
+        # Heights and the "+" placement are unchanged by the new header style.
+        self.assertTrue(poll(lambda: second.header.get_allocated_height() == self.panel.HEADER_HEIGHT))
+        self.assertLessEqual(self.panel.HEADER_HEIGHT, 32)
+
     def test_panel_hidden_hides_overlay_widgets(self):
         self.panel.hide()
         self.assertFalse(self.panel.add_button.get_mapped())
@@ -640,6 +988,24 @@ class AnimationMixin(PanelFixture):
         self.assertEqual(events, [])
         self.assertEqual(self.panel._closing, [])
         self.assertTrue(poll(lambda: not alive(second_pid)))
+
+    def test_reduced_motion_adds_and_removes_instantly(self):
+        self.addCleanup(motion.set_reduce_motion, False)
+        motion.set_reduce_motion(True)
+        self.assertTrue(poll(lambda: self.panel.get_mapped()))
+        events = []
+        self.panel.connect("last-closed", lambda _p: events.append(True))
+        self.assertTrue(self.panel.new_terminal())
+        pane = self.panel._active
+        self.track(pane)
+        self.assertEqual(pane.frame.get_opacity(), 1.0)
+        self.assertEqual(self.panel.terminal_count(), 2)
+        self.panel.close_current()
+        self.assertIsNone(pane.frame.get_parent())
+        self.assertEqual(self.panel._closing, [])
+        self.assertEqual(self.labels(), ["bash1"])
+        self.panel.close_current()
+        self.assertEqual(events, [True])
 
     def test_synchronous_when_animation_disabled(self):
         self.panel.ANIMATION_MS = 0
