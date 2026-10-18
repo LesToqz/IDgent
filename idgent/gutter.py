@@ -17,7 +17,7 @@ DEFAULT_CHROME = {
     'gutter_border': '#1e1e1e', 'current_line_bg': '#282828', 'bracket_bg': '#3a3d41',
 }
 MIN_DIGITS = 3
-PADDING_LEFT, PADDING_RIGHT = 10, 12
+PADDING_LEFT, PADDING_RIGHT = 10, 24
 BRACKET_RANGE = 20000
 PAIRS = {'(': ')', '[': ']', '{': '}'}
 CLOSERS = {close: open_ for open_, close in PAIRS.items()}
@@ -61,6 +61,7 @@ class ViewChrome:
     def __init__(self, view: Gtk.TextView, chrome: dict[str, str] | None = None):
         self.view, self.buffer = view, view.get_buffer()
         self.colors = dict(DEFAULT_CHROME)
+        self.line_numbers = self.highlight_line = True
         self.digits = 0
         self.active_line = -1
         self.font_size = 11
@@ -134,9 +135,9 @@ class ViewChrome:
         family = self.view.get_style_context().get_property('font', Gtk.StateFlags.NORMAL).get_family()
         css = f'''
             textview, textview text {{ font-size: {size}pt; }}
-            textview border.left {{ background-color: {colors['gutter_bg']};
-                border-right: 1px solid {colors['gutter_border']}; }}
-            label.idgent-gutter-num {{ font-family: "{family}"; font-size: {size}pt;
+            textview border.left {{ background-color: transparent; border: 0; }}
+            label.idgent-gutter-num {{ font-family: "{family}"; font-size: 12px;
+                font-feature-settings: "tnum";
                 color: {colors['gutter_fg']}; }}
             label.idgent-gutter-num.active {{ color: {colors['gutter_fg_active']}; }}
         '''.encode()
@@ -144,11 +145,23 @@ class ViewChrome:
             self._css = css
             self.provider.load_from_data(css)
 
+    def set_line_numbers(self, enabled: bool) -> None:
+        self.line_numbers = bool(enabled)
+        for label in self.labels:
+            label.set_no_show_all(not self.line_numbers)
+            if not self.line_numbers:
+                label.hide()
+        self.update_width()
+
+    def set_highlight_line(self, enabled: bool) -> None:
+        self.highlight_line = bool(enabled)
+        self.refresh_tags()
+
     def update_width(self) -> None:
         """Resize the left border window for the line count and the view's current font."""
         digits = digits_for(self.buffer.get_line_count())
         layout = layout_for(self.view, '0' * digits)
-        width = layout.get_pixel_size()[0] + PADDING_LEFT + PADDING_RIGHT
+        width = layout.get_pixel_size()[0] + PADDING_LEFT + PADDING_RIGHT if self.line_numbers else 0
         if width != self.view.get_border_window_size(Gtk.TextWindowType.LEFT):
             self.view.set_border_window_size(Gtk.TextWindowType.LEFT, width)
         self.digits = digits
@@ -179,7 +192,7 @@ class ViewChrome:
         buffer.remove_tag(self.bracket_tag, start, end)
         cursor = buffer.get_iter_at_mark(buffer.get_insert())
         selection = buffer.get_selection_bounds()
-        if not selection or selection[0].get_line() == selection[1].get_line():
+        if self.highlight_line and (not selection or selection[0].get_line() == selection[1].get_line()):
             first = cursor.copy()
             first.set_line_offset(0)
             last = first.copy()
@@ -269,6 +282,8 @@ class ViewChrome:
             self._syncing = False
 
     def _place_labels(self) -> None:
+        if not self.line_numbers:
+            return
         view, buffer = self.view, self.buffer
         rect = view.get_visible_rect()
         self.active_line = buffer.get_iter_at_mark(buffer.get_insert()).get_line()
@@ -327,3 +342,12 @@ class ViewChrome:
 
 def valid_color(value: object) -> bool:
     return isinstance(value, str) and Gdk.RGBA().parse(value)
+
+
+def build_css(ui: dict[str, str]) -> str:
+    """Theme colours are shared; the view-local provider controls only zoom/fallbacks."""
+    return f'''
+.idgent-editor textview border.left {{ background: transparent; border: 0; }}
+.idgent-editor textview label.idgent-gutter-num {{ color: {ui['faint']}; }}
+.idgent-editor textview label.idgent-gutter-num.active {{ color: {ui['muted']}; }}
+'''

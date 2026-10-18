@@ -213,6 +213,21 @@ class GutterSyncTest(unittest.TestCase):
             settle()
             self.assert_aligned(tab)
 
+    def test_hide_show_gutter_preserves_scroll_alignment_and_highlight_toggle(self):
+        tab = self.open()
+        self.at(tab, 90)
+        self.panel.set_line_numbers(False)
+        self.panel.set_highlight_line(False)
+        settle()
+        self.assertEqual(tab.chrome.width, 0)
+        self.at(tab, 130)
+        self.assertFalse(tab.buffer.get_iter_at_line(130).has_tag(tab.chrome.line_tag))
+        self.panel.set_line_numbers(True)
+        self.panel.set_highlight_line(True)
+        settle()
+        self.assert_aligned(tab)
+        self.assertTrue(tab.buffer.get_iter_at_line(130).has_tag(tab.chrome.line_tag))
+
     def test_twenty_thousand_lines_digit_growth_and_cost(self):
         tab = self.open('row\n' * 98)
         width = tab.chrome.width

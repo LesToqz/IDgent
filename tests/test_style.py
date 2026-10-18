@@ -73,7 +73,7 @@ class StyleTest(unittest.TestCase):
         baselines = (
             # Explorer baseline re-baselined by explorer-polish.
             (build_explorer_css, '15a72cadf487035d4db7fdf8ec0005d035a4c80e6d41076d646eeb75c4e4497f'),
-            (build_editor_css, 'fb50cdcd94fa21ef79796db3a0c13315098dd4141b88c93f58aff43ee82daae1'),
+            (build_editor_css, '8371e5d6e34fb59a3aaf87f768ee502dbc1c5bc84dc48e8de4d1aba547966326'),  # re-baselined by tabs-polish
             (build_terminal_css, 'e53922f9d2ed7f7ca2da349f359dd33342c8aac55ae033dfc8b555ae0b6b0415'),  # re-baselined by terminal-polish
         )
         for builder, expected in baselines:
@@ -213,8 +213,8 @@ class StyleTest(unittest.TestCase):
                         self.assert_color(sidebar, theme.ui['sidebar_bg'], background=True)
                         self.assert_color(view, theme.ui['editor_fg'])
                         self.assert_color(view, theme.ui['bg'], background=True)
-                        self.assert_color(editor.status, theme.ui['status_fg'])
-                        self.assert_color(editor.status, theme.ui['status_bg'], background=True)
+                        self.assert_color(editor.status, theme.ui['muted'])
+                        self.assert_color(editor.status, theme.ui['sidebar_bg'], background=True)
                         self.assert_color(bar, theme.ui['sidebar_bg'], background=True)
                         self.assert_color(bar.title_label, theme.ui['title_fg'])
                         self.assertEqual(editor.syntax_style, theme.syntax)
@@ -430,9 +430,9 @@ class StyleTest(unittest.TestCase):
             self.assertTrue(editor.get_realized())
             self.assertTrue(editor.status.get_style_context().has_class('idgent-status'))
             background = editor.status.get_style_context().get_background_color(Gtk.StateFlags.NORMAL)
-            self.assertAlmostEqual(background.red, 0, places=2)
-            self.assertAlmostEqual(background.green, 122 / 255, places=2)
-            self.assertAlmostEqual(background.blue, 204 / 255, places=2)
+            self.assertAlmostEqual(background.red, 37 / 255, places=2)
+            self.assertAlmostEqual(background.green, 37 / 255, places=2)
+            self.assertAlmostEqual(background.blue, 38 / 255, places=2)
             # The five-pixel separator retains a useful drag target around its one-pixel line.
             handle = paned.get_handle_window().get_geometry()
             self.assertGreaterEqual(handle.width, 5)

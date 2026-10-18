@@ -199,3 +199,288 @@ class PolishTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TabsPolishTest(unittest.TestCase):
+    """WP-6: allocated geometry, actual rendered pixels and editing behaviours."""
+    def setUp(self):
+        from idgent import style, motion
+        from idgent.themes import get_theme
+        self.theme = get_theme('idgent-dark')
+        style.apply_theme(self.theme)
+        motion.set_reduce_motion(True)
+        self.addCleanup(motion.set_reduce_motion, False)
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.window = Gtk.Window()
+        self.window.set_default_size(1000, 600)
+        self.panel = editor.EditorPanel()
+        self.panel.set_syntax_style(self.theme.syntax)
+        self.panel.set_chrome(self.theme.chrome)
+        self.window.add(self.panel)
+        self.window.show_all()
+        self.addCleanup(self.window.destroy)
+        self.settle()
+
+    @staticmethod
+    def settle(seconds=.08):
+        end = time.monotonic() + seconds
+        while time.monotonic() < end:
+            pump(1)
+            time.sleep(.002)
+
+    def open(self, name='a.py', text='one\ntwo\nthree'):
+        from pathlib import Path
+        path = Path(self.directory.name) / name
+        path.write_text(text)
+        self.panel.open_file(str(path))
+        self.settle()
+        return self.panel._current()
+
+    def key(self, tab, key, state=0):
+        event = Gdk.Event.new(Gdk.EventType.KEY_PRESS)
+        event.keyval, event.state = key, Gdk.ModifierType(state)
+        return self.panel._key_press(tab.view, event, tab)
+
+    def pixels(self):
+        return Gdk.pixbuf_get_from_window(self.window.get_window(), 0, 0,
+                                         self.window.get_allocated_width(), self.window.get_allocated_height())
+
+    @staticmethod
+    def pixel(pixbuf, x, y):
+        offset = y * pixbuf.get_rowstride() + x * pixbuf.get_n_channels()
+        return tuple(pixbuf.get_pixels()[offset:offset + 3])
+
+    @staticmethod
+    def rgb(value):
+        return tuple(int(value[n:n + 2], 16) for n in (1, 3, 5))
+
+    def test_header_tab_sizes_and_rounded_corner_pixels(self):
+        from idgent import style
+        from idgent.themes import get_theme
+        first = self.open()
+        self.open('b.py')
+        self.panel.notebook.set_current_page(0)
+        for theme_id in ('idgent-dark', 'idgent-light'):
+            theme = get_theme(theme_id)
+            style.apply_theme(theme)
+            self.settle()
+            hx, hy = first.header.translate_coordinates(self.window, 0, 0)
+            # Tab CSS node adds 1px borders and 3px horizontal padding.
+            self.assertEqual(first.header.get_allocated_height() + 2, 34)
+            self.assertEqual(first.header.get_allocated_width() + 8, 200)
+            self.assertEqual(first.page.translate_coordinates(self.panel.notebook, 0, 0)[1], 40)
+            pb = self.pixels()
+            self.assertEqual(self.pixel(pb, hx - 4, hy - 1), self.rgb(theme.ui['sidebar_bg']))
+            self.assertEqual(self.pixel(pb, hx + 80, hy - 1), self.rgb(theme.ui['border']))
+            self.assertEqual(self.pixel(pb, hx + 80, hy + 1), self.rgb(theme.ui['bg']))
+
+    def test_close_and_dividers_hover_instant_and_dirty_stays_visible(self):
+        first, second, third = self.open(), self.open('b.py'), self.open('c.py')
+        def opacity(tab):
+            return tab.close.get_style_context().get_property('opacity', tab.close.get_state_flags())
+        self.assertEqual(opacity(first), 0)
+        self.assertEqual(opacity(third), 1)
+        event = Gdk.Event.new(Gdk.EventType.ENTER_NOTIFY)
+        first.header.emit('enter-notify-event', event)
+        self.assertEqual(opacity(first), 1)
+        first.header.emit('leave-notify-event', Gdk.Event.new(Gdk.EventType.LEAVE_NOTIFY))
+        self.assertEqual(opacity(first), 0)
+        first.buffer.insert_at_cursor('dirty')
+        self.assertTrue(first.label.get_text().startswith('● '))
+        self.assertEqual(first.divider.get_opacity(), 1)
+        self.assertEqual(second.divider.get_opacity(), 0)
+        self.assertEqual(third.divider.get_opacity(), 0)
+        self.assertEqual(first.divider.get_allocated_width(), 1)
+        self.assertEqual(first.divider.get_allocated_height(), 13)
+
+    def test_tab_widths_shrink_ellipsis_and_reorder_middle_close(self):
+        tabs = [self.open(f'long-name-{n}-' + 'file' * 12 + '.py') for n in range(8)]
+        for tab in tabs:
+            self.assertGreaterEqual(tab.header.get_allocated_width() + 8, 120)
+            self.assertLessEqual(tab.header.get_allocated_width() + 8, 320)
+        self.panel.notebook.reorder_child(tabs[-1].page, 0)
+        self.assertIs(self.panel._current(), tabs[-1])
+        event = Gdk.Event.new(Gdk.EventType.BUTTON_PRESS)
+        event.button = 2
+        tabs[0].header.emit('button-press-event', event)
+        self.assertNotIn(tabs[0], self.panel.tabs)
+        self.assertEqual(self.panel.notebook.get_n_pages(), 7)
+
+    def test_status_bottom_right_reserves_last_line_with_find_and_zoom(self):
+        tab = self.open(text='line\n' * 180 + 'LAST LINE')
+        for size in (7, 11, 32):
+            for find in (False, True):
+                self.panel.set_font_size(size)
+                self.panel.search_bar.set_search_mode(find)
+                self.settle(.3)
+                tab.view.scroll_to_iter(tab.buffer.get_end_iter(), 0, True, 0, 1)
+                self.settle(.3)
+                status = self.panel.status
+                sx, sy = status.translate_coordinates(self.panel.overlay, 0, 0)
+                self.assertEqual(sx + status.get_allocated_width(), self.panel.overlay.get_allocated_width())
+                self.assertEqual(sy + status.get_allocated_height(), self.panel.overlay.get_allocated_height())
+                self.assertLess(status.get_allocated_width(), self.panel.get_allocated_width())
+                self.assertEqual(self.panel.stack.get_margin_bottom(), status.get_allocated_height())
+                end = tab.view.get_iter_location(tab.buffer.get_end_iter())
+                _, bottom = tab.view.buffer_to_window_coords(Gtk.TextWindowType.WIDGET, end.x, end.y + end.height)
+                _, bottom = tab.view.translate_coordinates(self.panel.overlay, 0, bottom)
+                self.assertLessEqual(bottom, sy)
+                self.assertIn('Ln 181, Col 10', status.get_text())
+
+    def test_status_item_hover_has_real_overlay_pixels(self):
+        self.open()
+        item = self.panel.status.items[0].get_parent()
+        x, y = item.translate_coordinates(self.window, 1, 5)
+        before = self.pixel(self.pixels(), x, y)
+        item.get_parent().emit('enter-notify-event', Gdk.Event.new(Gdk.EventType.ENTER_NOTIFY))
+        self.settle()
+        self.assertNotEqual(before, self.pixel(self.pixels(), x, y))
+        item.get_parent().emit('leave-notify-event', Gdk.Event.new(Gdk.EventType.LEAVE_NOTIFY))
+        self.settle()
+        self.assertEqual(before, self.pixel(self.pixels(), x, y))
+
+    def test_gutter_defaults_roles_gap_and_toggles_survive_show_all(self):
+        tab = self.open()
+        labels = [label for label in tab.chrome.labels if label.get_visible()]
+        self.assertTrue(labels)
+        label = labels[0]
+        self.assertEqual(tab.chrome.width - label.get_allocation().x - label.get_allocated_width(), 24)
+        font = label.get_style_context().get_property('font', Gtk.StateFlags.NORMAL)
+        self.assertAlmostEqual(font.get_size() / 1024 * Gdk.Screen.get_default().get_resolution() / 72, 12)
+        self.assertEqual(label.get_style_context().get_color(Gtk.StateFlags.NORMAL).to_string(), 'rgb(102,102,102)')
+        self.assertTrue(tab.buffer.get_iter_at_line(2).has_tag(tab.chrome.line_tag))
+        self.panel.set_line_numbers(False)
+        self.panel.set_highlight_line(False)
+        self.window.show_all()
+        self.settle()
+        self.assertEqual(tab.chrome.width, 0)
+        self.assertFalse(any(label.get_visible() for label in tab.chrome.labels))
+        self.assertFalse(tab.buffer.get_iter_at_line(2).has_tag(tab.chrome.line_tag))
+        new = self.open('new.py')
+        self.assertEqual(new.chrome.width, 0)
+        self.assertFalse(new.buffer.get_iter_at_line(2).has_tag(new.chrome.line_tag))
+        self.panel.set_line_numbers(True)
+        self.panel.set_highlight_line(True)
+        self.settle()
+        self.assertGreater(new.chrome.width, 0)
+        self.assertTrue(any(label.get_visible() for label in new.chrome.labels))
+        self.assertTrue(new.buffer.get_iter_at_line(2).has_tag(new.chrome.line_tag))
+
+    def test_indent_changes_insertion_unindent_and_tab_stops(self):
+        tab = self.open(text='')
+        self.key(tab, Gdk.KEY_Tab)
+        self.assertEqual(editor._text(tab.buffer), '    ')
+        self.panel.set_indent(False, 2)
+        width_two = tab.view.get_tabs().get_tab(0).location
+        self.key(tab, Gdk.KEY_Tab)
+        self.assertEqual(editor._text(tab.buffer), '      ')
+        self.key(tab, Gdk.KEY_ISO_Left_Tab)
+        self.assertEqual(editor._text(tab.buffer), '    ')
+        self.panel.set_indent(True, 8)
+        self.assertGreater(tab.view.get_tabs().get_tab(0).location, width_two)
+        self.key(tab, Gdk.KEY_Tab)
+        self.assertEqual(editor._text(tab.buffer), '    \t')
+        new = self.open('new.py', '')
+        self.assertEqual(new.view.get_tabs().get_tab(0).location, tab.view.get_tabs().get_tab(0).location)
+        self.key(new, Gdk.KEY_Tab)
+        self.assertEqual(editor._text(new.buffer), '\t')
+        self.key(new, Gdk.KEY_ISO_Left_Tab)
+        self.assertEqual(editor._text(new.buffer), '')
+        with self.assertRaises(ValueError):
+            self.panel.set_indent(False, 0)
+
+    def test_auto_pair_default_toggle_skip_selection_and_undo(self):
+        tab = self.open(text='')
+        self.assertFalse(self.key(tab, Gdk.KEY_parenleft))
+        self.panel.set_auto_pair(True)
+        self.assertTrue(self.key(tab, Gdk.KEY_parenleft))
+        self.assertEqual(editor._text(tab.buffer), '()')
+        self.assertEqual(tab.cursor(), 1)
+        self.key(tab, Gdk.KEY_parenright)
+        self.assertEqual(editor._text(tab.buffer), '()')
+        self.assertEqual(tab.cursor(), 2)
+        tab.buffer.select_range(*tab.buffer.get_bounds())
+        self.key(tab, Gdk.KEY_bracketleft)
+        self.assertEqual(editor._text(tab.buffer), '[()]')
+        self.assertEqual(tab.buffer.get_text(*tab.buffer.get_selection_bounds(), True), '()')
+        tab.undo()
+        self.assertEqual(editor._text(tab.buffer), '()')
+        self.panel.set_auto_pair(False)
+        self.assertFalse(self.key(tab, Gdk.KEY_quotedbl))
+        self.panel.set_auto_pair(True)
+        new = self.open('new.py', '')
+        self.key(new, Gdk.KEY_quotedbl)
+        self.assertEqual(editor._text(new.buffer), '""')
+
+    def test_markdown_defaults_readable_width_and_new_tab_preview(self):
+        tab = self.open('note.md', '# Heading\n\n' + 'readable text ' * 100)
+        self.assertEqual(tab.md_mode, 'source')
+        self.panel.set_markdown_mode('preview')
+        self.settle()
+        self.assertEqual(tab.md_preview_view.get_left_margin(), 32)
+        self.panel.set_md_readable_width(True)
+        self.settle()
+        view = tab.md_preview_view
+        self.assertLessEqual(view.get_allocated_width() - view.get_left_margin() - view.get_right_margin(), 700)
+        self.panel.set_md_default_preview(True)
+        other = self.open('next.md', '# New preview')
+        self.assertEqual(other.md_mode, 'preview')
+        self.assertTrue(other.md_renderer.readable_width)
+        self.panel.set_md_default_preview(False)
+        self.assertEqual(other.md_mode, 'preview', 'changing the default preserves an existing choice')
+        self.panel.set_md_readable_width(False)
+        self.assertEqual(view.get_left_margin(), 32)
+        new = self.open('source.md')
+        self.assertEqual(new.md_mode, 'source')
+        self.panel.set_md_readable_width(True)
+        self.window.resize(500, 600)
+        self.panel.set_markdown_mode('preview')
+        self.settle()
+        self.assertEqual(new.md_preview_view.get_left_margin(), 32)
+
+    def test_markdown_icon_pixels_follow_active_mode_and_theme(self):
+        from idgent import style
+        from idgent.themes import get_theme
+        tab = self.open('note.md', '# Title')
+        for theme_id in ('idgent-dark', 'idgent-light'):
+            theme = get_theme(theme_id)
+            style.apply_theme(theme)
+            for mode in ('source', 'preview'):
+                self.panel.set_markdown_mode(mode)
+                self.settle()
+                button = tab.md_buttons[mode]
+                color = button.get_style_context().get_color(button.get_state_flags())
+                expected = self.rgb(theme.ui['accent_text'])
+                self.assertEqual(tuple(round(v * 255) for v in (color.red, color.green, color.blue)), expected)
+                image = button.get_child()
+                x, y = image.translate_coordinates(self.window, 0, 0)
+                pixels = self.pixels()
+                colors = [self.pixel(pixels, x + dx, y + dy) for dx in range(20) for dy in range(20)]
+                self.assertIn(expected, colors, 'the actual icon stroke must use the accent colour')
+        self.key(tab, Gdk.KEY_V, Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.SHIFT_MASK)
+        self.assertEqual(tab.md_mode, 'source')
+
+    def test_close_reflow_motion_and_reduced_motion(self):
+        from idgent import motion
+        first, second, third = self.open(), self.open('b.py'), self.open('c.py')
+        motion.set_reduce_motion(False)
+        self.panel._close_tab(first)
+        self.assertGreater(second.header.get_margin_start(), 0)
+        initial = second.header.get_margin_start()
+        self.settle(.1)
+        self.assertGreater(second.header.get_margin_start(), 0)
+        self.assertLess(second.header.get_margin_start(), initial)
+        self.settle(.3)
+        self.assertEqual(second.header.get_margin_start(), 0)
+        motion.set_reduce_motion(True)
+        self.panel._close_tab(second)
+        self.assertEqual(third.header.get_margin_start(), 0)
+
+    def test_component_css_parses_every_theme(self):
+        from idgent.themes import THEMES
+        self.assertEqual(len(THEMES), 14)
+        for theme in THEMES:
+            with self.subTest(theme=theme.id):
+                provider = Gtk.CssProvider()
+                provider.load_from_data(editor.build_css(theme.ui).encode())

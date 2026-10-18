@@ -127,6 +127,13 @@ class RendererTest(unittest.TestCase):
         self.assertFalse(self.preview.tags['rule'].get_property('strikethrough'))
         self.assertLess(self.preview.tags['container-0-0'].get_priority(), self.preview.tags['strong'].get_priority())
 
+    def test_heading_scales_and_static_font_weights(self):
+        self.render('# H1\n\n## H2\n\n### H3\n\n#### H4\n\n##### H5\n\n###### H6')
+        for level, scale in enumerate((1.618, 1.462, 1.318, 1.188, 1.076, 1), 1):
+            tag = self.preview.tags['h' + str(level)]
+            self.assertAlmostEqual(tag.get_property('scale'), scale)
+            self.assertEqual(tag.get_property('weight'), 700 if level <= 3 else 600)
+
     def test_optional_code_highlighting(self):
         self.render('```python\ndef f():\n    return 123\n```')
         if highlight.AVAILABLE:

@@ -11,9 +11,9 @@ import gi
 
 gi.require_version('Gtk', '3.0')
 gi.require_version('Gdk', '3.0')
-from gi.repository import Gdk, GdkPixbuf, GLib, GObject, Gtk, Pango
+from gi.repository import Gdk, GLib, GObject, Gtk, Pango
 
-from idgent import gutter, highlight, mdview
+from idgent import gutter, highlight, mdview, motion
 
 MAX_FILE_SIZE = 5 * 1024 * 1024
 COMMENT_EXTENSIONS = {'.py', '.sh', '.toml', '.yaml', '.yml', '.conf'}
@@ -69,8 +69,8 @@ def leading_whitespace(line: str) -> str:
     return re.match(r'[ \t]*', line).group(0)
 
 
-def unindent(line: str) -> str:
-    return line[1:] if line.startswith('\t') else line[min(4, len(line) - len(line.lstrip(' '))):]
+def unindent(line: str, width: int = 4) -> str:
+    return line[1:] if line.startswith('\t') else line[min(width, len(line) - len(line.lstrip(' '))):]
 
 
 def toggle_comments(text: str) -> str:
@@ -115,6 +115,36 @@ def _text(buffer: Gtk.TextBuffer) -> str:
     return buffer.get_text(buffer.get_start_iter(), buffer.get_end_iter(), True)
 
 
+class _StatusBar(Gtk.Box):
+    """Separate hover targets while retaining the status label's get_text API."""
+    def __init__(self):
+        super().__init__(spacing=4)
+        self.get_style_context().add_class('idgent-status')
+        self.set_halign(Gtk.Align.END)
+        self.set_valign(Gtk.Align.END)
+        self.items = []
+        for index in range(4):
+            if index:
+                self.pack_start(Gtk.Label(label='|'), False, False, 0)
+            item = Gtk.EventBox()
+            surface = Gtk.Box()
+            surface.get_style_context().add_class('idgent-status-item')
+            label = Gtk.Label()
+            surface.add(label)
+            item.add(surface)
+            item.connect('enter-notify-event', lambda widget, _: widget.get_child().set_state_flags(Gtk.StateFlags.PRELIGHT, False))
+            item.connect('leave-notify-event', lambda widget, _: widget.get_child().unset_state_flags(Gtk.StateFlags.PRELIGHT))
+            self.pack_start(item, False, False, 0)
+            self.items.append(label)
+
+    def set_text(self, text):
+        for label, value in zip(self.items, text.split('|')):
+            label.set_text(value.strip())
+
+    def get_text(self):
+        return '  |  '.join(label.get_text() for label in self.items)
+
+
 class _EditorTab:
     def __init__(self, panel: EditorPanel, path: str, text: str, ending: str, mtime: int):
         self.panel, self.path, self.ending, self.mtime = panel, path, ending, mtime
@@ -127,11 +157,13 @@ class _EditorTab:
         self.view.set_pixels_above_lines(1)
         self.view.set_pixels_below_lines(1)
         self.view.set_wrap_mode(Gtk.WrapMode.NONE)
-        self.view.set_left_margin(6)
+        self.view.set_left_margin(0)
         self.view.set_right_margin(12)
         self.view.set_cursor_visible(True)
         self.highlighter = highlight.Highlighter(self.buffer, panel.syntax_style)
         self.chrome = gutter.ViewChrome(self.view, panel.chrome)
+        self.chrome.set_line_numbers(panel.line_numbers)
+        self.chrome.set_highlight_line(panel.highlight_line)
         self.md_mode = 'source'
         self.md_toggle = self.md_preview_view = self.md_renderer = None
         self._md_timeout = self._md_restore_idle = 0
@@ -140,6 +172,7 @@ class _EditorTab:
         self._source_scroll = self._source_cursor = 0
         self.set_font_size(panel.font_size)
         self.view.connect('scroll-event', panel._scroll)
+        self.view.connect('style-updated', lambda *_: self._set_tab_stops())
         self.detect_language()
         self.source_scroll = Gtk.ScrolledWindow()
         self.source_scroll.add(self.view)
@@ -150,15 +183,35 @@ class _EditorTab:
         self.page.add(self.md_stack)
         self.page.connect('destroy', self._destroy_markdown)
         self._sync_markdown()
-        self.label = Gtk.Label()
-        self.header = Gtk.Box(spacing=6)
-        self.header.pack_start(self.label, True, True, 0)
-        close = Gtk.Button.new_with_label('×')
-        close.get_style_context().add_class('idgent-tab-close')
-        close.set_relief(Gtk.ReliefStyle.NONE)
-        close.set_tooltip_text('Close file')
-        close.connect('clicked', lambda *_: panel._close_tab(self))
-        self.header.pack_start(close, False, False, 0)
+        self.label = Gtk.Label(xalign=0)
+        self.label.set_ellipsize(Pango.EllipsizeMode.END)
+        self.label.set_max_width_chars(32)
+        self.header = Gtk.EventBox()
+        self.header.set_visible_window(False)
+        self.header.add_events(Gdk.EventMask.ENTER_NOTIFY_MASK | Gdk.EventMask.LEAVE_NOTIFY_MASK)
+        self.header.connect('enter-notify-event', lambda *_: self._hover_header(True))
+        self.header.connect('leave-notify-event', lambda *_: self._hover_header(False))
+        self.header.connect('button-press-event', self._header_press)
+        self.header.connect('unmap', lambda *_: self.header.set_margin_start(0))
+        self.header_inner = Gtk.Box(spacing=2)
+        self.header_inner.get_style_context().add_class('idgent-tab-inner')
+        self.header_inner.set_margin_top(3)
+        self.header_inner.set_margin_bottom(3)
+        self.header.add(self.header_inner)
+        self.header_inner.pack_start(self.label, True, True, 0)
+        self.close = Gtk.Button()
+        icon = Gtk.Image.new_from_icon_name('window-close-symbolic', Gtk.IconSize.MENU)
+        icon.set_pixel_size(14)
+        self.close.add(icon)
+        self.close.get_style_context().add_class('idgent-tab-close')
+        self.close.set_relief(Gtk.ReliefStyle.NONE)
+        self.close.set_tooltip_text('Close file')
+        self.close.connect('clicked', lambda *_: panel._close_tab(self))
+        self.header_inner.pack_start(self.close, False, False, 0)
+        self.divider = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL)
+        self.divider.get_style_context().add_class('idgent-tab-divider')
+        self.divider.set_valign(Gtk.Align.CENTER)
+        self.header_inner.pack_end(self.divider, False, False, 0)
         self.history: list[tuple[str, int]] = [(text, 0)]
         self.history_index = 0
         self.action_depth = 0
@@ -171,14 +224,28 @@ class _EditorTab:
         self.view.connect('key-press-event', panel._key_press, self)
         self.update_title()
 
+    def _hover_header(self, hovered):
+        context = self.header_inner.get_style_context()
+        (context.add_class if hovered else context.remove_class)('hover')
+        return False
+
+    def _header_press(self, _widget, event):
+        if event.button == 2:
+            self.panel._close_tab(self)
+            return True
+        return False
+
     def set_font_size(self, size: int) -> None:
         self.chrome.set_font_size(size)
-        layout = gutter.layout_for(self.view, '    ')
+        self._set_tab_stops()
+        if self.md_renderer:
+            self.style_markdown()
+
+    def _set_tab_stops(self) -> None:
+        layout = gutter.layout_for(self.view, ' ' * self.panel.indent_width)
         tabs = Pango.TabArray.new(1, True)
         tabs.set_tab(0, Pango.TabAlign.LEFT, layout.get_pixel_size()[0])
         self.view.set_tabs(tabs)
-        if self.md_renderer:
-            self.style_markdown()
 
     def _sync_markdown(self) -> None:
         enabled = Path(self.path).suffix.lower() in ('.md', '.markdown')
@@ -198,6 +265,7 @@ class _EditorTab:
         self.md_preview_view.connect('scroll-event', self.panel._scroll)
         self.md_scroll = Gtk.ScrolledWindow()
         self.md_scroll.add(self.md_preview_view)
+        self.md_renderer.set_readable_width(self.panel.md_readable_width)
         self.md_stack.add_named(self.md_scroll, 'preview')
         self.md_toggle = Gtk.Box(spacing=2)
         self.md_toggle.get_style_context().add_class('md-toggle')
@@ -211,13 +279,10 @@ class _EditorTab:
             button.set_can_focus(False)
             button.set_tooltip_text(tooltip)
             button.set_size_request(28, 24)
-            button.add(Gtk.Image())
+            button.add(mdview.mode_icon(mode))
             button.connect('clicked', lambda _, choice=mode: self.set_markdown_mode(choice) if not self._md_updating else None)
             self.md_toggle.pack_start(button, False, False, 0)
             self.md_buttons[mode] = button
-        self.md_toggle_provider = Gtk.CssProvider()
-        for widget in (self.md_toggle, *self.md_buttons.values()):
-            widget.get_style_context().add_provider(self.md_toggle_provider, Gtk.STYLE_PROVIDER_PRIORITY_USER + 2)
         self.page.add_overlay(self.md_toggle)
         # Only the pill receives events; the rest of the overlay is the stack.
         self.page.set_overlay_pass_through(self.md_toggle, False)
@@ -225,35 +290,14 @@ class _EditorTab:
         self.md_buttons['source'].set_active(True)
         self.md_stack.set_visible_child_name('source')
         self.page.show_all()
+        if self.panel.md_default_preview:
+            self.set_markdown_mode('preview')
 
     def style_markdown(self) -> None:
         if not self.md_renderer:
             return
         panel, colors = self.panel, self.panel.chrome
         self.md_renderer.set_style(panel.syntax_style, colors, panel.font_size)
-        foreground = self.md_renderer.foreground
-        active, edge = Gdk.RGBA(), Gdk.RGBA()
-        active.parse(colors['bracket_bg'])
-        edge.parse(colors['gutter_fg'])
-        border = 'rgb(' + ','.join(str(round((a * .75 + b * .25) * 255))
-                                  for a, b in zip((active.red, active.green, active.blue),
-                                                  (edge.red, edge.green, edge.blue))) + ')'
-        self.md_toggle_provider.load_from_data(f'''
-            .md-toggle {{ background: {colors['current_line_bg']}; border-radius: 8px; padding: 3px; }}
-            .md-toggle button {{ background: transparent; color: {foreground}; border: 1px solid transparent;
-                border-radius: 6px; padding: 0; min-width: 26px; min-height: 22px;
-                box-shadow: none; outline: none; margin: 0; }}
-            .md-toggle button:hover {{ background: {colors['bracket_bg']}; }}
-            .md-toggle button:checked {{ background: {colors['bracket_bg']}; border-color: {border}; }}
-        '''.encode())
-        paths = {'preview': '<path d="M2 10s3.5-6 8-6 8 6 8 6-3.5 6-8 6-8-6-8-6Z"/><circle cx="10" cy="10" r="2.7"/>',
-                 'source': '<path d="m6 5-5 5 5 5m8-10 5 5-5 5M12 3 8 17"/>'}
-        for mode, button in self.md_buttons.items():
-            svg = f'<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20"><g fill="none" stroke="{foreground}" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round">{paths[mode]}</g></svg>'
-            loader = GdkPixbuf.PixbufLoader.new_with_type('svg')
-            loader.write(svg.encode())
-            loader.close()
-            button.get_child().set_from_pixbuf(loader.get_pixbuf())
 
     def _cancel_markdown(self) -> None:
         for name in ('_md_timeout', '_md_restore_idle'):
@@ -395,6 +439,9 @@ class EditorPanel(Gtk.Box):
         self.syntax_style: dict[str, highlight.SyntaxStyle] = dict(highlight.DARK_PLUS)
         self.chrome: dict[str, str] = dict(gutter.DEFAULT_CHROME)
         self.font_size = self.default_font_size = DEFAULT_FONT_SIZE
+        self.line_numbers = self.highlight_line = True
+        self.indent_tabs, self.indent_width = False, 4
+        self.auto_pair = self.md_default_preview = self.md_readable_width = False
         self._announced_path = ''
         self.tabs: list[_EditorTab] = []
         self.stack = Gtk.Stack()
@@ -402,9 +449,13 @@ class EditorPanel(Gtk.Box):
         self.placeholder.get_style_context().add_class('idgent-empty')
         self.stack.add_named(self.placeholder, 'empty')
         self.notebook = Gtk.Notebook(scrollable=True)
-        self.notebook.connect_after('switch-page', lambda *_: (self._update_status(), self._announce_current()))
+        self.notebook.connect_after('switch-page', lambda *_: (self._update_tabs(), self._update_status(), self._announce_current()))
+        self.notebook.connect('page-reordered', lambda *_: self._update_tabs())
+        self.notebook.connect('size-allocate', lambda *_: self._size_tabs())
         self.stack.add_named(self.notebook, 'editor')
-        self.pack_start(self.stack, True, True, 0)
+        self.overlay = Gtk.Overlay()
+        self.overlay.add(self.stack)
+        self.pack_start(self.overlay, True, True, 0)
         self.search_bar = Gtk.SearchBar()
         self.search_bar.get_style_context().add_class('idgent-find-bar')
         search_box = Gtk.Box(spacing=4)
@@ -419,12 +470,64 @@ class EditorPanel(Gtk.Box):
         self.search_bar.add(search_box)
         self.search_bar.connect_entry(self.search_entry)
         self.pack_start(self.search_bar, False, False, 0)
-        self.status = Gtk.Label(xalign=0)
-        self.status.get_style_context().add_class('idgent-status')
-        self.pack_start(self.status, False, False, 0)
+        self.status = _StatusBar()
+        self.overlay.add_overlay(self.status)
+        # Reserve an entire bottom row, including at maximum zoom and with find open.
+        self.status.connect('size-allocate', lambda _, rect: self.stack.set_margin_bottom(rect.height))
+        self.stack.set_margin_bottom(self.status.get_preferred_height().natural_height)
         self.show_all()
         self.stack.set_visible_child_name('empty')
         self._update_status()
+
+    def _size_tabs(self):
+        width = max(120, min(200, (self.notebook.get_allocated_width() - 16) // max(1, len(self.tabs))))
+        for tab in self.tabs:
+            tab.header.set_size_request(width - 8, 32)
+
+    def _update_tabs(self):
+        current = self.notebook.get_current_page()
+        for tab in self.tabs:
+            index = self.notebook.page_num(tab.page)
+            context = tab.header_inner.get_style_context()
+            (context.add_class if index == current else context.remove_class)('active')
+            tab.divider.set_opacity(0 if index in (current - 1, current) else 1)
+        self._size_tabs()
+
+    def set_line_numbers(self, enabled: bool) -> None:
+        """Show/hide line numbers in existing and future source views."""
+        self.line_numbers = bool(enabled)
+        for tab in self.tabs:
+            tab.chrome.set_line_numbers(self.line_numbers)
+
+    def set_highlight_line(self, enabled: bool) -> None:
+        """Enable/disable the current-line background without changing selection."""
+        self.highlight_line = bool(enabled)
+        for tab in self.tabs:
+            tab.chrome.set_highlight_line(self.highlight_line)
+
+    def set_indent(self, tabs: bool, width: int) -> None:
+        """Configure Tab/Shift+Tab insertion and displayed tab stops (default: four spaces)."""
+        width = int(width)
+        if width < 1 or width > 16:
+            raise ValueError('Indent width must be between 1 and 16')
+        self.indent_tabs, self.indent_width = bool(tabs), width
+        for tab in self.tabs:
+            tab.set_font_size(self.font_size)
+
+    def set_auto_pair(self, enabled: bool) -> None:
+        """Pair brackets and quotes on typing (disabled by default)."""
+        self.auto_pair = bool(enabled)
+
+    def set_md_default_preview(self, enabled: bool) -> None:
+        """Choose the initial mode of subsequently opened Markdown tabs."""
+        self.md_default_preview = bool(enabled)
+
+    def set_md_readable_width(self, enabled: bool) -> None:
+        """Cap preview text at 700 logical pixels, centred in the viewport."""
+        self.md_readable_width = bool(enabled)
+        for tab in self.tabs:
+            if tab.md_renderer:
+                tab.md_renderer.set_readable_width(self.md_readable_width)
 
     def set_syntax_style(self, styles: dict[str, highlight.SyntaxStyle]) -> None:
         """Recolour every open tab, and every tab opened later, with a kind -> SyntaxStyle dict."""
@@ -579,7 +682,8 @@ class EditorPanel(Gtk.Box):
         tab.header.show_all()
         self.stack.set_visible_child_name('editor')
         self.notebook.set_current_page(self.notebook.page_num(tab.page))
-        tab.view.grab_focus()
+        self.focus_current()
+        self._update_tabs()
         self._update_status()
         self._announce_current()
 
@@ -637,11 +741,22 @@ class EditorPanel(Gtk.Box):
             answer = _ask(self, f'Save changes to {os.path.basename(tab.path)}?', ('save', 'discard', 'cancel'))
             if answer == 'cancel' or (answer == 'save' and not self._save(tab)):
                 return False
+        index = self.notebook.page_num(tab.page)
+        successor = next((other for other in self.tabs if self.notebook.page_num(other.page) == index + 1), None)
+        gap = tab.header.get_allocated_width() + 8
         self.tabs.remove(tab)
         tab._destroy_markdown()
         tab.highlighter.destroy()
         self.notebook.remove_page(self.notebook.page_num(tab.page))
         tab.page.destroy()
+        self._update_tabs()
+        if successor and successor.header.get_mapped():
+            # GTK3 has no transforms/FLIP: a shrinking leading margin keeps the
+            # surviving labels at their old positions while the strip reflows.
+            motion.animate(successor.header, 'tab_close_reflow',
+                           lambda progress: successor.header.set_margin_start(round(gap * (1 - progress))),
+                           easing='reflow', key='tab-reflow',
+                           on_done=lambda: successor.header.set_margin_start(0))
         if not self.tabs:
             self.stack.set_visible_child_name('empty')
             self.search_bar.set_search_mode(False)
@@ -668,7 +783,7 @@ class EditorPanel(Gtk.Box):
         buffer.begin_user_action()
         try:
             if command in ('enter', 'tab'):
-                content = '\n' + leading_whitespace(buffer.get_text(start, cursor, True)) if command == 'enter' else '    '
+                content = '\n' + leading_whitespace(buffer.get_text(start, cursor, True)) if command == 'enter' else ('\t' if self.indent_tabs else ' ' * self.indent_width)
                 buffer.delete_selection(True, True)
                 buffer.insert_at_cursor(content)
             else:
@@ -683,7 +798,7 @@ class EditorPanel(Gtk.Box):
                 if not end.ends_line():
                     end.forward_to_line_end()
                 content = buffer.get_text(start, end, True)
-                replacement = toggle_comments(content) if command == 'comment' else '\n'.join(unindent(line) for line in content.split('\n'))
+                replacement = toggle_comments(content) if command == 'comment' else '\n'.join(unindent(line, self.indent_width) for line in content.split('\n'))
                 offset = start.get_offset()
                 buffer.delete(start, end)
                 buffer.insert(buffer.get_iter_at_offset(offset), replacement)
@@ -725,6 +840,28 @@ class EditorPanel(Gtk.Box):
             return True
         if tab.md_mode == 'preview':
             return False
+        if self.auto_pair and not event.state & (Gdk.ModifierType.MOD1_MASK | Gdk.ModifierType.SUPER_MASK):
+            char = chr(Gdk.keyval_to_unicode(key))
+            pairs = {**gutter.PAIRS, '"': '"', "'": "'"}
+            cursor = tab.buffer.get_iter_at_mark(tab.buffer.get_insert())
+            selection = tab.buffer.get_selection_bounds()
+            if char in pairs.values() and not selection and cursor.get_char() == char:
+                cursor.forward_char()
+                tab.buffer.place_cursor(cursor)
+                return True
+            if char in pairs:
+                start = selection[0].get_offset() if selection else cursor.get_offset()
+                selected = tab.buffer.get_text(*selection, True) if selection else ''
+                tab.buffer.begin_user_action()
+                tab.buffer.delete_selection(True, True)
+                tab.buffer.insert_at_cursor(char + selected + pairs[char])
+                if selection:
+                    tab.buffer.select_range(tab.buffer.get_iter_at_offset(start + 1),
+                                            tab.buffer.get_iter_at_offset(start + 1 + len(selected)))
+                else:
+                    tab.buffer.place_cursor(tab.buffer.get_iter_at_offset(start + 1))
+                tab.buffer.end_user_action()
+                return True
         command = {Gdk.KEY_Return: 'enter', Gdk.KEY_KP_Enter: 'enter',
                    Gdk.KEY_Tab: 'unindent' if shift else 'tab', Gdk.KEY_ISO_Left_Tab: 'unindent'}.get(key)
         if command:
@@ -758,29 +895,38 @@ class EditorPanel(Gtk.Box):
 
 
 def build_css(ui: dict[str, str]) -> str:
-    """Render the existing component rules from theme UI roles."""
+    """Editor chrome, composed by the shared theme provider."""
     return f'''
 .idgent-editor, .idgent-editor stack, .idgent-editor notebook,
 .idgent-editor notebook > stack {{ background: {ui['bg']}; color: {ui['foreground']}; border: 0; }}
-notebook > header.top {{ background: {ui['sidebar_bg']}; border: 0; padding: 0; margin: 0; }}
-notebook > header.top > tabs {{ padding: 0; margin: 0; border: 0; }}
-notebook > header.top > tabs > tab {{ background: {ui['tab_inactive_bg']};
-    color: {ui['muted']}; border: 0; border-top: 2px solid transparent; border-right: 1px solid {ui['border']};
-    border-radius: 0; box-shadow: none; min-height: 33px; padding: 0 12px; margin: 0; }}
-notebook > header.top > tabs > tab:checked {{ background: {ui['bg']};
-    color: {ui['foreground']}; border-top-color: {ui['accent']}; }}
-.idgent-tab-close {{ opacity: 0; min-width: 16px; min-height: 20px; padding: 0 2px;
-    border: 0; background: transparent; }}
+.idgent-editor notebook > header.top {{ background: {ui['sidebar_bg']};
+    border: 0; border-bottom: 1px solid {ui['border']}; padding: 5px 8px 0; margin: 0; }}
+.idgent-editor notebook > header.top > tabs {{ padding: 0; margin: 0; border: 0; }}
+.idgent-editor notebook > header.top > tabs > tab {{ background: transparent;
+    color: {ui['faint']}; border: 1px solid transparent; border-radius: 10px 10px 0 0;
+    box-shadow: none; min-height: 32px; padding: 0 3px; margin: 0; font-size: 13px; }}
+.idgent-editor notebook > header.top > tabs > tab:hover {{ color: {ui['muted']}; }}
+.idgent-editor notebook > header.top > tabs > tab:checked {{ background: {ui['bg']};
+    color: {ui['foreground']}; border-color: {ui['border']}; border-bottom-color: {ui['bg']}; }}
+.idgent-tab-inner {{ padding: 0 6px; border-radius: 4px; }}
+tab:hover .idgent-tab-inner:not(.active), .idgent-tab-inner.hover:not(.active) {{
+    background: alpha({ui['overlay']}, .067); color: {ui['muted']}; }}
+.idgent-editor .idgent-tab-close {{ opacity: 0; min-width: 14px; min-height: 14px;
+    padding: 2px; margin: 0; border: 0; border-radius: 8px; box-shadow: none;
+    background: transparent; color: {ui['muted']}; transition: none; }}
 tab:hover .idgent-tab-close, tab:checked .idgent-tab-close,
-.idgent-tab-close:focus {{ opacity: 1; }}
-.idgent-tab-close:hover {{ background: {ui['tab_close_hover']}; }}
+.idgent-tab-inner.hover .idgent-tab-close, .idgent-tab-close:focus {{ opacity: 1; }}
+.idgent-editor .idgent-tab-close:hover {{ background: alpha({ui['overlay']}, .067); color: {ui['foreground']}; }}
+.idgent-tab-divider {{ min-width: 1px; min-height: 13px; background: {ui['border_hover']}; margin: 0; }}
 .idgent-editor textview, .idgent-editor textview text {{ background-color: {ui['bg']};
     color: {ui['editor_fg']}; caret-color: {ui['cursor']}; font-family: monospace; font-size: 11pt; }}
 .idgent-editor textview text selection {{ background-color: {ui['editor_selection']}; color: {ui['selection_fg']}; }}
 .idgent-empty {{ color: {ui['muted']}; font-size: 16px; padding: 12px; }}
 .idgent-find-bar > revealer > box {{ background: {ui['sidebar_bg']}; border-top: 1px solid {ui['border']};
     border-bottom: 0; box-shadow: none; padding: 8px; }}
-.idgent-status {{ background: {ui['status_bg']}; color: {ui['status_fg']}; font-size: 12px; padding: 4px 12px; }}
-notebook > header.top > tabs > tab:hover {{ background: {ui['hover']}; color: {ui['foreground']}; }}
-notebook > header.top > tabs > tab:checked:hover {{ background: {ui['bg']}; }}
-'''
+.idgent-status {{ background: {ui['sidebar_bg']}; color: {ui['muted']}; font-size: 12px;
+    font-feature-settings: "tnum"; padding: 4px; border-top: 1px solid {ui['border']};
+    border-left: 1px solid {ui['border']}; border-radius: 8px 0 0 0; }}
+.idgent-status-item {{ padding: 3px 4px; border-radius: 4px; }}
+.idgent-status-item:hover {{ background: alpha({ui['overlay']}, .067); color: {ui['foreground']}; }}
+''' + gutter.build_css(ui) + mdview.build_css(ui)
