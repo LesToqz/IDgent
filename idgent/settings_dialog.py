@@ -208,6 +208,8 @@ class SettingsDialog(Gtk.Window):
         for groups in self._groups.values():
             for group, _ in groups:
                 group.set_no_show_all(True)
+        for widget in (*self._sections.values(), self.empty_label, self.hotkey_box):
+            widget.set_no_show_all(True)
         self.empty_label.hide()
         self.hotkeys_empty.hide()
         self.nav_list.select_page('appearance')
