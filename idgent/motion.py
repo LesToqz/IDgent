@@ -2,12 +2,14 @@
 
 Public API (all durations/delays are milliseconds, all distances are pixels):
 
-* ``DURATIONS`` maps names to provisional millisecond defaults. ``EASINGS``
-  maps names to callables. ``duration_ms(value)`` resolves a name or finite
+* ``DURATIONS`` maps names to measured millisecond timings. ``EASINGS``
+  maps names to callables. Token names use underscores rather than the JSON's
+  hyphens. ``duration_ms(value)`` resolves a name or finite
   numeric duration. Unknown names raise KeyError; invalid numbers ValueError.
 * ``cubic_bezier(x1, y1, x2, y2)`` returns a CSS timing function: input is
   clamped to [0, 1], x controls must be in [0, 1], y may overshoot.
-* ``animations_enabled()`` reads gtk-enable-animations and the environment
+* ``set_reduce_motion(flag)`` sets the application preference (default False).
+  ``animations_enabled()`` checks it, gtk-enable-animations and the environment
   override IDGENT_REDUCE_MOTION=1 on each call. No settings/widgets are created
   on import; easing, duration lookup and colour interpolation need no display.
 * ``animate(widget, duration, update, *, easing="smooth", on_done=None,
@@ -25,7 +27,7 @@ Public API (all durations/delays are milliseconds, all distances are pixels):
   hide_when_done=True)`` returns a Tween to opacity 1 or 0. A fresh hidden
   entrance starts at 0 and shows the widget; interruptions use current opacity.
   A completed exit hides the widget unless hide_when_done=False.
-* ``slide_in(widget, offset=12, duration="moderate", easing="swing",
+* ``slide_in(widget, offset=12, duration="js_tween_default", easing="ease_in_out",
   on_done=None)`` returns a Tween for an opacity/margin-top entrance. A fresh
   hidden widget starts transparent; a fresh slide starts offset from its
   original margin. Repeated slides continue current opacity and margin, and
@@ -53,6 +55,8 @@ Public API (all durations/delays are milliseconds, all distances are pixels):
 Helpers reserve private keys, so unrelated explicit animate keys coexist.
 Cancelled helpers retain their in-progress values; subsequent calls resume
 them. Reduced motion always settles helper state before calling on_done.
+Desktop menus, prompts and tooltips should appear instantly: use show()/hide()
+or duration="none". Generic fades remain 140 ms; slides default to 100 ms.
 """
 from __future__ import annotations
 
@@ -67,22 +71,82 @@ gi.require_version("Gdk", "3.0")
 from gi.repository import Gdk, GLib, Gtk
 
 
-# PROVISIONAL design tokens: keep defaults together for design-system updates.
-DURATIONS = {"none": 0, "superfast": 70, "fast": 140, "moderate": 300, "slow": 560}
+# Measured tokens from docs/reference_app-tokens.json (no runtime JSON dependency).
+# Includes delays/holds as well as tween lengths; callers choose the right use.
+DURATIONS = {
+    "none": 0,
+    "superfast": 70,
+    "fast": 140,
+    "moderate": 300,
+    "slow": 560,
+    "js_tween_default": 100,
+    "tree_expand_collapse": 100,
+    "chevron_rotate": 100,
+    "toggle_thumb_slide": 150,
+    "toggle_thumb_press_grow": 100,
+    "toggle_thumb_press_delay": 50,
+    "toggle_track": 150,
+    "slider_thumb": 100,
+    "input_hover_border": 140,
+    "clickable_icon_opacity": 140,
+    "settings_row_navigable": 150,
+    "resize_handle_color": 200,
+    "drop_overlay": 100,
+    "tab_strip_padding": 75,
+    "tab_close_reflow": 300,
+    "notice_enter": 100,
+    "notice_exit": 120,
+    "notice_autohide": 4000,
+    "notice_hover_grace": 1000,
+    "tooltip_delay": 1000,
+    "tooltip_warm_window": 100,
+    "submenu_open_delay": 250,
+    "flash_highlight": 250,
+    "ribbon_collapsed_bg": 250,
+    "ribbon_collapsed_bg_delay": 95,
+    "workspace_padding": 100,
+    "page_slide_mobile": 150,
+    "sheet_mobile_min": 100,
+    "sheet_mobile_max": 250,
+    "window_geometry_save_debounce": 100,
+    "modal_open_desktop": 0,
+    "modal_close_desktop": 0,
+    "menu_open_desktop": 0,
+    "tooltip_fade": 0,
+    "spinner_rotation": 1000,
+}
+# Short semantic names used by the motion alignment spec (WP-2).
+DURATIONS.update({
+    "collapse": DURATIONS["tree_expand_collapse"],
+    "toggle": DURATIONS["toggle_thumb_slide"],
+    "notice_in": DURATIONS["notice_enter"],
+    "notice_out": DURATIONS["notice_exit"],
+    "reflow": DURATIONS["tab_close_reflow"],
+    "resize_handle": DURATIONS["resize_handle_color"],
+})
 _EASING_POINTS = {
     "linear": (0, 0, 1, 1),
     "smooth": (0.45, 0.05, 0.55, 0.95),
     "delay": (0.65, 0.05, 0.36, 1),
-    "jumpy": (0.68, -0.55, 0.265, 1.55),
-    "swing": (0, 0.8, 0.2, 1.2),
+    "jumpy": (0.68, -0.55, 0.27, 1.55),
+    "swing": (0, 0.55, 0.45, 1),
     "ease": (0.25, 0.1, 0.25, 1),
     "ease_in": (0.42, 0, 1, 1),
     "ease_out": (0, 0, 0.58, 1),
     "ease_in_out": (0.42, 0, 0.58, 1),
+    "collapse": (0.02, 0.01, 0.47, 1),
+    "reflow": (0.2, 0, 0, 1),
+    "slide_out": (0.33, 1, 0.68, 1),
+    "sheet_dismiss": (0.36, 0.66, 0.04, 1),
+    "backdrop_fade_in": (0.5, 0, 0.75, 0),
+    "loading_icon": (0.22, 1, 0.36, 1),
 }
+_EASING_POINTS["sheet"] = _EASING_POINTS["sheet_dismiss"]
+_EASING_POINTS["backdrop"] = _EASING_POINTS["backdrop_fade_in"]
 
 __all__ = [
     "DURATIONS", "EASINGS", "duration_ms", "cubic_bezier", "animations_enabled",
+    "set_reduce_motion",
     "Tween", "animate", "fade", "slide_in", "animate_size_request",
     "lerp_color", "StateFader",
 ]
@@ -147,11 +211,22 @@ def cubic_bezier(x1, y1, x2, y2):
 EASINGS = {name: cubic_bezier(*points) for name, points in _EASING_POINTS.items()}
 _OPACITY_KEY = object()
 _SIZE_KEYS = {"width": object(), "height": object()}
+_reduce_motion = False
+
+
+def set_reduce_motion(flag: bool):
+    """Set the application preference for subsequent tweens; no settings import.
+
+    False permits animation only when the environment and GTK also permit it.
+    Existing tweens keep their current lifecycle; this affects new tweens.
+    """
+    global _reduce_motion
+    _reduce_motion = bool(flag)
 
 
 def animations_enabled():
-    """Check the environment and current GTK accessibility setting lazily."""
-    if os.environ.get("IDGENT_REDUCE_MOTION") == "1":
+    """Check the application, environment and GTK accessibility settings lazily."""
+    if _reduce_motion or os.environ.get("IDGENT_REDUCE_MOTION") == "1":
         return False
     settings = Gtk.Settings.get_default()
     return settings is None or bool(settings.get_property("gtk-enable-animations"))
@@ -324,7 +399,7 @@ def fade(widget, show, duration="fast", easing="smooth", on_done=None, hide_when
     return animate(widget, duration, update, easing=easing, on_done=done, key=_OPACITY_KEY)
 
 
-def slide_in(widget, offset=12, duration="moderate", easing="swing", on_done=None):
+def slide_in(widget, offset=12, duration="js_tween_default", easing="ease_in_out", on_done=None):
     """Show an opacity/margin entrance, preserving its baseline on interruption."""
     offset = _finite(offset)
     original = _slide_origin(widget)
