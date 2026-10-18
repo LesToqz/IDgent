@@ -15,7 +15,9 @@ gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
 from gi.repository import Gdk, Gio, Gtk
 
-from idgent.titlebar import TITLEBAR_CSS, TitleBar, build_titlebar_css
+from idgent import motion
+from idgent.titlebar import (GLYPH_OPACITY, HEADER_HEIGHT, TITLEBAR_CSS, WINDOW_BUTTON_WIDTH,
+                             TitleBar, build_titlebar_css)
 from idgent.themes import THEMES, get_theme
 from idgent.window import MainWindow
 from tests.test_integration import alive, poll
@@ -28,6 +30,23 @@ def descendants(widget):
         widget.forall(children.append)
         for child in children:
             yield from descendants(child)
+
+
+def rgba_close(actual, expected, tolerance=0.002):
+    return all(abs(getattr(actual, channel) - getattr(expected, channel)) <= tolerance
+               for channel in ('red', 'green', 'blue', 'alpha'))
+
+
+def rgb(hex_colour):
+    return tuple(int(hex_colour[i:i + 2], 16) for i in (1, 3, 5))
+
+
+def blend(base, overlay, alpha):
+    return tuple(round(b * (1 - alpha) + o * alpha) for b, o in zip(rgb(base), rgb(overlay)))
+
+
+def find_class(root, name):
+    return next(w for w in descendants(root) if w.get_style_context().has_class(name))
 
 
 class TitleBarTests(unittest.TestCase):
@@ -69,8 +88,9 @@ class TitleBarTests(unittest.TestCase):
                 css = build_titlebar_css(theme.ui)
                 provider.load_from_data(css.encode('utf-8'))
                 self.assertEqual(errors, [])
-                self.assertIn(theme.ui['titlebar_bg'], css)
-                self.assertIn(theme.ui['close_hover'], css)
+                self.assertIn(theme.ui['sidebar_bg'], css)
+                self.assertIn(theme.ui['danger'], css)
+                self.assertIn(f"border-bottom: 1px solid {theme.ui['border']}", css)
                 self.assertIn('button.idgent-settings-button:hover', css)
 
     def test_settings_button_accessibility_and_signal(self):
@@ -122,7 +142,7 @@ class TitleBarTests(unittest.TestCase):
         right = gear_x + gear.get_allocated_width()
         minimize_x, _ = minimize.translate_coordinates(bar, 0, 0)
         self.assertLessEqual(right, minimize_x)
-        self.assertEqual((gear.get_allocated_width(), gear.get_allocated_height()), (32, 32))
+        self.assertEqual((gear.get_allocated_width(), gear.get_allocated_height()), (28, 28))
         for widget in widgets:
             if not widget.get_mapped():
                 continue
@@ -142,16 +162,18 @@ class TitleBarTests(unittest.TestCase):
             with self.subTest(theme=theme.id):
                 self.window.set_theme(theme.id, persist=False)
                 foreground = Gdk.RGBA()
-                foreground.parse(theme.ui['titlebar_fg'])
+                foreground.parse(theme.ui['muted'])
                 hover = Gdk.RGBA()
-                hover.parse(theme.ui['button_hover'])
+                hover.parse(theme.ui['overlay'])
+                hover.alpha = 0.067
                 self.assertTrue(poll(lambda: context.get_color(Gtk.StateFlags.NORMAL).equal(foreground)))
                 self.assertEqual(context.get_color(Gtk.StateFlags.NORMAL),
                                  minimize.get_style_context().get_color(Gtk.StateFlags.NORMAL))
                 gear.set_state_flags(Gtk.StateFlags.PRELIGHT, False)
                 try:
-                    self.assertTrue(poll(lambda: context.get_background_color(Gtk.StateFlags.PRELIGHT).equal(hover)))
-                    self.assertEqual((gear.get_allocated_width(), gear.get_allocated_height()), (32, 32))
+                    self.assertTrue(poll(lambda: rgba_close(
+                        context.get_background_color(Gtk.StateFlags.PRELIGHT), hover)))
+                    self.assertEqual((gear.get_allocated_width(), gear.get_allocated_height()), (28, 28))
                 finally:
                     gear.unset_state_flags(Gtk.StateFlags.PRELIGHT)
 
@@ -192,12 +214,188 @@ class TitleBarTests(unittest.TestCase):
             screen, provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION + 1)
         self.addCleanup(Gtk.StyleContext.remove_provider_for_screen, screen, provider)
         bar = self.window.titlebar
-        self.assertTrue(poll(lambda: 32 <= bar.get_allocated_height() <= 35))
+        self.assertTrue(poll(lambda: bar.get_allocated_height() == HEADER_HEIGHT))
         label = bar.title_label
         allocation = label.get_allocation()
         x, _ = label.translate_coordinates(bar, 0, 0)
         self.assertAlmostEqual(x + allocation.width / 2,
                                bar.get_allocated_width() / 2, delta=1)
+
+    def pixel(self, widget, x, y):
+        wx, wy = widget.translate_coordinates(self.window, x, y)
+        return tuple(Gdk.pixbuf_get_from_window(self.window.get_window(), wx, wy, 1, 1).get_pixels()[:3])
+
+    def assert_pixel(self, widget, x, y, expected, tolerance=2):
+        matches = lambda: all(abs(a - b) <= tolerance for a, b in zip(self.pixel(widget, x, y), expected))
+        self.assertTrue(poll(matches), f"{self.pixel(widget, x, y)} != {expected}")
+
+    def glyph_pixels(self, widget, background):
+        """Pixels of a widget that differ clearly from its background colour."""
+        x, y = widget.translate_coordinates(self.window, 0, 0)
+        width, height = widget.get_allocated_width(), widget.get_allocated_height()
+        pixbuf = Gdk.pixbuf_get_from_window(self.window.get_window(), x, y, width, height)
+        data, stride, channels = pixbuf.get_pixels(), pixbuf.get_rowstride(), pixbuf.get_n_channels()
+        found = []
+        for row in range(height):
+            for column in range(width):
+                offset = row * stride + column * channels
+                colour = tuple(data[offset:offset + 3])
+                if max(abs(a - b) for a, b in zip(colour, background)) > 40:
+                    found.append((column, row, colour))
+        return found
+
+    def use_theme(self, theme_id):
+        self.window.set_theme(theme_id, persist=False)
+        self.assertTrue(poll(lambda: self.window.titlebar.get_allocated_height() == HEADER_HEIGHT))
+
+    def hover(self, widget):
+        widget.set_state_flags(Gtk.StateFlags.PRELIGHT, False)
+        self.addCleanup(widget.unset_state_flags, Gtk.StateFlags.PRELIGHT)
+
+    def test_header_is_39_plus_divider_on_secondary_background(self):
+        bar = self.window.titlebar
+        for theme_id in ('idgent-dark', 'idgent-light', 'dark-plus'):
+            with self.subTest(theme=theme_id):
+                self.use_theme(theme_id)
+                ui = get_theme(theme_id).ui
+                self.assertEqual(bar.get_preferred_height().minimum_height, HEADER_HEIGHT)
+                x = bar.title_label.translate_coordinates(bar, 0, 0)[0] - 60
+                self.assertGreater(x, bar.menu_bar.get_allocated_width() + 20)
+                self.assert_pixel(bar, x, 20, rgb(ui['sidebar_bg']))
+                self.assert_pixel(bar, x, 0, rgb(ui['sidebar_bg']))
+                self.assert_pixel(bar, x, HEADER_HEIGHT - 2, rgb(ui['sidebar_bg']))
+                self.assert_pixel(bar, x, HEADER_HEIGHT - 1, rgb(ui['border']))
+                bar.set_state_flags(Gtk.StateFlags.BACKDROP, False)
+                try:
+                    # Same background unfocused; text drops to muted.
+                    self.assert_pixel(bar, x, 20, rgb(ui['sidebar_bg']))
+                    muted = Gdk.RGBA()
+                    muted.parse(ui['muted'])
+                    context = bar.get_style_context()
+                    self.assertTrue(poll(lambda: context.get_color(context.get_state()).equal(muted)))
+                finally:
+                    bar.unset_state_flags(Gtk.StateFlags.BACKDROP)
+
+    def test_window_buttons_are_flat_44px_with_12px_glyphs_and_overlay_hover(self):
+        bar = self.window.titlebar
+        self.use_theme('idgent-dark')
+        ui = get_theme('idgent-dark').ui
+        buttons = [find_class(bar, name) for name in ('minimize', 'maximize', 'close')]
+        positions = [button.translate_coordinates(bar, 0, 0) for button in buttons]
+        for button, (x, y) in zip(buttons, positions):
+            self.assertEqual((button.get_allocated_width(), button.get_allocated_height()),
+                             (WINDOW_BUTTON_WIDTH, HEADER_HEIGHT - 1))
+            self.assertEqual(y, 0)
+            glyph = self.glyph_pixels(button, rgb(ui['sidebar_bg']))
+            self.assertTrue(glyph, button.get_style_context().list_classes())
+            columns = [column for column, _, _ in glyph]
+            rows = [row for _, row, _ in glyph]
+            self.assertLessEqual(max(columns) - min(columns) + 1, 12)
+            self.assertLessEqual(max(rows) - min(rows) + 1, 12)
+        # One contiguous 132 px block flush with the right edge.
+        self.assertEqual([x for x, _ in positions],
+                         [positions[0][0] + WINDOW_BUTTON_WIDTH * i for i in range(3)])
+        self.assertEqual(positions[2][0] + WINDOW_BUTTON_WIDTH, bar.get_allocated_width())
+        minimize, maximize, close = buttons
+        self.assert_pixel(minimize, 2, 2, rgb(ui['sidebar_bg']))
+        self.hover(minimize)
+        self.assert_pixel(minimize, 2, 2, blend(ui['sidebar_bg'], ui['overlay'], 0.067))
+        self.assert_pixel(maximize, 2, 2, rgb(ui['sidebar_bg']))
+        foreground = Gdk.RGBA()
+        foreground.parse(ui['foreground'])
+        self.assertTrue(minimize.get_style_context().get_color(Gtk.StateFlags.PRELIGHT).equal(foreground))
+
+    def test_close_hover_is_danger_with_white_glyph(self):
+        bar = self.window.titlebar
+        close = find_class(bar, 'close')
+        for theme_id in ('idgent-dark', 'idgent-light'):
+            with self.subTest(theme=theme_id):
+                self.use_theme(theme_id)
+                ui = get_theme(theme_id).ui
+                close.set_state_flags(Gtk.StateFlags.PRELIGHT, False)
+                try:
+                    for x, y in ((0, 0), (2, 2), (WINDOW_BUTTON_WIDTH - 1, HEADER_HEIGHT - 2)):
+                        self.assert_pixel(close, x, y, rgb(ui['danger']))
+                    white = Gdk.RGBA()
+                    white.parse('#ffffff')
+                    self.assertTrue(close.get_style_context().get_color(Gtk.StateFlags.PRELIGHT).equal(white))
+                    glyph = self.glyph_pixels(close, rgb(ui['danger']))
+                    self.assertTrue(glyph)
+                    self.assertGreaterEqual(max(min(colour) for _, _, colour in glyph), 200)
+                finally:
+                    close.unset_state_flags(Gtk.StateFlags.PRELIGHT)
+                self.assert_pixel(close, 2, 2, rgb(ui['sidebar_bg']))
+
+    def test_menubar_items_are_flat_13px_clickable_icons(self):
+        bar = self.window.titlebar
+        self.use_theme('idgent-light')
+        ui = get_theme('idgent-light').ui
+        item = bar.menu_bar.get_children()[0]
+        context = item.get_style_context()
+        self.assertEqual(context.get_property('font-size', Gtk.StateFlags.NORMAL), 13)
+        # Same hit-area height as the settings cog, centred in the 39 px strip.
+        self.assertEqual(item.get_allocated_height(), bar.settings_button.get_allocated_height())
+        _, y = item.translate_coordinates(bar, 0, 0)
+        self.assertAlmostEqual(y + item.get_allocated_height() / 2, (HEADER_HEIGHT - 1) / 2, delta=1)
+        height = item.get_allocated_height()
+        self.assert_pixel(item, 2, height // 2, rgb(ui['sidebar_bg']))
+        self.hover(item)
+        hover = blend(ui['sidebar_bg'], ui['overlay'], 0.067)
+        self.assert_pixel(item, 2, height // 2, hover)
+        # Flat: no underline/inset shadow at the bottom edge; rounded corners.
+        self.assert_pixel(item, item.get_allocated_width() // 2, height - 1, hover)
+        self.assert_pixel(item, 0, 0, rgb(ui['sidebar_bg']))
+
+    def test_title_is_13px_semibold_muted(self):
+        bar = self.window.titlebar
+        for theme_id in ('idgent-dark', 'idgent-light'):
+            with self.subTest(theme=theme_id):
+                self.use_theme(theme_id)
+                context = bar.title_label.get_style_context()
+                colour = Gdk.RGBA()
+                colour.parse(get_theme(theme_id).ui['title_fg'])
+                self.assertTrue(poll(lambda: context.get_color(Gtk.StateFlags.NORMAL).equal(colour)))
+                self.assertEqual(get_theme(theme_id).ui['title_fg'], get_theme(theme_id).ui['muted'])
+                self.assertEqual(context.get_property('font-size', Gtk.StateFlags.NORMAL), 13)
+                self.assertEqual(int(context.get_property('font-weight', Gtk.StateFlags.NORMAL)), 600)
+                _, y = bar.title_label.translate_coordinates(bar, 0, 0)
+                self.assertAlmostEqual(y + bar.title_label.get_allocated_height() / 2,
+                                       (HEADER_HEIGHT - 1) / 2, delta=1)
+
+    def crossing(self, widget, event_type, signal):
+        event = Gdk.Event.new(event_type)
+        event.crossing.detail = Gdk.NotifyType.NONLINEAR
+        widget.emit(signal, event)
+
+    def test_settings_cog_is_a_clickable_icon_with_glyph_fade(self):
+        bar = self.window.titlebar
+        gear = bar.settings_button
+        glyph = gear.get_child()
+        self.use_theme('idgent-dark')
+        ui = get_theme('idgent-dark').ui
+        self.assertAlmostEqual(glyph.get_opacity(), GLYPH_OPACITY, delta=1 / 255)
+        self.assertEqual(bar.settings_fader.duration, 'clickable_icon_opacity')
+        self.assertEqual(motion.duration_ms(bar.settings_fader.duration), 140)
+        self.hover(gear)
+        height = gear.get_allocated_height()
+        self.assert_pixel(gear, 2, height // 2, blend(ui['sidebar_bg'], ui['overlay'], 0.067))
+        self.assert_pixel(gear, 0, 0, rgb(ui['sidebar_bg']))  # radius 4
+        self.crossing(gear, Gdk.EventType.ENTER_NOTIFY, 'enter-notify-event')
+        self.assertLess(glyph.get_opacity(), 1)  # fades on the frame clock, not instantly
+        seen = []
+        self.assertTrue(poll(lambda: seen.append(glyph.get_opacity()) or glyph.get_opacity() == 1))
+        self.assertEqual(seen, sorted(seen))
+        self.crossing(gear, Gdk.EventType.LEAVE_NOTIFY, 'leave-notify-event')
+        self.assertTrue(poll(lambda: abs(glyph.get_opacity() - GLYPH_OPACITY) <= 1 / 255))
+
+    def test_settings_glyph_fade_honours_reduced_motion(self):
+        motion.set_reduce_motion(True)
+        self.addCleanup(motion.set_reduce_motion, False)
+        gear = self.window.titlebar.settings_button
+        self.crossing(gear, Gdk.EventType.ENTER_NOTIFY, 'enter-notify-event')
+        self.assertEqual(gear.get_child().get_opacity(), 1)
+        self.crossing(gear, Gdk.EventType.LEAVE_NOTIFY, 'leave-notify-event')
+        self.assertAlmostEqual(gear.get_child().get_opacity(), GLYPH_OPACITY, delta=1 / 255)
 
     def accelerate(self, shortcut):
         key, modifiers = Gtk.accelerator_parse(shortcut)

@@ -678,6 +678,21 @@ class StateFaderTest(GtkFixture):
         self.assertEqual(len(values), count)
         self.assertEqual(done, [])
 
+    def test_unparented_widget_finalised_by_gc_is_quiet(self):
+        import gc
+        errors = []
+        record = lambda *args: errors.append(args)
+
+        def make():
+            StateFader(Gtk.Button(label="x"), lambda _v: None)
+
+        with patch.object(sys, "excepthook", record), patch.object(sys, "unraisablehook", record):
+            for _ in range(3):
+                make()
+            gc.collect()
+            gc.collect()
+        self.assertEqual(errors, [])
+
 
 if __name__ == "__main__":
     unittest.main()
