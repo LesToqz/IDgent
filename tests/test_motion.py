@@ -1,7 +1,9 @@
 """Pure timing/colour checks and real GTK3 frame-clock integration under X11."""
 from __future__ import annotations
 
+import json
 import os
+from pathlib import Path
 import subprocess
 import sys
 import time
@@ -18,7 +20,8 @@ from gi.repository import Gdk, GLib, Gtk
 
 from idgent.motion import (
     DURATIONS, EASINGS, StateFader, animate, animate_size_request,
-    animations_enabled, cubic_bezier, duration_ms, fade, lerp_color, slide_in,
+    animations_enabled, cubic_bezier, duration_ms, fade, lerp_color,
+    set_reduce_motion, slide_in,
 )
 
 
@@ -48,14 +51,60 @@ class EasingTest(unittest.TestCase):
         for i in range(101):
             self.assertEqual(EASINGS["linear"](i / 100), i / 100)
 
-    def test_smooth_is_monotonic(self):
-        samples = [EASINGS["smooth"](i / 1000) for i in range(1001)]
-        self.assertEqual(samples, sorted(samples))
+    def test_non_spring_easings_are_monotonic_without_overshoot(self):
+        for name, ease in EASINGS.items():
+            if name == "jumpy":
+                continue
+            with self.subTest(easing=name):
+                samples = [ease(i / 1000) for i in range(1001)]
+                self.assertEqual(samples, sorted(samples))
+                self.assertGreaterEqual(min(samples), 0)
+                self.assertLessEqual(max(samples), 1)
 
-    def test_swing_and_jumpy_overshoot(self):
-        for name in ("swing", "jumpy"):
-            self.assertGreater(max(EASINGS[name](i / 100) for i in range(101)), 1)
+    def test_jumpy_preserves_overshoot(self):
+        self.assertGreater(max(EASINGS["jumpy"](i / 100) for i in range(101)), 1)
         self.assertLess(EASINGS["jumpy"](0.1), 0)
+
+    def test_measured_control_points(self):
+        points = {
+            "smooth": (0.45, 0.05, 0.55, 0.95),
+            "delay": (0.65, 0.05, 0.36, 1),
+            "jumpy": (0.68, -0.55, 0.27, 1.55),
+            "swing": (0, 0.55, 0.45, 1),
+            "collapse": (0.02, 0.01, 0.47, 1),
+            "reflow": (0.2, 0, 0, 1),
+            "slide_out": (0.33, 1, 0.68, 1),
+            "sheet": (0.36, 0.66, 0.04, 1),
+            "backdrop": (0.5, 0, 0.75, 0),
+            "loading_icon": (0.22, 1, 0.36, 1),
+        }
+        # Sample the parametric cubic directly, independently of the x solver.
+        for name, (x1, y1, x2, y2) in points.items():
+            for s in (0.1, 0.25, 0.5, 0.75, 0.9):
+                with self.subTest(easing=name, parameter=s):
+                    x = 3 * (1 - s) ** 2 * s * x1 + 3 * (1 - s) * s ** 2 * x2 + s ** 3
+                    y = 3 * (1 - s) ** 2 * s * y1 + 3 * (1 - s) * s ** 2 * y2 + s ** 3
+                    self.assertAlmostEqual(EASINGS[name](x), y, delta=1e-7)
+
+    def test_swing_midpoint_matches_measurement(self):
+        self.assertAlmostEqual(EASINGS["swing"](0.5), 0.865128251929, delta=1e-9)
+
+    def test_all_json_motion_tokens_resolve(self):
+        path = Path(__file__).resolve().parents[1] / "docs" / "reference_app-tokens.json"
+        motion = json.loads(path.read_text())["motion"]
+        for name, value in motion["duration"].items():
+            with self.subTest(duration=name):
+                self.assertEqual(duration_ms(name.replace("-", "_")), value)
+        for name, value in motion["easing"].items():
+            with self.subTest(easing=name):
+                ease = EASINGS[name.replace("-", "_")]
+                controls = ((0, 0, 1, 1) if value == "linear" else
+                            tuple(map(float, value.removeprefix("cubic-bezier(").removesuffix(")").split(","))))
+                x1, y1, x2, y2 = controls
+                for s in (0.2, 0.5, 0.8):
+                    x = 3 * (1 - s) ** 2 * s * x1 + 3 * (1 - s) * s ** 2 * x2 + s ** 3
+                    y = 3 * (1 - s) ** 2 * s * y1 + 3 * (1 - s) * s ** 2 * y2 + s ** 3
+                    self.assertAlmostEqual(ease(x), y, delta=1e-7)
 
     def test_css_ease_known_values(self):
         for t, expected in ((0.1, 0.0947963), (0.25, 0.4085106),
@@ -79,8 +128,11 @@ class EasingTest(unittest.TestCase):
             EASINGS["smooth"](float("nan"))
 
     def test_duration_tokens_and_numbers(self):
-        self.assertEqual(DURATIONS, {"none": 0, "superfast": 70, "fast": 140,
-                                     "moderate": 300, "slow": 560})
+        for name, expected in {"none": 0, "superfast": 70, "fast": 140,
+                               "moderate": 300, "slow": 560, "collapse": 100,
+                               "toggle": 150, "notice_in": 100, "notice_out": 120,
+                               "reflow": 300, "resize_handle": 200}.items():
+            self.assertEqual(duration_ms(name), expected)
         for name, expected in DURATIONS.items():
             self.assertEqual(duration_ms(name), expected)
         self.assertEqual(duration_ms(12.5), 12.5)
@@ -114,6 +166,7 @@ class ColorTest(unittest.TestCase):
 
     def test_import_and_pure_functions_without_display_or_side_effects(self):
         script = """
+import sys
 from unittest.mock import patch
 import gi
 gi.require_version('Gtk', '3.0')
@@ -128,6 +181,10 @@ with patch.object(Gtk.Widget, '__init__', forbidden), \
     assert motion.EASINGS['ease'](0.5) > 0.8
     assert motion.duration_ms('fast') == 140
     assert motion.lerp_color('#000', '#fff', 1) == 'rgba(255, 255, 255, 1)'
+    assert 'idgent.settings' not in sys.modules
+    motion.set_reduce_motion(True)
+    assert not motion.animations_enabled()
+    motion.set_reduce_motion(False)
 assert Gtk.Window.list_toplevels() == []
 """
         env = dict(os.environ)
@@ -145,6 +202,8 @@ class GtkFixture(unittest.TestCase):
         env = patch.dict(os.environ, {"IDGENT_REDUCE_MOTION": "0"})
         env.start()
         self.addCleanup(env.stop)
+        set_reduce_motion(False)
+        self.addCleanup(set_reduce_motion, False)
         self.settings = Gtk.Settings.get_default()
         original = self.settings.get_property("gtk-enable-animations")
         self.settings.set_property("gtk-enable-animations", True)
@@ -170,6 +229,23 @@ class GtkFixture(unittest.TestCase):
 
 
 class TweenTest(GtkFixture):
+    def test_150ms_tween_finishes_in_8_to_12_real_frames(self):
+        frames, values = [], []
+        clock = self.widget.get_frame_clock()
+
+        def update(value):
+            # animate() emits its initial value synchronously, before any tick.
+            values.append(value)
+            if len(values) > 1:
+                frames.append(clock.get_frame_counter())
+
+        with patch.object(GLib, "timeout_add", side_effect=AssertionError("visible timer")):
+            self.finish(animate(self.widget, 150, update, easing="linear"))
+        self.assertEqual((values[0], values[-1]), (0, 1))
+        self.assertEqual(frames, sorted(set(frames)))
+        self.assertGreaterEqual(len(frames), 8)
+        self.assertLessEqual(len(frames), 12)
+
     def test_frame_clock_timing_progress_and_done_once(self):
         samples, done = [], []
         start = time.monotonic()
@@ -282,7 +358,7 @@ class TweenTest(GtkFixture):
 
     def test_engine_preserves_overshoot(self):
         values = []
-        self.finish(animate(self.widget, 140, values.append, easing="swing"))
+        self.finish(animate(self.widget, 140, values.append, easing="jumpy"))
         self.assertGreater(max(values), 1)
 
     def test_immediate_durations_ignore_delay(self):
@@ -294,11 +370,12 @@ class TweenTest(GtkFixture):
             self.assertEqual(values, [1])
             self.assertEqual(done, [1])
 
-    def test_env_and_gtk_setting_force_synchronous_completion(self):
-        for override in ("env", "setting"):
+    def test_application_env_and_gtk_setting_force_synchronous_completion(self):
+        for override in ("application", "env", "setting"):
             with self.subTest(override=override):
                 os.environ["IDGENT_REDUCE_MOTION"] = "1" if override == "env" else "0"
-                self.settings.set_property("gtk-enable-animations", override == "env")
+                self.settings.set_property("gtk-enable-animations", override != "setting")
+                set_reduce_motion(override == "application")
                 self.assertFalse(animations_enabled())
                 values, done = [], []
                 handle = animate(self.widget, 300, values.append, delay=100,
@@ -306,6 +383,18 @@ class TweenTest(GtkFixture):
                 self.assertTrue(handle.finished)
                 self.assertEqual(values, [1])
                 self.assertEqual(done, [1])
+
+    def test_clearing_application_preference_respects_other_overrides(self):
+        set_reduce_motion(True)
+        self.assertFalse(animations_enabled())
+        set_reduce_motion(False)
+        self.assertTrue(animations_enabled())
+        with patch.dict(os.environ, {"IDGENT_REDUCE_MOTION": "1"}):
+            set_reduce_motion(False)
+            self.assertFalse(animations_enabled())
+        self.settings.set_property("gtk-enable-animations", False)
+        set_reduce_motion(False)
+        self.assertFalse(animations_enabled())
 
     def test_update_can_replace_itself(self):
         replacements, done = [], []
@@ -349,6 +438,54 @@ class TweenTest(GtkFixture):
 
 
 class ValueHelperTest(GtkFixture):
+    def test_application_reduce_motion_settles_helpers_and_can_be_cleared(self):
+        set_reduce_motion(True)
+        values, done = [], []
+        handle = animate(self.widget, 150, values.append, delay=100,
+                         on_done=lambda: done.append("animate"))
+        self.assertTrue(handle.finished)
+        self.assertEqual(values, [1])
+        self.widget.set_margin_top(7)
+        for show in (False, True):
+            handle = fade(self.widget, show, on_done=lambda: done.append("fade"))
+            self.assertTrue(handle.finished)
+            self.assertEqual(self.widget.get_visible(), show)
+            self.assertEqual(self.widget.get_opacity(), float(show))
+        self.widget.hide()
+        handle = slide_in(self.widget, on_done=lambda: done.append("slide"))
+        self.assertTrue(handle.finished)
+        self.assertTrue(self.widget.get_visible())
+        self.assertEqual((self.widget.get_opacity(), self.widget.get_margin_top()), (1, 7))
+        self.assertEqual(done, ["animate", "fade", "fade", "slide"])
+        self.assertEqual(self.widget._motion_tweens, {})
+
+        set_reduce_motion(False)
+        self.assertTrue(animations_enabled())
+        values.clear()
+        handle = animate(self.widget, 150, values.append)
+        self.assertFalse(handle.finished)
+        self.assertEqual(values, [0])
+        self.finish(handle)
+        self.assertEqual(values[-1], 1)
+        handle = fade(self.widget, False)
+        self.assertFalse(handle.finished)
+        self.finish(handle)
+        self.assertFalse(self.widget.get_visible())
+        handle = slide_in(self.widget)
+        self.assertFalse(handle.finished)
+        self.assertEqual(self.widget.get_opacity(), 0)
+        self.finish(handle)
+        self.assertEqual((self.widget.get_opacity(), self.widget.get_margin_top()), (1, 7))
+
+    def test_instant_entrances_can_be_requested_explicitly(self):
+        self.widget.hide()
+        self.assertTrue(fade(self.widget, True, duration="none").finished)
+        self.assertEqual(self.widget.get_opacity(), 1)
+        self.widget.hide()
+        self.widget.set_margin_top(7)
+        self.assertTrue(slide_in(self.widget, duration="none").finished)
+        self.assertEqual((self.widget.get_opacity(), self.widget.get_margin_top()), (1, 7))
+
     def test_fade_exit_and_entrance(self):
         done = []
         self.finish(fade(self.widget, False, 70, on_done=lambda: done.append(self.widget.get_visible())))
