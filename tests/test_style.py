@@ -309,7 +309,7 @@ class StyleTest(unittest.TestCase):
         self.assertEqual(scrolled.get_hscrollbar().get_allocated_height(), 8)
 
     def test_pane_header_and_toast_are_styled(self):
-        style.apply_style()
+        style.apply_style(get_theme('dark-plus'))
         window = Gtk.Window()
         self.addCleanup(window.destroy)
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
@@ -344,7 +344,7 @@ class StyleTest(unittest.TestCase):
         self.assertEqual(flat.get_border(Gtk.StateFlags.NORMAL).left, 0)
 
     def test_realized_add_button_normal_hover_and_limit_colours(self):
-        style.apply_style()
+        style.apply_style(get_theme('dark-plus'))
         window = Gtk.Window()
         self.addCleanup(window.destroy)
         button = AddButton()
@@ -408,7 +408,7 @@ class StyleTest(unittest.TestCase):
                 style._create_provider()
 
     def test_realized_panels_and_status_background(self):
-        style.apply_style()
+        style.apply_style(get_theme('dark-plus'))
         with tempfile.TemporaryDirectory() as root:
             path = Path(root) / 'example.py'
             path.write_text('print("Dark+")\n')

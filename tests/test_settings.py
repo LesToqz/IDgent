@@ -8,6 +8,7 @@ import unittest
 from unittest.mock import patch
 
 from idgent import settings
+from idgent.themes import DEFAULT_THEME_ID
 
 
 class SettingsTest(unittest.TestCase):
@@ -21,7 +22,7 @@ class SettingsTest(unittest.TestCase):
 
     def test_round_trip_private_and_unknown_keys(self):
         self.assertEqual(settings.load(), {})
-        self.assertEqual(settings.get_theme_id(), 'dark-plus')
+        self.assertEqual(settings.get_theme_id(), DEFAULT_THEME_ID)
         self.assertTrue(settings.save({'unrelated': {'size': 12}, 'unicode': 'λ'}))
         self.assertTrue(settings.set_theme_id('nord'))
         self.assertEqual(settings.get_theme_id(), 'nord')
@@ -29,7 +30,7 @@ class SettingsTest(unittest.TestCase):
         self.assertEqual(settings.load()['unicode'], 'λ')
         self.assertEqual(stat.S_IMODE(self.path.stat().st_mode), 0o600)
         self.assertTrue(settings.set_theme_id('unknown'))
-        self.assertEqual(settings.get_theme_id(), 'dark-plus')
+        self.assertEqual(settings.get_theme_id(), DEFAULT_THEME_ID)
         self.assertEqual(settings.load()['unrelated'], {'size': 12})
 
     def test_invalid_files(self):
@@ -43,6 +44,17 @@ class SettingsTest(unittest.TestCase):
         self.path.mkdir()
         self.assertEqual(settings.load(), {})
         self.assertFalse(settings.save({'theme': 'nord'}))
+
+    def test_default_lookup_does_not_create_or_rewrite_settings(self):
+        self.assertEqual(settings.get_theme_id(), DEFAULT_THEME_ID)
+        self.assertFalse(self.path.exists())
+        self.path.parent.mkdir()
+        payload = b'{ "theme": "dracula", "unrelated": 42 }\n'
+        self.path.write_bytes(payload)
+        timestamp = self.path.stat().st_mtime_ns
+        self.assertEqual(settings.get_theme_id(), 'dracula')
+        self.assertEqual(self.path.read_bytes(), payload)
+        self.assertEqual(self.path.stat().st_mtime_ns, timestamp)
 
     def test_unreadable(self):
         with patch.object(Path, 'read_text', side_effect=PermissionError):

@@ -43,7 +43,7 @@ class ThemesTest(unittest.TestCase):
             self.assertIs(themes.get_theme(t.id), t)
             self.assertRegex(t.id, r'^[a-z][a-z0-9-]+$')
         for unknown in (None, '', 'missing', [], {}):
-            self.assertIs(themes.get_theme(unknown), themes.THEMES[0])
+            self.assertIs(themes.get_theme(unknown), themes.get_theme(themes.DEFAULT_THEME_ID))
         with self.assertRaises(dataclasses.FrozenInstanceError):
             themes.THEMES[0].name = 'changed'
 

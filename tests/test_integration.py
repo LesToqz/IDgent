@@ -23,7 +23,7 @@ gi.require_version('Vte', '2.91')
 from gi.repository import Gdk, Gio, GLib, Gtk, Vte
 
 from idgent import editor, highlight, style
-from idgent.themes import THEMES
+from idgent.themes import DEFAULT_THEME_ID, THEMES
 from idgent.window import MainWindow
 
 
@@ -195,8 +195,10 @@ print('startup-ok')
         target = Path(os.environ['XDG_CONFIG_HOME']) / 'idgent/settings.json'
         target.parent.mkdir(parents=True, exist_ok=True)
         for payload, expected in (('{"theme": "nord"}', 'nord'),
-                                  ('{"theme": "unknown"}', 'dark-plus'),
-                                  ('{broken', 'dark-plus')):
+                                  ('{"theme": "dracula"}', 'dracula'),
+                                  ('{}', DEFAULT_THEME_ID),
+                                  ('{"theme": "unknown"}', DEFAULT_THEME_ID),
+                                  ('{broken', DEFAULT_THEME_ID)):
             with self.subTest(payload=payload):
                 target.write_text(payload)
                 result = subprocess.run([sys.executable, '-c',
@@ -207,7 +209,7 @@ print('startup-ok')
         target.unlink()
         target.mkdir()  # Reading a directory raises OSError even when tests run as root.
         result = subprocess.run([sys.executable, '-c',
-                                 "EXPECTED = 'dark-plus'\n" + script],
+                                 'EXPECTED = ' + repr(DEFAULT_THEME_ID) + '\n' + script],
                                 capture_output=True, text=True, timeout=15)
         self.assertEqual(result.returncode, 0, result.stderr)
 
