@@ -63,12 +63,12 @@ list.idgent-card > row, list.idgent-card > row:hover, list.idgent-card > row:act
 list.idgent-card > row:focus {{ outline-color: {ui['border_focus']}; outline-style: solid;
     outline-width: 2px; outline-offset: -2px; -gtk-outline-radius: 8px; }}
 list.idgent-card separator.idgent-card-divider {{ background: {ui['border']};
-    min-height: 1px; margin: 0 20px; }}
+    min-height: 1px; }}
 .idgent-setting-name {{ font-size: 13px; color: {ui['foreground']}; }}
 .idgent-setting-desc {{ font-size: 12px; color: {ui['muted']}; }}
 .idgent-setting-value {{ font-size: 13px; color: {ui['muted']}; }}
 list.idgent-nav {{ background: transparent; color: {ui['foreground']}; }}
-list.idgent-nav > row {{ padding: 4px 8px; margin-bottom: 2px; border-radius: 8px;
+list.idgent-nav > row {{ padding: 3px 8px; margin-bottom: 2px; border-radius: 8px;
     font-size: 13px; background: transparent; color: {ui['foreground']}; min-height: 0; }}
 list.idgent-nav > row:hover {{ background: transparent; }}
 list.idgent-nav > row:selected, list.idgent-nav > row:selected:hover {{
@@ -120,7 +120,7 @@ class Toggle(Gtk.ToggleButton):
 
     @property
     def thumb_offset(self) -> int:
-        """Thumb margin from the track's left edge (2 off, 22 on)."""
+        """Thumb margin from the track's left edge (2 off, 20 on)."""
         return self.thumb.get_margin_start()
 
     def _place(self, animated: bool):
@@ -268,6 +268,8 @@ class SettingCard(Gtk.ListBox):
         elif row.get_header() is None:
             divider = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
             divider.get_style_context().add_class('idgent-card-divider')
+            divider.set_margin_start(20)
+            divider.set_margin_end(20)
             divider.show()
             row.set_header(divider)
 
