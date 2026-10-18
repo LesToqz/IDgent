@@ -5,6 +5,9 @@ gi.require_version('Gtk', '3.0')
 gi.require_version('Gdk', '3.0')
 from gi.repository import Gdk, GLib, Gtk
 
+from idgent.explorer import build_css as build_explorer_css
+from idgent.editor import build_css as build_editor_css
+from idgent.terminal_bar import build_css as build_terminal_bar_css
 from idgent.themes import Theme, get_theme
 from idgent.titlebar import build_titlebar_css
 from idgent.settings_dialog import build_css as build_settings_css
@@ -26,40 +29,8 @@ button:hover {{ background: {ui['button_hover']}; }}
 button:active {{ background: {ui['selection_active']}; }}
 button:focus, entry:focus {{ border-color: {ui['accent']}; outline-color: {ui['accent']}; outline-offset: -1px; }}
 entry selection {{ background: {ui['editor_selection']}; color: {ui['selection_fg']}; }}
-.idgent-explorer, .idgent-explorer viewport, .idgent-explorer scrolledwindow,
-.idgent-explorer treeview {{ background: {ui['sidebar_bg']}; color: {ui['foreground']}; }}
-.idgent-explorer-header {{ min-height: 35px; padding: 0 8px; }}
-.idgent-explorer-title {{ font-size: 11px; font-weight: bold; color: {ui['muted']}; }}
-.idgent-explorer-header button {{ background: transparent; border: 0; border-radius: 4px;
-    min-height: 22px; min-width: 22px; padding: 0; }}
-.idgent-explorer-header button:hover {{ background: {ui['hover']}; }}
-.idgent-explorer treeview {{ -GtkTreeView-vertical-separator: 2; -GtkTreeView-horizontal-separator: 4;
-    -GtkTreeView-expander-size: 12; }}
-.idgent-explorer treeview.view:hover {{ background: {ui['hover']}; }}
-.idgent-explorer treeview.view:selected {{ background: {ui['selection_inactive']}; color: {ui['foreground']}; }}
-.idgent-explorer treeview.view:selected:focus {{ background: {ui['selection_active']}; }}
-.idgent-explorer treeview expander {{ color: {ui['muted']}; }}
-.idgent-editor, .idgent-editor stack, .idgent-editor notebook,
-.idgent-editor notebook > stack {{ background: {ui['bg']}; color: {ui['foreground']}; border: 0; }}
-notebook > header.top {{ background: {ui['sidebar_bg']}; border: 0; padding: 0; margin: 0; }}
-notebook > header.top > tabs {{ padding: 0; margin: 0; border: 0; }}
-notebook > header.top > tabs > tab {{ background: {ui['tab_inactive_bg']};
-    color: {ui['muted']}; border: 0; border-top: 2px solid transparent; border-right: 1px solid {ui['border']};
-    border-radius: 0; box-shadow: none; min-height: 33px; padding: 0 12px; margin: 0; }}
-notebook > header.top > tabs > tab:checked {{ background: {ui['bg']};
-    color: {ui['foreground']}; border-top-color: {ui['accent']}; }}
-.idgent-tab-close {{ opacity: 0; min-width: 16px; min-height: 20px; padding: 0 2px;
-    border: 0; background: transparent; }}
-tab:hover .idgent-tab-close, tab:checked .idgent-tab-close,
-.idgent-tab-close:focus {{ opacity: 1; }}
-.idgent-tab-close:hover {{ background: {ui['tab_close_hover']}; }}
-.idgent-editor textview, .idgent-editor textview text {{ background-color: {ui['bg']};
-    color: {ui['editor_fg']}; caret-color: {ui['cursor']}; font-family: monospace; font-size: 11pt; }}
-.idgent-editor textview text selection {{ background-color: {ui['editor_selection']}; color: {ui['selection_fg']}; }}
-.idgent-empty {{ color: {ui['muted']}; font-size: 16px; padding: 12px; }}
-.idgent-find-bar > revealer > box {{ background: {ui['sidebar_bg']}; border-top: 1px solid {ui['border']};
-    border-bottom: 0; box-shadow: none; padding: 8px; }}
-.idgent-status {{ background: {ui['status_bg']}; color: {ui['status_fg']}; font-size: 12px; padding: 4px 12px; }}
+{build_explorer_css(ui)}
+{build_editor_css(ui)}
 scrollbar, scrollbar trough {{ background: transparent; border: 0;
     box-shadow: none; padding: 0; margin: 0; min-width: 0; min-height: 0; }}
 scrollbar slider {{ background: {ui['scrollbar']}; border: 0; border-radius: 0;
@@ -77,35 +48,12 @@ paned.horizontal > separator {{ border-left: 2px solid transparent; border-right
     background-clip: padding-box; }}
 paned.vertical > separator {{ border-top: 2px solid transparent; border-bottom: 2px solid transparent;
     background-clip: padding-box; }}
-.idgent-terminal {{ background: {ui['panel_bg']}; color: {ui['foreground']}; }}
-.idgent-terminal-sep {{ background: {ui['border']}; min-width: 1px; min-height: 1px; border: 0; }}
-.idgent-vte {{ padding: 8px; }}
-.idgent-terminal-header {{ background: {ui['panel_bg']}; color: {ui['muted']}; border: 0;
-    border-bottom: 1px solid {ui['border']}; box-shadow: none; min-height: 29px; padding: 0 4px 0 0; }}
-.idgent-terminal-header.corner {{ padding-right: 34px; }}
-.idgent-terminal-header button {{ background: transparent; color: {ui['muted']}; border: 0; border-radius: 4px;
-    box-shadow: none; text-shadow: none; min-height: 22px; min-width: 22px; padding: 0; margin: 3px 0 3px 2px; }}
-.idgent-terminal-header button:hover {{ background: {ui['hover']}; color: {ui['foreground']}; }}
-.idgent-terminal-header .idgent-terminal-header-label {{ min-width: 0; margin: 0; padding: 0 12px;
-    border-radius: 0; font-size: 12px; }}
-.idgent-terminal-header .idgent-terminal-header-label:hover {{ background: transparent; color: {ui['foreground']}; }}
-.idgent-terminal-header.active {{ color: {ui['foreground']}; border-bottom-color: {ui['accent']}; }}
-.idgent-terminal-header.active button {{ color: {ui['foreground']}; }}
-.idgent-terminal-add {{ background: transparent; border: 0; border-radius: 4px; box-shadow: none;
-    text-shadow: none; min-height: 22px; min-width: 24px; padding: 0; margin: 3px 4px 0 0;
-    color: {ui['foreground']}; }}
-.idgent-terminal-add:hover {{ background: {ui['hover']}; color: {ui['hover_fg']}; }}
-.idgent-terminal-add.limit {{ color: {ui['limit_tint']}; }}
-.idgent-terminal-add.limit:hover {{ color: {ui['warning']}; }}
-.idgent-terminal-toast {{ background: {ui['toast_bg']}; color: {ui['warning']}; font-size: 12px;
-    border: 1px solid {ui['limit_tint']}; border-radius: 4px; padding: 4px 12px; }}
+{build_terminal_bar_css(ui)}
 
 entry {{ background: {ui['input_bg']}; }}
 button, menuitem, notebook > header.top > tabs > tab, .idgent-explorer treeview.view {{
     transition: background 120ms ease, color 120ms ease;
 }}
-notebook > header.top > tabs > tab:hover {{ background: {ui['hover']}; color: {ui['foreground']}; }}
-notebook > header.top > tabs > tab:checked:hover {{ background: {ui['bg']}; }}
 *:focus {{ outline-color: {ui['accent']}; outline-style: solid; outline-width: 1px; outline-offset: -1px; }}
 tooltip, tooltip.background {{ background: {ui['panel_bg']}; color: {ui['foreground']};
     border: 1px solid {ui['border']}; border-radius: 4px; padding: 8px; }}

@@ -366,3 +366,22 @@ class ExplorerPanel(Gtk.Box):
         else:
             return False
         return True
+
+
+def build_css(ui: dict[str, str]) -> str:
+    """Render the existing component rules from theme UI roles."""
+    return f'''
+.idgent-explorer, .idgent-explorer viewport, .idgent-explorer scrolledwindow,
+.idgent-explorer treeview {{ background: {ui['sidebar_bg']}; color: {ui['foreground']}; }}
+.idgent-explorer-header {{ min-height: 35px; padding: 0 8px; }}
+.idgent-explorer-title {{ font-size: 11px; font-weight: bold; color: {ui['muted']}; }}
+.idgent-explorer-header button {{ background: transparent; border: 0; border-radius: 4px;
+    min-height: 22px; min-width: 22px; padding: 0; }}
+.idgent-explorer-header button:hover {{ background: {ui['hover']}; }}
+.idgent-explorer treeview {{ -GtkTreeView-vertical-separator: 2; -GtkTreeView-horizontal-separator: 4;
+    -GtkTreeView-expander-size: 12; }}
+.idgent-explorer treeview.view:hover {{ background: {ui['hover']}; }}
+.idgent-explorer treeview.view:selected {{ background: {ui['selection_inactive']}; color: {ui['foreground']}; }}
+.idgent-explorer treeview.view:selected:focus {{ background: {ui['selection_active']}; }}
+.idgent-explorer treeview expander {{ color: {ui['muted']}; }}
+'''

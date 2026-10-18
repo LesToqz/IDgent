@@ -755,3 +755,32 @@ class EditorPanel(Gtk.Box):
             tab.view.scroll_to_iter(match[0], 0.1, False, 0, 0)
         else:
             style.add_class('error')
+
+
+def build_css(ui: dict[str, str]) -> str:
+    """Render the existing component rules from theme UI roles."""
+    return f'''
+.idgent-editor, .idgent-editor stack, .idgent-editor notebook,
+.idgent-editor notebook > stack {{ background: {ui['bg']}; color: {ui['foreground']}; border: 0; }}
+notebook > header.top {{ background: {ui['sidebar_bg']}; border: 0; padding: 0; margin: 0; }}
+notebook > header.top > tabs {{ padding: 0; margin: 0; border: 0; }}
+notebook > header.top > tabs > tab {{ background: {ui['tab_inactive_bg']};
+    color: {ui['muted']}; border: 0; border-top: 2px solid transparent; border-right: 1px solid {ui['border']};
+    border-radius: 0; box-shadow: none; min-height: 33px; padding: 0 12px; margin: 0; }}
+notebook > header.top > tabs > tab:checked {{ background: {ui['bg']};
+    color: {ui['foreground']}; border-top-color: {ui['accent']}; }}
+.idgent-tab-close {{ opacity: 0; min-width: 16px; min-height: 20px; padding: 0 2px;
+    border: 0; background: transparent; }}
+tab:hover .idgent-tab-close, tab:checked .idgent-tab-close,
+.idgent-tab-close:focus {{ opacity: 1; }}
+.idgent-tab-close:hover {{ background: {ui['tab_close_hover']}; }}
+.idgent-editor textview, .idgent-editor textview text {{ background-color: {ui['bg']};
+    color: {ui['editor_fg']}; caret-color: {ui['cursor']}; font-family: monospace; font-size: 11pt; }}
+.idgent-editor textview text selection {{ background-color: {ui['editor_selection']}; color: {ui['selection_fg']}; }}
+.idgent-empty {{ color: {ui['muted']}; font-size: 16px; padding: 12px; }}
+.idgent-find-bar > revealer > box {{ background: {ui['sidebar_bg']}; border-top: 1px solid {ui['border']};
+    border-bottom: 0; box-shadow: none; padding: 8px; }}
+.idgent-status {{ background: {ui['status_bg']}; color: {ui['status_fg']}; font-size: 12px; padding: 4px 12px; }}
+notebook > header.top > tabs > tab:hover {{ background: {ui['hover']}; color: {ui['foreground']}; }}
+notebook > header.top > tabs > tab:checked:hover {{ background: {ui['bg']}; }}
+'''
