@@ -146,6 +146,21 @@ def _version() -> str:
         return 'unknown'
 
 
+class _ThemeRow:
+    def __init__(self, theme_id):
+        self.theme_id = theme_id
+
+
+class _ThemeListCompat:
+    """The former ListBox API (``theme_list.select_row(theme_rows[id])``) on the dropdown."""
+
+    def __init__(self, combo):
+        self._combo = combo
+
+    def select_row(self, row):
+        self._combo.set_active_id(row.theme_id)
+
+
 def _class(widget, name):
     widget.get_style_context().add_class('idgent-settings-' + name)
     return widget
@@ -400,6 +415,8 @@ class SettingsDialog(Gtk.Window):
         for theme in THEMES:
             self.theme_combo.append(theme.id, theme.name)
         self.theme_combo.connect('changed', self._theme_changed)
+        self.theme_rows = {theme.id: _ThemeRow(theme.id) for theme in THEMES}
+        self.theme_list = _ThemeListCompat(self.theme_combo)
         self.theme_preview = Gtk.Box(spacing=2)
         self.theme_preview.set_valign(Gtk.Align.CENTER)
         self.theme_preview.get_accessible().set_name('Theme preview')

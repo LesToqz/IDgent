@@ -63,8 +63,9 @@ class SettingsDialogTest(unittest.TestCase):
         self.dialog.connect('theme-selected', lambda _, theme: events.append(theme))
         self.dialog.theme_combo.set_active_id('nord')
         self.assertEqual(events, ['nord'])
-        self.dialog.theme_combo.set_active_id('dracula')
+        self.dialog.theme_list.select_row(self.dialog.theme_rows['dracula'])  # Former API.
         self.assertEqual(events, ['nord', 'dracula'])
+        self.assertEqual(list(self.dialog.theme_rows), [t.id for t in THEMES])
         self.dialog.set_theme_id('light-plus')
         self.assertEqual(self.dialog.theme_id, 'light-plus')
         self.dialog.set_theme_id('unknown')
