@@ -1,4 +1,4 @@
-"""Lazy filesystem explorer. Hidden files use the same styling as other files."""
+"""Lazy filesystem explorer with theme-driven navigation and removal preferences."""
 
 import os
 from collections.abc import Callable
@@ -27,16 +27,27 @@ class ExplorerPanel(Gtk.Box):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.get_style_context().add_class("idgent-explorer")
         self.root = ""
+        self.show_hidden = True
+        self.confirm_delete = True
+        self.delete_mode = "delete"
         self._loaded: set[str] = set()
         self.store = Gtk.TreeStore(str, str, str)
         self.tree = Gtk.TreeView(model=self.store)
         self.tree.set_headers_visible(False)
         self.tree.set_grid_lines(Gtk.TreeViewGridLines.NONE)
+        self.tree.set_margin_start(12)
+        self.tree.set_margin_end(12)
+        self.tree.set_margin_top(4)
+        self.tree.set_margin_bottom(24)
         column = Gtk.TreeViewColumn()
         icon = Gtk.CellRendererPixbuf()
         column.pack_start(icon, False)
-        column.add_attribute(icon, "icon-name", 0)
-        label = Gtk.CellRendererText()
+        # Preserve model icon names (also used to identify directories), but
+        # render their system symbolic variants in the row's muted colour.
+        column.set_cell_data_func(icon, lambda col, cell, model, row, data:
+                                  cell.set_property("icon-name", model[row][0] + "-symbolic"
+                                                    if model[row][0] else None))
+        label = Gtk.CellRendererText(ellipsize=Pango.EllipsizeMode.END)
         self._text_cell = label
         column.pack_start(label, True)
         column.add_attribute(label, "text", 1)
@@ -46,11 +57,12 @@ class ExplorerPanel(Gtk.Box):
         self.tree.connect("button-press-event", self._on_button)
         self.connect("key-press-event", self._on_key)
         self.tree.connect("popup-menu", self._on_popup)
-        toolbar = Gtk.Box(spacing=3)
+        toolbar = Gtk.Box()
         toolbar.get_style_context().add_class("idgent-explorer-header")
-        title = Gtk.Label(label="EXPLORER", xalign=0)
-        title.get_style_context().add_class("idgent-explorer-title")
-        toolbar.pack_start(title, True, True, 6)
+        toolbar.set_tooltip_text("EXPLORER")
+        toolbar.get_accessible().set_name("EXPLORER")
+        actions = Gtk.Box(spacing=2, halign=Gtk.Align.CENTER)
+        toolbar.pack_start(actions, True, True, 0)
         for name, tooltip, callback in (
             ("document-new-symbolic", "New File", lambda *_: self._new_dialog(False)),
             ("folder-new-symbolic", "New Folder", lambda *_: self._new_dialog(True)),
@@ -59,8 +71,9 @@ class ExplorerPanel(Gtk.Box):
             button = Gtk.Button.new_from_icon_name(name, Gtk.IconSize.MENU)
             button.set_relief(Gtk.ReliefStyle.NONE)
             button.set_tooltip_text(tooltip)
+            button.get_accessible().set_name(tooltip)
             button.connect("clicked", callback)
-            toolbar.pack_start(button, False, False, 0)
+            actions.pack_start(button, False, False, 0)
         self.pack_start(toolbar, False, False, 0)
         self._scroll = Gtk.ScrolledWindow()
         self._scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
@@ -95,9 +108,41 @@ class ExplorerPanel(Gtk.Box):
         self._rebuild(self._expanded_paths(), self._selected_path())
         self._refresh_search()
 
+    def set_show_hidden(self, show: bool) -> None:
+        """Show dot-files and dot-folders in the navigator (default True)."""
+        if self.show_hidden != bool(show):
+            self.show_hidden = bool(show)
+            self.refresh()
+
+    def set_confirm_delete(self, confirm: bool) -> None:
+        """Confirm ordinary removals (default True); trash fallback always asks."""
+        self.confirm_delete = bool(confirm)
+
+    def set_delete_mode(self, mode: str) -> None:
+        """Choose 'delete' (the default) or 'trash' for subsequent removals."""
+        if mode not in ("trash", "delete"):
+            raise ValueError("Delete mode must be 'trash' or 'delete'.")
+        self.delete_mode = mode
+
     def set_current_file(self, path: str | None) -> None:
-        """Name the file whose search results are listed first (the active editor tab)."""
+        """Reveal the active editor file and list its search results first."""
         self.search.set_current_file(path or None)
+        if not path:
+            self.tree.get_selection().unselect_all()
+            return
+        path = os.path.abspath(path)
+        if os.path.commonpath((path, self.root)) != self.root:
+            self.tree.get_selection().unselect_all()
+            return
+        parent = self.root
+        for part in os.path.relpath(path, self.root).split(os.sep):
+            row = self._find(parent)
+            if row is None:
+                break
+            self.tree.expand_row(self.store.get_path(row), False)
+            parent = os.path.join(parent, part)
+        self.tree.get_selection().unselect_all()
+        self._select(path)
 
     def set_text_provider(self, provider: Callable[[str], str | None] | None) -> None:
         """Provide live (possibly unsaved) text for a path, or None to read the disk."""
@@ -156,6 +201,8 @@ class ExplorerPanel(Gtk.Box):
         try:
             with os.scandir(path) as listing:
                 for entry in listing:
+                    if not self.show_hidden and entry.name.startswith("."):
+                        continue
                     try:
                         # Directory symlinks remain leaf entries, avoiding cycles.
                         entries.append((entry.is_dir(follow_symlinks=False), entry.name, entry.path))
@@ -172,6 +219,9 @@ class ExplorerPanel(Gtk.Box):
             self.store.remove(placeholder)
 
     def _on_expanded(self, tree: Gtk.TreeView, row: Gtk.TreeIter, path: Gtk.TreePath) -> None:
+        # GTK3 exposes neither animated child geometry nor a per-row chevron
+        # widget for motion.animate(). Keep expansion instant, including when
+        # reduced motion is enabled (UX spec 7.2).
         self._load(row)
 
     def _on_activated(self, tree: Gtk.TreeView, path: Gtk.TreePath, column: Gtk.TreeViewColumn) -> None:
@@ -233,10 +283,11 @@ class ExplorerPanel(Gtk.Box):
         self._refresh_search()
         return result
 
-    def _delete(self, path: str) -> str:
+    def _delete(self, path: str, *, permanent: bool = False) -> str:
         if os.path.abspath(path) == self.root:
             raise fsops.FsOpError("The project root cannot be deleted.")
-        result = fsops.delete(path, project_root=self.root)
+        operation = fsops.trash if self.delete_mode == "trash" and not permanent else fsops.delete
+        result = operation(path, project_root=self.root)
         self._rebuild(self._expanded_paths(), self._selected_path())
         self.emit("path-deleted", result)
         self._refresh_search()
@@ -281,26 +332,42 @@ class ExplorerPanel(Gtk.Box):
         if path and path != self.root:
             self._name_dialog("Rename", os.path.basename(path), lambda name: self._rename(path, name))
 
+    def _confirm_removal(self, path: str, *, fallback: bool = False) -> bool:
+        trash = self.delete_mode == "trash" and not fallback
+        title = f'Move "{os.path.basename(path)}" to trash?' if trash else f'Delete "{os.path.basename(path)}"?'
+        dialog = Gtk.MessageDialog(
+            transient_for=self._window(), modal=True, message_type=Gtk.MessageType.WARNING,
+            buttons=Gtk.ButtonsType.OK_CANCEL, text=title,
+        )
+        detail = ("You can restore this item from the system trash." if trash else
+                  "Folders and their contents are deleted recursively. This cannot be undone.")
+        if fallback:
+            detail = "Trash is unavailable here. Delete permanently instead?\n" + detail
+        dialog.format_secondary_text(detail)
+        accepted = dialog.run() == Gtk.ResponseType.OK
+        dialog.destroy()
+        return accepted
+
     def _delete_dialog(self) -> None:
         path = self._selected_path()
         if not path or path == self.root:
             return
-        dialog = Gtk.MessageDialog(
-            transient_for=self._window(), modal=True, message_type=Gtk.MessageType.WARNING,
-            buttons=Gtk.ButtonsType.OK_CANCEL, text=f'Delete "{os.path.basename(path)}"?',
-        )
-        dialog.format_secondary_text("Folders and their contents are deleted recursively. This cannot be undone.")
-        accepted = dialog.run() == Gtk.ResponseType.OK
-        dialog.destroy()
-        if accepted:
+        if self.confirm_delete and not self._confirm_removal(path):
+            return
+        try:
             try:
                 self._delete(path)
-            except fsops.FsOpError as error:
-                message = Gtk.MessageDialog(transient_for=self._window(), modal=True,
-                                            message_type=Gtk.MessageType.ERROR, buttons=Gtk.ButtonsType.CLOSE,
-                                            text=str(error))
-                message.run()
-                message.destroy()
+            except fsops.TrashUnavailable:
+                # Consent to trash is not consent to irreversible deletion,
+                # even when ordinary confirmation prompts are disabled.
+                if self._confirm_removal(path, fallback=True):
+                    self._delete(path, permanent=True)
+        except fsops.FsOpError as error:
+            message = Gtk.MessageDialog(transient_for=self._window(), modal=True,
+                                        message_type=Gtk.MessageType.ERROR, buttons=Gtk.ButtonsType.CLOSE,
+                                        text=str(error))
+            message.run()
+            message.destroy()
 
     def _copy_path(self) -> None:
         Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).set_text(self._selected_path() or self.root, -1)
@@ -317,6 +384,8 @@ class ExplorerPanel(Gtk.Box):
             ("Copy Path", lambda *_: self._copy_path()),
         ):
             item = Gtk.MenuItem(label=title)
+            if title == "Delete":
+                item.get_style_context().add_class("destructive-action")
             item.connect("activate", callback)
             if title in ("Rename...", "Delete"):
                 item.set_sensitive(bool(selected and selected != self.root))
@@ -369,19 +438,21 @@ class ExplorerPanel(Gtk.Box):
 
 
 def build_css(ui: dict[str, str]) -> str:
-    """Render the existing component rules from theme UI roles."""
+    """Render the navigator's instant states from theme UI roles."""
     return f'''
 .idgent-explorer, .idgent-explorer viewport, .idgent-explorer scrolledwindow,
 .idgent-explorer treeview {{ background: {ui['sidebar_bg']}; color: {ui['foreground']}; }}
-.idgent-explorer-header {{ min-height: 35px; padding: 0 8px; }}
-.idgent-explorer-title {{ font-size: 11px; font-weight: bold; color: {ui['muted']}; }}
+.idgent-explorer-header {{ background: {ui['sidebar_bg']}; min-height: 24px; padding: 8px; }}
 .idgent-explorer-header button {{ background: transparent; border: 0; border-radius: 4px;
-    min-height: 22px; min-width: 22px; padding: 0; }}
-.idgent-explorer-header button:hover {{ background: {ui['hover']}; }}
-.idgent-explorer treeview {{ -GtkTreeView-vertical-separator: 2; -GtkTreeView-horizontal-separator: 4;
-    -GtkTreeView-expander-size: 12; }}
-.idgent-explorer treeview.view:hover {{ background: {ui['hover']}; }}
-.idgent-explorer treeview.view:selected {{ background: {ui['selection_inactive']}; color: {ui['foreground']}; }}
-.idgent-explorer treeview.view:selected:focus {{ background: {ui['selection_active']}; }}
+    box-shadow: none; color: {ui['muted']}; min-height: 16px; min-width: 16px; padding: 4px 6px; }}
+.idgent-explorer-header button image {{ opacity: 0.85; }}
+.idgent-explorer-header button:hover {{ background: alpha({ui['overlay']}, 0.067); color: {ui['foreground']}; }}
+.idgent-explorer-header button:hover image {{ opacity: 1; }}
+.idgent-explorer treeview.view {{ color: {ui['muted']}; font-size: 13px;
+    -GtkTreeView-vertical-separator: 2; -GtkTreeView-horizontal-separator: 4;
+    -GtkTreeView-expander-size: 10; -gtk-icon-style: symbolic; }}
+.idgent-explorer treeview.view:hover, .idgent-explorer treeview.view:selected {{
+    background: alpha({ui['overlay']}, 0.067); color: {ui['foreground']}; border-radius: 8px; }}
+.idgent-explorer treeview.view:focus {{ -gtk-outline-radius: 8px; }}
 .idgent-explorer treeview expander {{ color: {ui['muted']}; }}
 '''
