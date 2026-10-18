@@ -214,7 +214,7 @@ class StyleTest(unittest.TestCase):
                         self.assert_color(view, theme.ui['bg'], background=True)
                         self.assert_color(editor.status, theme.ui['status_fg'])
                         self.assert_color(editor.status, theme.ui['status_bg'], background=True)
-                        self.assert_color(bar, theme.ui['titlebar_bg'], background=True)
+                        self.assert_color(bar, theme.ui['sidebar_bg'], background=True)
                         self.assert_color(bar.title_label, theme.ui['title_fg'])
                         self.assertEqual(editor.syntax_style, theme.syntax)
                         self.assertEqual(editor.chrome, theme.chrome)
