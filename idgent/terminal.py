@@ -12,10 +12,17 @@ gi.require_version("Gdk", "3.0")
 gi.require_version("Vte", "2.91")
 from gi.repository import Gdk, Gio, GLib, GObject, Gtk, Pango, Vte
 
+from idgent import motion
 from idgent.resizegate import ResizeGate
 from idgent.terminal_bar import AddButton, LimitToast, PaneHeader, cancel_fade, fade
 
 MAX_TERMINALS = 3
+SCROLLBACK_RANGE = (1000, 100000)
+CURSOR_SHAPES = {
+    "block": Vte.CursorShape.BLOCK,
+    "ibeam": Vte.CursorShape.IBEAM,
+    "underline": Vte.CursorShape.UNDERLINE,
+}
 
 
 def pick_shell() -> str:
@@ -101,6 +108,9 @@ class TerminalPanel(Gtk.Box):
         self._maximized: _Pane | None = None
         self._next_id = 1
         self._palette = (_FOREGROUND, _BACKGROUND, list(_PALETTE), None)
+        self._cursor_shape = "block"
+        self._cursor_blink = True
+        self._scrollback = 10000
         self.get_style_context().add_class("idgent-terminal")
         self.set_hexpand(True)
         self.set_vexpand(True)
@@ -177,7 +187,8 @@ class TerminalPanel(Gtk.Box):
         self._cwd = path
 
     def _animated(self) -> bool:
-        return self.ANIMATION_MS > 0 and self.get_mapped() and not self._destroyed
+        return (self.ANIMATION_MS > 0 and self.get_mapped() and not self._destroyed
+                and motion.animations_enabled())
 
     def header_labels(self) -> list[str]:
         """Labels of the live panes in pane order."""
@@ -339,6 +350,31 @@ class TerminalPanel(Gtk.Box):
             if isinstance(pane.frame, ResizeGate):
                 pane.frame.set_background(background)
 
+    def set_cursor_shape(self, shape: str) -> None:
+        """Use 'block', 'ibeam' or 'underline' cursors in existing and future panes."""
+        if shape not in CURSOR_SHAPES:
+            raise ValueError(f"unknown cursor shape: {shape!r}")
+        self._cursor_shape = shape
+        for pane in self._panes + self._closing:
+            pane.terminal.set_cursor_shape(CURSOR_SHAPES[shape])
+
+    def set_cursor_blink(self, blink: bool) -> None:
+        """Make the cursor of existing and future panes blink, or keep it steady."""
+        self._cursor_blink = bool(blink)
+        for pane in self._panes + self._closing:
+            self._apply_blink(pane.terminal)
+
+    def set_scrollback(self, lines: int) -> None:
+        """Keep `lines` of history (clamped to SCROLLBACK_RANGE) in existing and future panes."""
+        low, high = SCROLLBACK_RANGE
+        self._scrollback = max(low, min(high, int(lines)))
+        for pane in self._panes + self._closing:
+            pane.terminal.set_scrollback_lines(self._scrollback)
+
+    def _apply_blink(self, terminal: Vte.Terminal) -> None:
+        terminal.set_cursor_blink_mode(Vte.CursorBlinkMode.ON if self._cursor_blink
+                                       else Vte.CursorBlinkMode.OFF)
+
     def _apply_colors(self, terminal: Vte.Terminal) -> None:
         foreground, background, ansi, cursor = self._palette
         terminal.set_colors(_color(foreground), _color(background), [_color(c) for c in ansi])
@@ -352,8 +388,9 @@ class TerminalPanel(Gtk.Box):
         terminal.set_margin_bottom(8)
         terminal.set_font(Pango.FontDescription(f"Monospace {self.font_size}"))
         self._apply_colors(terminal)
-        terminal.set_cursor_blink_mode(Vte.CursorBlinkMode.ON)
-        terminal.set_scrollback_lines(10000)
+        terminal.set_cursor_shape(CURSOR_SHAPES[self._cursor_shape])
+        self._apply_blink(terminal)
+        terminal.set_scrollback_lines(self._scrollback)
         terminal.set_scroll_on_output(False)
         terminal.set_scroll_on_keystroke(True)
         terminal.set_audible_bell(False)
@@ -388,6 +425,7 @@ class TerminalPanel(Gtk.Box):
 
     def _focus_changed(self, terminal, _event, pane, focused):
         context = terminal.get_style_context()
+        pane.header.set_focused(focused)
         if focused:
             if not pane.closed:
                 self._set_active(pane)
