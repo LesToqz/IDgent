@@ -207,6 +207,8 @@ def build_css(ui: dict[str, str]) -> str:
     return f"""
 @define-color idgent_search_match {ui['accent_text']};
 @define-color idgent_search_group {ui['faint']};
+.idgent-search, .idgent-search scrolledwindow, .idgent-search viewport {{
+    background: {ui['sidebar_bg']}; }}
 .idgent-search-row {{ background: {ui['sidebar_bg']}; padding: 4px 12px 8px; }}
 .idgent-search-entry {{ background: {ui['input_bg']}; color: {ui['foreground']};
     border: 1px solid {ui['border']}; border-radius: 5px; min-height: 20px; padding: 4px 8px;
@@ -251,6 +253,7 @@ class SearchPanel(Gtk.Box):
 
     def __init__(self, content: Gtk.Widget, root: str = ''):
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
+        self.get_style_context().add_class('idgent-search')
         self.root = os.path.abspath(root) if root else ''
         self.current_path = None
         self.text_provider = None
