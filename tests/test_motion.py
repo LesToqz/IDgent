@@ -1,0 +1,546 @@
+"""Pure timing/colour checks and real GTK3 frame-clock integration under X11."""
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+import time
+import unittest
+from unittest.mock import patch
+
+os.environ["GDK_BACKEND"] = "x11"
+
+import gi
+
+gi.require_version("Gtk", "3.0")
+gi.require_version("Gdk", "3.0")
+from gi.repository import Gdk, GLib, Gtk
+
+from idgent.motion import (
+    DURATIONS, EASINGS, StateFader, animate, animate_size_request,
+    animations_enabled, cubic_bezier, duration_ms, fade, lerp_color, slide_in,
+)
+
+
+def poll(predicate, timeout=2):
+    deadline = time.monotonic() + timeout
+    context = GLib.MainContext.default()
+    while time.monotonic() < deadline:
+        while context.pending():
+            context.iteration(False)
+        if predicate():
+            return True
+        time.sleep(0.002)
+    return bool(predicate())
+
+
+def pump(seconds):
+    poll(lambda: False, seconds)
+
+
+class EasingTest(unittest.TestCase):
+    def test_endpoints_and_clamping(self):
+        for name, ease in EASINGS.items():
+            with self.subTest(easing=name):
+                self.assertEqual([ease(t) for t in (-10, 0, 1, 10)], [0, 0, 1, 1])
+
+    def test_linear_identity(self):
+        for i in range(101):
+            self.assertEqual(EASINGS["linear"](i / 100), i / 100)
+
+    def test_smooth_is_monotonic(self):
+        samples = [EASINGS["smooth"](i / 1000) for i in range(1001)]
+        self.assertEqual(samples, sorted(samples))
+
+    def test_swing_and_jumpy_overshoot(self):
+        for name in ("swing", "jumpy"):
+            self.assertGreater(max(EASINGS[name](i / 100) for i in range(101)), 1)
+        self.assertLess(EASINGS["jumpy"](0.1), 0)
+
+    def test_css_ease_known_values(self):
+        for t, expected in ((0.1, 0.0947963), (0.25, 0.4085106),
+                            (0.5, 0.8024034), (0.75, 0.9604591)):
+            self.assertAlmostEqual(EASINGS["ease"](t), expected, delta=1e-3)
+
+    def test_flat_derivatives_use_bisection(self):
+        # x(s)=s^3, y(s)=3s^2-2s^3 has a flat derivative near the origin.
+        ease = cubic_bezier(0, 0, 0, 1)
+        for t in (1e-6, 0.01, 0.1, 0.5, 0.99):
+            s = t ** (1 / 3)
+            self.assertAlmostEqual(ease(t), 3 * s * s - 2 * s ** 3, delta=1e-6)
+        # x controls can cross, including the stationary midpoint of (1, 0).
+        self.assertAlmostEqual(cubic_bezier(1, 0, 0, 1)(0.5), 0.5)
+
+    def test_invalid_controls_and_inputs(self):
+        for controls in ((-0.1, 0, 1, 1), (0, 0, 1.1, 1), (0, float("nan"), 1, 1)):
+            with self.assertRaises(ValueError):
+                cubic_bezier(*controls)
+        with self.assertRaises(ValueError):
+            EASINGS["smooth"](float("nan"))
+
+    def test_duration_tokens_and_numbers(self):
+        self.assertEqual(DURATIONS, {"none": 0, "superfast": 70, "fast": 140,
+                                     "moderate": 300, "slow": 560})
+        for name, expected in DURATIONS.items():
+            self.assertEqual(duration_ms(name), expected)
+        self.assertEqual(duration_ms(12.5), 12.5)
+        self.assertEqual(duration_ms(-1), -1)
+        with self.assertRaises(KeyError):
+            duration_ms("typo")
+        with self.assertRaises(ValueError):
+            duration_ms(float("inf"))
+
+
+class ColorTest(unittest.TestCase):
+    def test_hex_and_rgb_midpoints(self):
+        self.assertEqual(lerp_color("#000", "#ffffff", 0.5), "rgba(128, 128, 128, 1)")
+        self.assertEqual(lerp_color("rgb(255, 0, 0)", "#00f", 0.5), "rgba(128, 0, 128, 1)")
+
+    def test_alpha_and_short_hex(self):
+        self.assertEqual(lerp_color("#f000", "#0000ffff", 0.5), "rgba(128, 0, 128, 0.5)")
+        self.assertEqual(lerp_color("rgba(10, 20, 30, 0.2)", "rgba(30, 40, 50, 0.8)", 0.5),
+                         "rgba(20, 30, 40, 0.5)")
+
+    def test_percentages_endpoints_and_overshoot(self):
+        self.assertEqual(lerp_color("rgba(100%, 0%, 0%, 50%)", "#000", 0),
+                         "rgba(255, 0, 0, 0.5)")
+        self.assertEqual(lerp_color("#000", "#fff", 2), "rgba(255, 255, 255, 1)")
+        self.assertEqual(lerp_color("#000", "#fff", -1), "rgba(0, 0, 0, 1)")
+
+    def test_invalid_color(self):
+        for color in ("#abcde", "#ggg", "rgb(1, 2)", "rgba(1, 2, 3)", "rgba(1, 2, 3, nan)"):
+            with self.subTest(color=color), self.assertRaises(ValueError):
+                lerp_color(color, "#fff", 0.5)
+
+    def test_import_and_pure_functions_without_display_or_side_effects(self):
+        script = """
+from unittest.mock import patch
+import gi
+gi.require_version('Gtk', '3.0')
+from gi.repository import GLib, Gtk
+def forbidden(*args, **kwargs):
+    raise AssertionError('import touched GTK state or registered a source')
+with patch.object(Gtk.Widget, '__init__', forbidden), \
+     patch.object(Gtk.Settings, 'get_default', forbidden), \
+     patch.object(GLib, 'timeout_add', forbidden), \
+     patch.object(GLib, 'idle_add', forbidden):
+    from idgent import motion
+    assert motion.EASINGS['ease'](0.5) > 0.8
+    assert motion.duration_ms('fast') == 140
+    assert motion.lerp_color('#000', '#fff', 1) == 'rgba(255, 255, 255, 1)'
+assert Gtk.Window.list_toplevels() == []
+"""
+        env = dict(os.environ)
+        env.pop("DISPLAY", None)
+        env.pop("WAYLAND_DISPLAY", None)
+        result = subprocess.run([sys.executable, "-c", script], env=env,
+                                capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+
+class GtkFixture(unittest.TestCase):
+    def setUp(self):
+        if not Gtk.init_check()[0]:
+            self.skipTest("GTK tests need an X11 display (use xvfb-run)")
+        env = patch.dict(os.environ, {"IDGENT_REDUCE_MOTION": "0"})
+        env.start()
+        self.addCleanup(env.stop)
+        self.settings = Gtk.Settings.get_default()
+        original = self.settings.get_property("gtk-enable-animations")
+        self.settings.set_property("gtk-enable-animations", True)
+        self.addCleanup(self.settings.set_property, "gtk-enable-animations", original)
+        self.window = Gtk.Window()
+        self.widget = Gtk.EventBox()
+        self.window.add(self.widget)
+        self.window.set_default_size(200, 120)
+        self.window.show_all()
+        self.addCleanup(self.window.destroy)
+        self.assertTrue(poll(lambda: self.widget.get_mapped() and
+                             self.widget.get_allocated_width() > 1))
+        # PyGObject reports callback exceptions instead of propagating through
+        # MainContext.iteration; turn those into test failures, including teardown.
+        self.errors = []
+        hook = patch.object(sys, "excepthook", lambda *exc: self.errors.append(exc))
+        hook.start()
+        self.addCleanup(hook.stop)
+        self.addCleanup(lambda: self.assertEqual(self.errors, []))
+
+    def finish(self, handle):
+        self.assertTrue(poll(lambda: handle.finished))
+
+
+class TweenTest(GtkFixture):
+    def test_frame_clock_timing_progress_and_done_once(self):
+        samples, done = [], []
+        start = time.monotonic()
+        with patch.object(GLib, "timeout_add", side_effect=AssertionError("visible timer")):
+            handle = animate(self.widget, 140, samples.append, on_done=lambda: done.append(1))
+            self.assertFalse(handle.finished)
+            self.finish(handle)
+        elapsed = time.monotonic() - start
+        self.assertGreaterEqual(elapsed, 0.12)
+        self.assertLess(elapsed, 0.6)
+        self.assertGreater(len(samples), 3)
+        self.assertEqual(samples, sorted(samples))
+        self.assertEqual((samples[0], samples[-1]), (0, 1))
+        pump(0.04)
+        self.assertEqual(done, [1])
+
+    def test_cancel_stops_updates_without_done(self):
+        samples, done = [], []
+        handle = animate(self.widget, 200, samples.append, on_done=lambda: done.append(1))
+        self.assertTrue(poll(lambda: samples[-1] > 0.1))
+        handle.cancel()
+        count = len(samples)
+        handle.cancel()
+        pump(0.25)
+        self.assertTrue(handle.finished)
+        self.assertEqual(len(samples), count)
+        self.assertEqual(done, [])
+
+    def test_replacement_captures_current_value(self):
+        values, done = [], []
+        first = animate(self.widget, 200, values.append, key="amount", on_done=lambda: done.append(1))
+        self.assertTrue(poll(lambda: values[-1] > 0.15))
+        current = values[-1]
+        second = animate(self.widget, 70, lambda p: values.append(current * (1 - p)), key="amount")
+        self.assertEqual(values[-1], current)
+        self.assertTrue(first.finished)
+        self.finish(second)
+        self.assertEqual(values[-1], 0)
+        self.assertEqual(done, [])
+
+    def test_independent_keys(self):
+        done = []
+        a = animate(self.widget, 70, lambda _p: None, key="a", on_done=lambda: done.append("a"))
+        b = animate(self.widget, 70, lambda _p: None, key="b", on_done=lambda: done.append("b"))
+        self.finish(a)
+        self.finish(b)
+        self.assertCountEqual(done, ["a", "b"])
+
+    def test_destroy_and_unrealize_cancel_quietly(self):
+        for action in ("destroy", "unrealize", "hide"):
+            with self.subTest(action=action):
+                window = Gtk.Window()
+                window.show()
+                self.addCleanup(window.destroy)
+                values, done = [], []
+                handle = animate(window, 140, values.append, on_done=lambda: done.append(1))
+                self.assertTrue(poll(lambda: values[-1] > 0))
+                getattr(window, action)()
+                count = len(values)
+                pump(0.05)
+                self.assertTrue(handle.finished)
+                self.assertEqual(len(values), count)
+                self.assertEqual(done, [])
+
+    def test_hidden_fallback_completes(self):
+        for realized in (False, True):
+            widget = Gtk.Window()
+            if realized:
+                widget.realize()
+            self.addCleanup(widget.destroy)
+            values, done = [], []
+            with patch.object(widget, "add_tick_callback", side_effect=AssertionError("hidden tick")):
+                handle = animate(widget, 70, values.append, on_done=lambda: done.append(1))
+                self.finish(handle)
+            self.assertEqual(values[-1], 1)
+            self.assertEqual(done, [1])
+
+    def test_hidden_destroy_stops_fallback(self):
+        widget = Gtk.Label()
+        values, done = [], []
+        handle = animate(widget, 100, values.append, on_done=lambda: done.append(1))
+        widget.destroy()
+        pump(0.12)
+        self.assertTrue(handle.finished)
+        self.assertEqual(values, [0])
+        self.assertEqual(done, [])
+
+    def test_hidden_then_mapped_switches_to_frame_clock(self):
+        widget = Gtk.Window()
+        self.addCleanup(widget.destroy)
+        values = []
+        handle = animate(widget, 140, values.append)
+        self.assertTrue(poll(lambda: values[-1] > 0.1))
+        with patch.object(widget, "add_tick_callback", wraps=widget.add_tick_callback) as tick:
+            widget.show()
+            self.finish(handle)
+            tick.assert_called_once()
+        self.assertEqual(values[-1], 1)
+        self.assertEqual(values, sorted(values))
+
+    def test_delay_and_callable_easing(self):
+        values = []
+        start = time.monotonic()
+        handle = animate(self.widget, 70, values.append, delay=70, easing=lambda t: t * t)
+        pump(0.035)
+        self.assertEqual(values, [0])
+        self.finish(handle)
+        self.assertGreaterEqual(time.monotonic() - start, 0.13)
+        self.assertEqual(values[-1], 1)
+
+    def test_engine_preserves_overshoot(self):
+        values = []
+        self.finish(animate(self.widget, 140, values.append, easing="swing"))
+        self.assertGreater(max(values), 1)
+
+    def test_immediate_durations_ignore_delay(self):
+        for duration in (0, -1, "none"):
+            values, done = [], []
+            handle = animate(self.widget, duration, values.append, delay=999,
+                             on_done=lambda: done.append(1))
+            self.assertTrue(handle.finished)
+            self.assertEqual(values, [1])
+            self.assertEqual(done, [1])
+
+    def test_env_and_gtk_setting_force_synchronous_completion(self):
+        for override in ("env", "setting"):
+            with self.subTest(override=override):
+                os.environ["IDGENT_REDUCE_MOTION"] = "1" if override == "env" else "0"
+                self.settings.set_property("gtk-enable-animations", override == "env")
+                self.assertFalse(animations_enabled())
+                values, done = [], []
+                handle = animate(self.widget, 300, values.append, delay=100,
+                                 on_done=lambda: done.append(1))
+                self.assertTrue(handle.finished)
+                self.assertEqual(values, [1])
+                self.assertEqual(done, [1])
+
+    def test_update_can_replace_itself(self):
+        replacements, done = [], []
+
+        def update(p):
+            if p > 0 and not replacements:
+                replacements.append(animate(self.widget, 0, lambda _p: None))
+
+        handle = animate(self.widget, 70, update, on_done=lambda: done.append(1))
+        self.finish(handle)
+        self.assertEqual(len(replacements), 1)
+        self.assertEqual(done, [])
+
+    def test_done_can_start_next_tween(self):
+        next_handles = []
+        first = animate(self.widget, 70, lambda _p: None,
+                        on_done=lambda: next_handles.append(animate(self.widget, 70, lambda _p: None)))
+        self.finish(first)
+        self.assertFalse(next_handles[0].finished)
+        self.finish(next_handles[0])
+
+    def test_update_exception_cleans_up(self):
+        def fail(_p):
+            raise ValueError("caller failure")
+
+        with self.assertRaisesRegex(ValueError, "caller failure"):
+            animate(self.widget, 100, fail)
+        self.assertEqual(self.widget._motion_tweens, {})
+
+    def test_update_can_destroy_widget(self):
+        done = []
+
+        def update(p):
+            if p > 0:
+                self.widget.destroy()
+
+        handle = animate(self.widget, 70, update, on_done=lambda: done.append(1))
+        self.finish(handle)
+        self.assertEqual(done, [])
+        self.assertEqual(self.widget._motion_tweens, {})
+
+
+class ValueHelperTest(GtkFixture):
+    def test_fade_exit_and_entrance(self):
+        done = []
+        self.finish(fade(self.widget, False, 70, on_done=lambda: done.append(self.widget.get_visible())))
+        self.assertEqual(self.widget.get_opacity(), 0)
+        self.assertFalse(self.widget.get_visible())
+        self.assertEqual(done, [False])
+        handle = fade(self.widget, True, 70)
+        self.assertTrue(self.widget.get_visible())
+        self.assertEqual(self.widget.get_opacity(), 0)
+        self.finish(handle)
+        self.assertEqual(self.widget.get_opacity(), 1)
+
+    def test_fade_reverses_from_current_opacity(self):
+        done = []
+        first = fade(self.widget, False, 200, on_done=lambda: done.append(1))
+        self.assertTrue(poll(lambda: self.widget.get_opacity() < 0.8))
+        current = self.widget.get_opacity()
+        second = fade(self.widget, True, 70)
+        self.assertEqual(self.widget.get_opacity(), current)
+        self.assertTrue(first.finished)
+        self.finish(second)
+        self.assertEqual(self.widget.get_opacity(), 1)
+        self.assertEqual(done, [])
+
+    def test_fade_can_keep_transparent_widget_visible(self):
+        self.finish(fade(self.widget, False, 70, hide_when_done=False))
+        self.assertTrue(self.widget.get_visible())
+        self.assertEqual(self.widget.get_opacity(), 0)
+
+    def test_slide_restores_margin_and_restarts_without_jump(self):
+        self.widget.hide()
+        self.widget.set_margin_top(8)
+        first = slide_in(self.widget, offset=20, duration=200, easing="smooth")
+        self.assertEqual(self.widget.get_margin_top(), 28)
+        self.assertEqual(self.widget.get_opacity(), 0)
+        self.assertTrue(poll(lambda: self.widget.get_opacity() > 0.2))
+        current = (self.widget.get_margin_top(), self.widget.get_opacity())
+        done = []
+        second = slide_in(self.widget, offset=99, duration=70,
+                          on_done=lambda: done.append(self.widget.get_margin_top()))
+        self.assertTrue(first.finished)
+        self.assertEqual((self.widget.get_margin_top(), self.widget.get_opacity()), current)
+        self.finish(second)
+        self.assertEqual((self.widget.get_margin_top(), self.widget.get_opacity()), (8, 1))
+        self.assertEqual(done, [8])
+
+    def test_fade_settles_interrupted_slide(self):
+        self.widget.set_margin_top(6)
+        first = slide_in(self.widget, offset=30, duration=200, easing="smooth")
+        self.assertTrue(poll(lambda: self.widget.get_margin_top() < 30))
+        current = self.widget.get_margin_top()
+        second = fade(self.widget, False, 70)
+        self.assertEqual(self.widget.get_margin_top(), current)
+        self.assertTrue(first.finished)
+        self.finish(second)
+        self.assertEqual(self.widget.get_margin_top(), 6)
+        self.assertFalse(self.widget.get_visible())
+
+    def test_size_restores_original_and_clears_natural_request(self):
+        self.widget.set_size_request(24, -1)
+        done = []
+        width = animate_size_request(self.widget, "width", 80, 70,
+                                     on_done=lambda: done.append(self.widget.get_size_request()[0]))
+        height = animate_size_request(self.widget, "height", 60, 70)
+        self.finish(width)
+        self.finish(height)
+        self.assertEqual(tuple(self.widget.get_size_request()), (24, -1))
+        self.assertEqual(done, [24])
+
+    def test_size_reverses_from_current_request_and_can_retain_target(self):
+        self.widget.set_size_request(10, 20)
+        first = animate_size_request(self.widget, "width", 110, 200)
+        self.assertTrue(poll(lambda: self.widget.get_size_request()[0] > 30))
+        current = self.widget.get_size_request()[0]
+        second = animate_size_request(self.widget, "width", 0, 70, restore=False)
+        self.assertEqual(self.widget.get_size_request()[0], current)
+        self.assertTrue(first.finished)
+        self.finish(second)
+        self.assertEqual(tuple(self.widget.get_size_request()), (0, 20))
+
+    def test_size_replacement_keeps_original_baseline(self):
+        self.widget.set_size_request(10, -1)
+        first = animate_size_request(self.widget, "width", 90, 200)
+        self.assertTrue(poll(lambda: self.widget.get_size_request()[0] > 20))
+        self.finish(animate_size_request(self.widget, "width", 40, 70))
+        self.assertTrue(first.finished)
+        self.assertEqual(self.widget.get_size_request()[0], 10)
+
+    def test_invalid_size_arguments(self):
+        with self.assertRaises(ValueError):
+            animate_size_request(self.widget, "depth", 40)
+        with self.assertRaises(ValueError):
+            animate_size_request(self.widget, "width", -1)
+
+    def test_helpers_settle_synchronously_with_reduced_motion(self):
+        os.environ["IDGENT_REDUCE_MOTION"] = "1"
+        done = []
+        self.widget.set_margin_top(7)
+        self.widget.set_size_request(-1, 23)
+        handles = [fade(self.widget, False, on_done=lambda: done.append("out")),
+                   fade(self.widget, True, on_done=lambda: done.append("in")),
+                   slide_in(self.widget, on_done=lambda: done.append("slide")),
+                   animate_size_request(self.widget, "width", 100, on_done=lambda: done.append("size")),
+                   animate_size_request(self.widget, "height", 50, restore=False)]
+        self.assertTrue(all(h.finished for h in handles))
+        self.assertEqual(done, ["out", "in", "slide", "size"])
+        self.assertEqual(self.widget.get_opacity(), 1)
+        self.assertEqual(self.widget.get_margin_top(), 7)
+        self.assertEqual(tuple(self.widget.get_size_request()), (-1, 50))
+
+
+class StateFaderTest(GtkFixture):
+    def test_reverse_and_end_state(self):
+        values, done = [], []
+        fader = StateFader(self.widget, values.append, duration=200)
+        self.addCleanup(fader.disconnect)
+        first = fader.set(1, lambda: done.append(1))
+        self.assertTrue(poll(lambda: fader.value > 0.2))
+        current = fader.value
+        fader.duration = 70
+        second = fader.set(0)
+        self.assertEqual(fader.value, current)
+        self.assertEqual(values[-1], current)
+        self.assertTrue(first.finished)
+        start = len(values) - 1
+        self.finish(second)
+        self.assertEqual(values[start:], sorted(values[start:], reverse=True))
+        self.assertEqual(fader.value, 0)
+        self.assertEqual(done, [])
+
+    def test_enter_leave_events(self):
+        fader = StateFader(self.widget, lambda _v: None, duration=70)
+        self.addCleanup(fader.disconnect)
+        for event_type, signal, target in ((Gdk.EventType.ENTER_NOTIFY, "enter-notify-event", 1),
+                                            (Gdk.EventType.LEAVE_NOTIFY, "leave-notify-event", 0)):
+            event = Gdk.Event.new(event_type)
+            event.crossing.detail = Gdk.NotifyType.NONLINEAR
+            self.widget.emit(signal, event)
+            self.assertTrue(poll(lambda: fader.value == target))
+
+    def test_inferior_crossing_does_not_change_target(self):
+        fader = StateFader(self.widget, lambda _v: None, duration=0, initial=1)
+        self.addCleanup(fader.disconnect)
+        event = Gdk.Event.new(Gdk.EventType.LEAVE_NOTIFY)
+        event.crossing.detail = Gdk.NotifyType.INFERIOR
+        self.widget.emit("leave-notify-event", event)
+        self.assertEqual(fader.value, 1)
+
+    def test_disconnect_and_destroy_cancel(self):
+        values = []
+        fader = StateFader(self.widget, values.append)
+        first = fader.set(1)
+        fader.disconnect()
+        count = len(values)
+        pump(0.16)
+        self.assertTrue(first.finished)
+        self.assertEqual(len(values), count)
+        with self.assertRaises(RuntimeError):
+            fader.set(0)
+        other = StateFader(self.widget, values.append)
+        second = other.set(1)
+        self.widget.destroy()
+        self.assertTrue(second.finished)
+        other.disconnect()
+
+    def test_reduced_motion_and_clamped_values(self):
+        os.environ["IDGENT_REDUCE_MOTION"] = "1"
+        values, done = [], []
+        fader = StateFader(self.widget, values.append, initial=-1)
+        self.addCleanup(fader.disconnect)
+        handle = fader.set(2, lambda: done.append(1))
+        self.assertTrue(handle.finished)
+        self.assertEqual(values, [0, 1])
+        self.assertEqual(done, [1])
+        self.assertEqual(fader.value, 1)
+
+    def test_update_can_disconnect_before_set_returns(self):
+        values, done = [], []
+        fader = StateFader(self.widget, values.append)
+
+        def update(value):
+            values.append(value)
+            fader.disconnect()
+
+        fader._update = update
+        handle = fader.set(1, lambda: done.append(1))
+        self.assertTrue(handle.finished)
+        count = len(values)
+        pump(0.16)
+        self.assertEqual(len(values), count)
+        self.assertEqual(done, [])
+
+
+if __name__ == "__main__":
+    unittest.main()
