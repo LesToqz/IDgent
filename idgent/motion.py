@@ -539,7 +539,12 @@ class StateFader:
         """Cancel, disconnect event handlers and release the widget/callback."""
         self.cancel()
         if self._widget is not None:
-            for signal in self._signals:
-                self._widget.disconnect(signal)
+            try:
+                for signal in self._signals:
+                    self._widget.disconnect(signal)
+            except RuntimeError:
+                # A never-parented widget finalised by the GC emits "destroy"
+                # from dispose, when its wrapper is no longer initialised.
+                pass
             self._signals.clear()
             self._widget = self._update = None
