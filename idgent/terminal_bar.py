@@ -4,13 +4,14 @@ from __future__ import annotations
 import gi
 
 gi.require_version("Gtk", "3.0")
-from gi.repository import GLib, GObject, Gtk, Pango
+from gi.repository import Gdk, GLib, GObject, Gtk, Pango
 
 from idgent import motion
 from idgent.themes import _legible
 
 # Key of the opacity tween started by `fade()`; `cancel_fade()` stops only that one.
 _FADE_KEY = object()
+_GLYPH_KEY = object()
 # Header glyphs rest slightly dimmed and reach full opacity on hover (spec 4.3).
 GLYPH_OPACITY = 0.85
 # The notice background is black at 90%, so its text must stay legible on near-black.
@@ -77,16 +78,32 @@ class _IconButton(Gtk.Button):
         self.get_style_context().add_class("idgent-terminal-icon")
         self.icon_name = icon_name
         self.glyph_opacity = GLYPH_OPACITY
+        self._hover = 0.0
         self.set_icon(icon_name, glyph)
-        self.glyph_fader = motion.StateFader(self, self._set_glyph_opacity,
-                                             duration="clickable_icon_opacity",
-                                             easing="ease_in_out")
+        # Like motion.StateFader, but without a destroy handler: throwaway buttons
+        # finalised by the garbage collector must not run Python code on dispose.
+        self.add_events(Gdk.EventMask.ENTER_NOTIFY_MASK | Gdk.EventMask.LEAVE_NOTIFY_MASK)
+        self.connect("enter-notify-event", self._crossing, 1.0)
+        self.connect("leave-notify-event", self._crossing, 0.0)
 
-    def _set_glyph_opacity(self, hover: float) -> None:
-        self.glyph_opacity = GLYPH_OPACITY + (1 - GLYPH_OPACITY) * hover
-        child = self.get_child()
-        if child is not None:
-            child.set_opacity(self.glyph_opacity)
+    def _crossing(self, _widget, event, target: float) -> bool:
+        if event.detail != Gdk.NotifyType.INFERIOR:
+            self.set_hover(target)
+        return False
+
+    def set_hover(self, target: float) -> motion.Tween:
+        """Fade the glyph towards hovered (1) or resting (0) over 140 ms."""
+        start = self._hover
+
+        def update(t):
+            self._hover = start + (target - start) * t
+            self.glyph_opacity = GLYPH_OPACITY + (1 - GLYPH_OPACITY) * self._hover
+            child = self.get_child()
+            if child is not None:
+                child.set_opacity(self.glyph_opacity)
+
+        return motion.animate(self, "clickable_icon_opacity", update, easing="ease_in_out",
+                              key=_GLYPH_KEY)
 
     def set_icon(self, icon_name: str, glyph: str) -> None:
         self.icon_name = icon_name
