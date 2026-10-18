@@ -433,6 +433,30 @@ class ExplorerTests(unittest.TestCase):
                 self.assertEqual(errors, [])
                 self.assertNotIn('transition:', build_css(theme.ui))
 
+    def test_header_actions_create_in_selected_folder_and_refresh(self):
+        self.show_panel()
+        folder = self.root / 'Zdir'
+        self.panel._select(str(folder))
+        new_file, new_folder, refresh = self.panel.get_children()[0].get_children()[0].get_children()
+
+        def accept_name(title, initial, action):
+            action('created.txt' if title == 'New File' else 'created-folder')
+
+        with patch.object(self.panel, '_name_dialog', side_effect=accept_name):
+            new_file.clicked()
+            self.assertTrue((folder / 'created.txt').is_file())
+            self.assertEqual(self.panel._selected_path(), str(folder / 'created.txt'))
+            new_folder.clicked()
+            self.assertTrue((folder / 'created-folder').is_dir())
+            self.assertEqual(self.panel._selected_path(), str(folder / 'created-folder'))
+
+        external = folder / 'external.txt'
+        external.touch()
+        self.assertIsNone(self.panel._find(str(external)))
+        refresh.clicked()
+        self.assertIsNotNone(self.panel._find(str(external)))
+        self.assertEqual(self.panel._selected_path(), str(folder / 'created-folder'))
+
     def test_delete_menu_item_inherits_base_padding_radius_and_danger(self):
         self.show_panel()
         self.panel._select(str(self.root / 'A.py'))
