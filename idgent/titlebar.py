@@ -5,31 +5,65 @@ import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import GObject, Gtk
 
+from idgent import motion
 from idgent.themes import get_theme
+
+# A 39 px strip plus a 1 px divider; window controls are 44 px wide.
+HEADER_HEIGHT = 40
+WINDOW_BUTTON_WIDTH = 44
+# Resting cog glyph opacity; hovering fades it to 1 over 140 ms.
+GLYPH_OPACITY = 0.85
 
 
 def build_titlebar_css(ui: dict[str, str]) -> str:
-    """Build the titlebar rules from the same roles as the application theme."""
+    """Build the titlebar rules from the same roles as the application theme.
+
+    Reference app-style chrome: a 39 px strip plus a 1 px divider on the secondary
+    background, 44 px flat window controls, and clickable-icon hovers (radius 4,
+    translucent overlay) for the menus and the settings cog. Hovers are instant;
+    only the cog glyph opacity fades (driven by ``motion``, see ``TitleBar``).
+    ``margin: 0`` cancels the theme's -1 px solid-CSD margin that would eat the
+    divider when no compositor is running.
+    """
+    hover = f"alpha({ui['overlay']}, 0.067)"
+    pressed = f"alpha({ui['overlay']}, 0.12)"
     return f"""
-headerbar.idgent-titlebar {{
-    background: {ui['titlebar_bg']}; color: {ui['titlebar_fg']}; min-height: 34px;
-    padding: 0; border: 0; border-radius: 0; box-shadow: none;
+headerbar.idgent-titlebar, headerbar.idgent-titlebar:backdrop {{
+    background: {ui['sidebar_bg']}; color: {ui['titlebar_fg']}; min-height: {HEADER_HEIGHT - 1}px;
+    padding: 0; margin: 0; border: 0; border-bottom: 1px solid {ui['border']}; border-radius: 0;
+    box-shadow: none;
 }}
-.idgent-titlebar .idgent-title {{ color: {ui['title_fg']}; font-size: 12px; }}
+headerbar.idgent-titlebar:backdrop {{ color: {ui['muted']}; }}
+.idgent-titlebar .idgent-title {{ color: {ui['title_fg']}; font-size: 13px; font-weight: 600; }}
 .idgent-titlebar menubar {{
-    background: transparent; color: {ui['titlebar_fg']}; padding: 0; border: 0;
+    background: transparent; color: inherit; padding: 0; margin: 0 0 0 6px;
+    border: 0; box-shadow: none;
 }}
-.idgent-titlebar menubar > menuitem {{ padding: 4px 8px; }}
-.idgent-titlebar menubar > menuitem:hover {{ background: {ui['button_hover']}; }}
+.idgent-titlebar menubar > menuitem {{
+    color: inherit; font-size: 13px; padding: 4px 8px; min-height: 20px; margin: 0 1px;
+    border: 0; border-radius: 4px; box-shadow: none; transition: none;
+}}
+.idgent-titlebar menubar > menuitem:hover {{
+    background: {hover}; color: {ui['titlebar_fg']}; box-shadow: none;
+}}
 .idgent-titlebar button.titlebutton,
 .idgent-titlebar button.idgent-settings-button {{
-    background: transparent; color: {ui['titlebar_fg']}; border: 0; border-radius: 0;
-    box-shadow: none; text-shadow: none; min-height: 32px; min-width: 32px;
-    padding: 0; margin: 0;
+    background: transparent; color: {ui['muted']}; border: 0; box-shadow: none;
+    text-shadow: none; -gtk-icon-shadow: none; margin: 0; transition: none;
+}}
+.idgent-titlebar button.titlebutton {{
+    border-radius: 0; min-width: {WINDOW_BUTTON_WIDTH}px; min-height: {HEADER_HEIGHT - 1}px; padding: 0;
+}}
+.idgent-titlebar button.titlebutton image {{ -gtk-icon-transform: scale(0.75); }}
+.idgent-titlebar button.idgent-settings-button {{
+    border-radius: 4px; -gtk-outline-radius: 4px; min-width: 16px; min-height: 16px; padding: 6px;
 }}
 .idgent-titlebar button.titlebutton:hover,
-.idgent-titlebar button.idgent-settings-button:hover {{ background: {ui['button_hover']}; }}
-.idgent-titlebar button.titlebutton.close:hover {{ background: {ui['close_hover']}; color: {ui['close_fg']}; }}
+.idgent-titlebar button.idgent-settings-button:hover {{ background: {hover}; color: {ui['foreground']}; }}
+.idgent-titlebar button.titlebutton:active,
+.idgent-titlebar button.idgent-settings-button:active {{ background: {pressed}; color: {ui['foreground']}; }}
+.idgent-titlebar button.titlebutton.close:hover,
+.idgent-titlebar button.titlebutton.close:active {{ background: {ui['danger']}; color: #ffffff; }}
 .idgent-titlebar separator {{ background: transparent; min-width: 0; margin: 0; }}
 """
 
@@ -45,6 +79,8 @@ class TitleBar(Gtk.HeaderBar):
     def __init__(self, menu_bar: Gtk.MenuBar) -> None:
         super().__init__()
         self.get_style_context().add_class("idgent-titlebar")
+        # Window controls form one contiguous 3 x 44 px block; margins space the rest.
+        self.props.spacing = 0
         self.set_show_close_button(True)
         self.set_decoration_layout(":minimize,maximize,close")
         self.menu_bar = menu_bar
@@ -57,6 +93,8 @@ class TitleBar(Gtk.HeaderBar):
         self.settings_button = Gtk.Button()
         self.settings_button.set_relief(Gtk.ReliefStyle.NONE)
         self.settings_button.set_valign(Gtk.Align.CENTER)
+        # A widget margin (outside the allocation) keeps the hit area 28 x 28.
+        self.settings_button.set_margin_end(6)
         context = self.settings_button.get_style_context()
         context.add_class("flat")
         context.add_class("idgent-settings-button")
@@ -68,7 +106,12 @@ class TitleBar(Gtk.HeaderBar):
                 break
         else:
             self.settings_button.add(Gtk.Label(label="⚙"))
+        self.settings_fader = motion.StateFader(
+            self.settings_button, self._set_settings_glyph, "clickable_icon_opacity", "ease_in_out")
         self.settings_button.set_tooltip_text("Settings (Ctrl+,)")
         self.settings_button.get_accessible().set_name("Settings")
         self.settings_button.connect("clicked", lambda _: self.emit("settings-requested"))
         self.pack_end(self.settings_button)
+
+    def _set_settings_glyph(self, hover: float) -> None:
+        self.settings_button.get_child().set_opacity(GLYPH_OPACITY + (1 - GLYPH_OPACITY) * hover)
