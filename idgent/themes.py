@@ -298,7 +298,7 @@ THEMES: tuple[Theme, ...] = (
     _idgent_theme(False),
 )
 
-DEFAULT_THEME_ID = 'dark-plus'
+DEFAULT_THEME_ID = 'idgent-dark'
 
 
 def get_theme(theme_id: str | None) -> Theme:
