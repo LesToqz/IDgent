@@ -7,6 +7,8 @@ import time
 import unittest
 from unittest.mock import patch
 
+os.environ['GDK_BACKEND'] = 'x11'
+
 import gi
 
 gi.require_version('Gtk', '3.0')
@@ -67,13 +69,13 @@ class SettingsWiringTest(unittest.TestCase):
                 self.assertEqual(pane.terminal.get_font().get_size() / Pango.SCALE,
                                  sizes['terminal_font_size'])
 
-    def test_menu_accelerator_lazy_reusable_nonmodal_dialog(self):
+    def test_gear_accelerator_lazy_reusable_nonmodal_dialog(self):
         window = self.window()
         self.assertIsNone(window._settings_dialog)
         window.show_all()
         menu = window.titlebar.menu_bar.get_children()[0].get_submenu()
-        entry = next(i for i in menu.get_children() if i.get_label() == 'Settings…')
-        entry.activate()
+        self.assertFalse(any('Settings' in (item.get_label() or '') for item in menu.get_children()))
+        window.titlebar.settings_button.clicked()
         dialog = window._settings_dialog
         self.assertIs(dialog.get_transient_for(), window)
         self.assertFalse(dialog.get_modal())
@@ -84,6 +86,36 @@ class SettingsWiringTest(unittest.TestCase):
             present.assert_called_once()
         self.assertIs(window._settings_dialog, dialog)
         self.assertTrue(dialog.get_visible())
+
+    def test_settings_shortcut_with_editor_and_both_terminal_docks_focused(self):
+        window = self.window()
+        path = self.root / 'shortcut.py'
+        path.write_text('pass\n')
+        window.editor.open_file(str(path))
+        window.show_all()
+        window.toggle_terminal_right()
+        self.spin()
+        focuses = (window.editor._current().view,
+                   window.terminal_bottom._panes[0].terminal,
+                   window.terminal_right._panes[0].terminal)
+        for focus in focuses:
+            with self.subTest(focus=focus):
+                focus.grab_focus()
+                self.assertIs(window.get_focus(), focus)
+                event = Gdk.Event.new(Gdk.EventType.KEY_PRESS)
+                event.window = window.get_window()
+                display = Gdk.Display.get_default()
+                event.set_device(display.get_default_seat().get_keyboard())
+                event.keyval, event.state = Gtk.accelerator_parse('<Control>comma')
+                # GTK translates the physical keycode when dispatching accelerators.
+                found, keys = Gdk.Keymap.get_for_display(display).get_entries_for_keyval(event.keyval)
+                self.assertTrue(found)
+                event.hardware_keycode, event.group = keys[0].keycode, keys[0].group
+                with patch.object(window, 'open_settings', wraps=window.open_settings) as opened:
+                    self.assertTrue(window.emit('key-press-event', event))
+                    opened.assert_called_once()
+                self.assertTrue(window._settings_dialog.get_visible())
+                window._settings_dialog.hide()
 
     def test_live_sizes_future_content_reset_and_reopen(self):
         path = self.root / 'first.py'

@@ -69,6 +69,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self.sidebar.set_position(260)
 
         self.titlebar = TitleBar(self._build_menu())
+        self.titlebar.connect("settings-requested", lambda _: self.open_settings())
         self.set_titlebar(self.titlebar)
         layout = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         layout.pack_start(self.sidebar, True, True, 0)
@@ -102,7 +103,6 @@ class MainWindow(Gtk.ApplicationWindow):
         item(file_menu, "Open Folder…", self.open_folder)
         item(file_menu, "Save", lambda: self.editor.save_current(), "<Control>s")
         item(file_menu, "Save All", lambda: self.editor.save_all(), "<Control><Shift>s")
-        item(file_menu, "Settings…", self.open_settings, "<Control>comma")
         item(file_menu, "Quit", self.close, "<Control>q")
         item(view_menu, "Terminal Below", self.toggle_terminal_bottom, "<Control>grave")
         item(view_menu, "Terminal on Right", self.toggle_terminal_right, "<Control><Alt>grave")
@@ -111,6 +111,9 @@ class MainWindow(Gtk.ApplicationWindow):
              "<Control><Shift>F11")
         item(view_menu, "Toggle Explorer Sidebar", self.toggle_explorer, "<Control>b")
         item(view_menu, "Search in Files", self.search_in_files, "<Control><Shift>f")
+        key, modifiers = Gtk.accelerator_parse("<Control>comma")
+        accelerators.connect(key, modifiers, Gtk.AccelFlags.VISIBLE,
+                             lambda *_: (self.open_settings(), True)[1])
         key, modifiers = Gtk.accelerator_parse("<Control><Alt>t")
         accelerators.connect(key, modifiers, Gtk.AccelFlags.VISIBLE,
                              lambda *_: (self.next_theme(), True)[1])

@@ -24,7 +24,9 @@ from tests.test_integration import alive, poll
 def descendants(widget):
     yield widget
     if isinstance(widget, Gtk.Container):
-        for child in widget.get_children():
+        children = []
+        widget.forall(children.append)
+        for child in children:
             yield from descendants(child)
 
 
@@ -39,6 +41,9 @@ class TitleBarTests(unittest.TestCase):
     def setUp(self):
         self.folder = tempfile.TemporaryDirectory(prefix="idgent-titlebar-")
         self.addCleanup(self.folder.cleanup)
+        environment = patch.dict(os.environ, XDG_CONFIG_HOME=self.folder.name)
+        environment.start()
+        self.addCleanup(environment.stop)
         self.window = MainWindow(self.application, self.folder.name)
         self.addCleanup(self.destroy_window)
         self.window.show_all()
@@ -66,6 +71,89 @@ class TitleBarTests(unittest.TestCase):
                 self.assertEqual(errors, [])
                 self.assertIn(theme.ui['titlebar_bg'], css)
                 self.assertIn(theme.ui['close_hover'], css)
+                self.assertIn('button.idgent-settings-button:hover', css)
+
+    def test_settings_button_accessibility_and_signal(self):
+        bar = self.window.titlebar
+        button = bar.settings_button
+        self.assertIsInstance(button, Gtk.Button)
+        self.assertTrue(button.get_visible())
+        self.assertEqual(button.get_relief(), Gtk.ReliefStyle.NONE)
+        self.assertTrue(button.get_style_context().has_class('flat'))
+        self.assertTrue(button.get_style_context().has_class('idgent-settings-button'))
+        self.assertEqual(button.get_tooltip_text(), 'Settings (Ctrl+,)')
+        self.assertEqual(button.get_accessible().get_name(), 'Settings')
+        requested = []
+        bar.connect('settings-requested', lambda widget: requested.append(widget))
+        button.clicked()
+        self.assertEqual(requested, [bar])
+        self.assertTrue(self.window._settings_dialog.get_visible())
+
+    def test_settings_icon_fallback_chain_and_glyph(self):
+        names = ('preferences-system-symbolic', 'emblem-system-symbolic',
+                 'preferences-other-symbolic')
+        for available in (*names, None):
+            with self.subTest(available=available), patch.object(Gtk.IconTheme, 'get_default') as get_theme:
+                get_theme.return_value.has_icon.side_effect = lambda name: name == available
+                bar = TitleBar(Gtk.MenuBar())
+                try:
+                    child = bar.settings_button.get_child()
+                    if available is None:
+                        self.assertIsInstance(child, Gtk.Label)
+                        self.assertEqual(child.get_text(), '⚙')
+                    else:
+                        self.assertIsInstance(child, Gtk.Image)
+                        self.assertEqual(child.get_icon_name()[0], available)
+                    expected = names if available is None else names[:names.index(available) + 1]
+                    self.assertEqual([call.args[0] for call in get_theme.return_value.has_icon.call_args_list],
+                                     list(expected))
+                finally:
+                    bar.destroy()
+
+    def test_settings_immediately_precedes_minimize_in_real_allocations(self):
+        bar = self.window.titlebar
+        gear = bar.settings_button
+        widgets = list(descendants(bar))
+        minimize = next(w for w in widgets if isinstance(w, Gtk.Button)
+                        and w.get_style_context().has_class('minimize'))
+        self.assertTrue(gear.get_mapped())
+        self.assertTrue(minimize.get_mapped())
+        gear_x, _ = gear.translate_coordinates(bar, 0, 0)
+        right = gear_x + gear.get_allocated_width()
+        minimize_x, _ = minimize.translate_coordinates(bar, 0, 0)
+        self.assertLessEqual(right, minimize_x)
+        self.assertEqual((gear.get_allocated_width(), gear.get_allocated_height()), (32, 32))
+        for widget in widgets:
+            if not widget.get_mapped():
+                continue
+            x, _ = widget.translate_coordinates(bar, 0, 0)
+            if right <= x < minimize_x and x + widget.get_allocated_width() <= minimize_x:
+                # GTK inserts a decoration separator, painted fully transparent by our CSS.
+                self.assertIsInstance(widget, Gtk.Separator)
+                self.assertEqual(widget.get_style_context().get_background_color(
+                    Gtk.StateFlags.NORMAL).alpha, 0)
+
+    def test_settings_button_style_tracks_live_theme_switch(self):
+        gear = self.window.titlebar.settings_button
+        context = gear.get_style_context()
+        minimize = next(w for w in descendants(self.window.titlebar)
+                        if isinstance(w, Gtk.Button) and w.get_style_context().has_class('minimize'))
+        for theme in (get_theme('dark-plus'), next(t for t in THEMES if not t.dark)):
+            with self.subTest(theme=theme.id):
+                self.window.set_theme(theme.id, persist=False)
+                foreground = Gdk.RGBA()
+                foreground.parse(theme.ui['titlebar_fg'])
+                hover = Gdk.RGBA()
+                hover.parse(theme.ui['button_hover'])
+                self.assertTrue(poll(lambda: context.get_color(Gtk.StateFlags.NORMAL).equal(foreground)))
+                self.assertEqual(context.get_color(Gtk.StateFlags.NORMAL),
+                                 minimize.get_style_context().get_color(Gtk.StateFlags.NORMAL))
+                gear.set_state_flags(Gtk.StateFlags.PRELIGHT, False)
+                try:
+                    self.assertTrue(poll(lambda: context.get_background_color(Gtk.StateFlags.PRELIGHT).equal(hover)))
+                    self.assertEqual((gear.get_allocated_width(), gear.get_allocated_height()), (32, 32))
+                finally:
+                    gear.unset_state_flags(Gtk.StateFlags.PRELIGHT)
 
     def test_menus_share_header_and_leave_content(self):
         bar = self.window.get_titlebar()
