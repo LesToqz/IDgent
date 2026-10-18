@@ -184,7 +184,7 @@ class SettingRow(Gtk.ListBoxRow):
         self.key, self.name, self.description, self.aliases = key, name, description, tuple(aliases)
         self.control = control
         self._haystack = ' '.join((name, description, *self.aliases)).casefold()
-        box = Gtk.Box(spacing=16)
+        box = self._box = Gtk.Box(spacing=16)
         info = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         info.set_valign(Gtk.Align.CENTER)
         self.name_label = _label(name, 'idgent-setting-name', wrap=True)
@@ -215,6 +215,19 @@ class SettingRow(Gtk.ListBoxRow):
                 accessible.set_name(name)
         box.pack_end(self.controls, False, False, 0)
         self.add(box)
+
+    @property
+    def narrow(self) -> bool:
+        return self._box.get_orientation() == Gtk.Orientation.VERTICAL
+
+    def set_narrow(self, narrow: bool):
+        """Narrow content (< 400 px): stack a non-toggle control under the text."""
+        narrow = narrow and self.control is not None and not isinstance(self.control, Toggle)
+        if narrow == self.narrow:
+            return
+        self._box.set_orientation(Gtk.Orientation.VERTICAL if narrow else Gtk.Orientation.HORIZONTAL)
+        self._box.set_spacing(12 if narrow else 16)
+        self.controls.set_halign(Gtk.Align.START if narrow else Gtk.Align.END)
 
     def matches(self, query: str) -> bool:
         return all(word in self._haystack for word in query.casefold().split())

@@ -78,6 +78,7 @@ DEFAULT_HOTKEYS = (
     ('New folder in explorer', 'Ctrl+Shift+N'),
 )
 NAV_WIDTH = (0.25, 200, 250)
+NARROW_CONTENT = 400  # Below this column width rows stack their controls (spec 4.15).
 FONT_ROWS = {
     'terminal_font_size': ('Terminal text size', 'Text size of every terminal, in points.', 'terminal'),
     'editor_font_size': ('Editor text size',
@@ -167,6 +168,7 @@ class SettingsDialog(Gtk.Window):
         self._values: dict[str, object] = {}
         self._setters = {}
         self._searching = False
+        self._narrow = False
         self._nav_counts: dict[str, int] | None = None
         self.rows: dict[str, SettingRow] = {}
         self.controls: dict[str, Gtk.Widget] = {}
@@ -251,7 +253,16 @@ class SettingsDialog(Gtk.Window):
         target = max(low, min(high, round(width * fraction)))
         if self.nav_pane.get_size_request()[0] != target:
             self.nav_pane.set_size_request(target, -1)
+        column = min(700, width - target - 1 - 2 * 32)
+        narrow = column < NARROW_CONTENT
+        if narrow != self._narrow:
+            self._narrow = narrow
+            for row in self._all_rows():
+                row.set_narrow(narrow)
         return False
+
+    def _all_rows(self):
+        return [row for groups in self._groups.values() for _, card in groups for row in card.rows]
 
     def _scrolled(self, child):
         scroll = Gtk.ScrolledWindow()
@@ -589,6 +600,7 @@ class SettingsDialog(Gtk.Window):
                     chips.pack_start(HotkeyChip(part), False, False, 0)
             row = SettingRow(str(label), control=chips, aliases=(str(accel), 'hotkey shortcut'))
             row.page_id = 'hotkeys'
+            row.set_narrow(self._narrow)
             row.show_all()
             self.hotkey_card.add(row)
             self.hotkey_rows.append(row)

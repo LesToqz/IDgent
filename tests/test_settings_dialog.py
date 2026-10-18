@@ -216,10 +216,19 @@ class SettingsDialogTest(unittest.TestCase):
         self.assertLessEqual(width, 700)
         self.assertEqual(x, 32)
         self.assertEqual(column.translate_coordinates(page, 0, 0)[1], 48)
+        self.assertFalse(dialog.rows['theme'].narrow)
         for width, expected in ((600, 200), (1400, 250)):
             dialog.resize(width, 700)
             pump(150)
             self.assertEqual(dialog.nav_pane.get_allocated_width(), expected, width)
+            if width == 600:  # 336 px column: controls stack under the text, toggles stay.
+                self.assertTrue(dialog.rows['theme'].narrow)
+                self.assertTrue(dialog.hotkey_card.rows[0].narrow)
+                self.assertFalse(dialog.rows['reduce_motion'].narrow)
+                theme = dialog.rows['theme']
+                self.assertGreater(theme.controls.translate_coordinates(theme, 0, 0)[1],
+                                   theme.name_label.translate_coordinates(theme, 0, 0)[1])
+        self.assertFalse(dialog.rows['theme'].narrow)
         page_width = page.get_allocated_width()
         x = column.translate_coordinates(page, 0, 0)[0]
         self.assertEqual(column.get_allocated_width(), 700)
