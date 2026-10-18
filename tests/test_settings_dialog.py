@@ -12,7 +12,7 @@ from gi.repository import Gdk, Gtk, Pango
 
 from idgent import settings
 from idgent.settings_dialog import SettingsDialog, build_css
-from idgent.themes import THEMES
+from idgent.themes import DEFAULT_THEME_ID, THEMES
 
 
 class SettingsDialogTest(unittest.TestCase):
@@ -43,7 +43,7 @@ class SettingsDialogTest(unittest.TestCase):
         self.dialog.set_theme_id('light-plus')
         self.assertEqual(self.dialog.theme_id, 'light-plus')
         self.dialog.set_theme_id('unknown')
-        self.assertEqual(self.dialog.theme_id, 'dark-plus')
+        self.assertEqual(self.dialog.theme_id, DEFAULT_THEME_ID)
         self.assertEqual(events, ['nord', 'dracula'])
 
     def test_spin_reset_limits_samples_and_silent_setter(self):

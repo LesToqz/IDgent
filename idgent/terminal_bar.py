@@ -198,3 +198,31 @@ class LimitToast(Gtk.Label):
     def _on_destroy(self, _widget: Gtk.Widget) -> None:
         self._destroyed = True
         self._cancel()
+
+
+def build_css(ui: dict[str, str]) -> str:
+    """Render the existing component rules from theme UI roles."""
+    return f'''
+.idgent-terminal {{ background: {ui['panel_bg']}; color: {ui['foreground']}; }}
+.idgent-terminal-sep {{ background: {ui['border']}; min-width: 1px; min-height: 1px; border: 0; }}
+.idgent-vte {{ padding: 8px; }}
+.idgent-terminal-header {{ background: {ui['panel_bg']}; color: {ui['muted']}; border: 0;
+    border-bottom: 1px solid {ui['border']}; box-shadow: none; min-height: 29px; padding: 0 4px 0 0; }}
+.idgent-terminal-header.corner {{ padding-right: 34px; }}
+.idgent-terminal-header button {{ background: transparent; color: {ui['muted']}; border: 0; border-radius: 4px;
+    box-shadow: none; text-shadow: none; min-height: 22px; min-width: 22px; padding: 0; margin: 3px 0 3px 2px; }}
+.idgent-terminal-header button:hover {{ background: {ui['hover']}; color: {ui['foreground']}; }}
+.idgent-terminal-header .idgent-terminal-header-label {{ min-width: 0; margin: 0; padding: 0 12px;
+    border-radius: 0; font-size: 12px; }}
+.idgent-terminal-header .idgent-terminal-header-label:hover {{ background: transparent; color: {ui['foreground']}; }}
+.idgent-terminal-header.active {{ color: {ui['foreground']}; border-bottom-color: {ui['accent']}; }}
+.idgent-terminal-header.active button {{ color: {ui['foreground']}; }}
+.idgent-terminal-add {{ background: transparent; border: 0; border-radius: 4px; box-shadow: none;
+    text-shadow: none; min-height: 22px; min-width: 24px; padding: 0; margin: 3px 4px 0 0;
+    color: {ui['foreground']}; }}
+.idgent-terminal-add:hover {{ background: {ui['hover']}; color: {ui['hover_fg']}; }}
+.idgent-terminal-add.limit {{ color: {ui['limit_tint']}; }}
+.idgent-terminal-add.limit:hover {{ color: {ui['warning']}; }}
+.idgent-terminal-toast {{ background: {ui['toast_bg']}; color: {ui['warning']}; font-size: 12px;
+    border: 1px solid {ui['limit_tint']}; border-radius: 4px; padding: 4px 12px; }}
+'''

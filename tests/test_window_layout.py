@@ -115,6 +115,7 @@ class WindowLayoutTests(unittest.TestCase):
         self.assertEqual(settings.get_theme_id(), DEFAULT_THEME_ID)
 
     def test_next_theme_accelerator_cycles_and_wraps(self):
+        self.window.set_theme('dark-plus', persist=False)
         self.window.open_settings()
         key, modifiers = Gtk.accelerator_parse("<Control><Alt>t")
         for theme in (*THEMES[1:], THEMES[0]):

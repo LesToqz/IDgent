@@ -122,6 +122,26 @@ _DARK_UI = dict(
     scrollbar_active='#686868', tab_close_hover='#383838', cursor='#ffffff',
     close_hover='#c42b1c', close_fg='#ffffff', hover_fg='#ffffff',
 )
+
+
+def _mix_color(background, foreground, amount):
+    """Resolve an opaque compatibility role; CSS overlays use alpha() instead."""
+    return '#' + ''.join(f'{round(int(background[i:i + 2], 16) * (1 - amount) + int(foreground[i:i + 2], 16) * amount):02x}'
+                         for i in (1, 3, 5))
+
+
+def _extend_ui(ui, dark):
+    """Add design-system roles without changing any legacy component colours."""
+    ui.update(surface_alt=ui['panel_bg'],
+              border_hover=_mix_color(ui['border'], ui['foreground'], .15),
+              border_focus=_mix_color(ui['border'], ui['foreground'], .35),
+              faint=ui['muted'], accent_text=_legible(ui['accent'], ui['bg'], 3),
+              accent_hover=_mix_color(ui['accent'], ui['foreground'], .2),
+              overlay='#ffffff' if dark else '#000000', danger=ui['close_hover'])
+
+
+_extend_ui(_DARK_UI, True)
+
 _DARK_ANSI = ('#000000', '#cd3131', '#0dbc79', '#e5e510', '#2472c8', '#bc3fbc',
               '#11a8cd', '#e5e5e5', '#666666', '#f14c4c', '#23d18b', '#f5f543',
               '#3b8eea', '#d670d6', '#29b8db', '#ffffff')
@@ -146,6 +166,7 @@ def _theme(slug, name, dark, bg, sidebar, panel, fg, muted, accent, border,
               input_bg=bg, scrollbar=border, scrollbar_hover=muted, scrollbar_active=accent,
               tab_close_hover=border, cursor=foreground, hover_fg=foreground)
     ui['status_fg'] = ui['accent_fg']
+    _extend_ui(ui, dark)
     mapping = dict(comment=comment, doc=green, string=green, escape=orange, regex=cyan,
                    number=orange, keyword=purple, control=purple, operator=foreground,
                    constant=orange, builtin=cyan, function=yellow, **{'class': blue},
@@ -163,6 +184,53 @@ def _theme(slug, name, dark, bg, sidebar, panel, fg, muted, accent, border,
                   gutter_border=bg, current_line_bg=panel, bracket_bg=selection)
     return Theme(slug, name, dark, ui, syntax,
                  TerminalColors(foreground, bg, foreground, tuple(ansi)), chrome)
+
+
+
+def _idgent_theme(dark):
+    """Measured UI neutrals with original, subdued syntax and ANSI palettes."""
+    if dark:
+        theme = _theme('idgent-dark', 'IDgent Dark', True,
+                       '#1c1c1c', '#282828', '#232323', '#dadada', '#b3b3b3',
+                       '#8a5cf5', '#333333',
+                       ('#85827e', '#df898d', '#d4a477', '#c8ba84',
+                        '#9dbb95', '#8cbdba', '#93afd3', '#b29adb'),
+                       selection='#403152',
+                       ansi=('#29272d', '#ce7b81', '#91ad89', '#beae79',
+                             '#849fc4', '#a68acb', '#80adaa', '#c7c4cb',
+                             '#77727f', '#e69b9f', '#b1caa9', '#d9cb9e',
+                             '#a8c0e0', '#c5ace7', '#a1cfcb', '#eeebf2'))
+        theme.ui.update(border_hover='#3f3f3f', border_focus='#555555', faint='#666666',
+                        accent_text='#a68af9', accent_hover='#a68af9', danger='#fb464c',
+                        input_bg='#2e2e2e', button_bg='#333333', button_hover='#3f3f3f',
+                        warning='#e9973f', accent_fg='#000000')
+    else:
+        theme = _theme('idgent-light', 'IDgent Light', False,
+                       '#ffffff', '#f6f6f6', '#fafafa', '#222222', '#5c5c5c',
+                       '#9873f7', '#e4e4e4',
+                       ('#77736d', '#a34e59', '#956534', '#81702d',
+                        '#55734b', '#377b78', '#4b6e9b', '#7956aa'),
+                       selection='#eae3fd',
+                       ansi=('#302c36', '#a34855', '#4d7247', '#826b28',
+                             '#486c9c', '#7852aa', '#347974', '#b9b5bf',
+                             '#706a79', '#b55865', '#61845a', '#917a37',
+                             '#5d7eae', '#8a64bb', '#488a85', '#f0edf5'))
+        theme.ui.update(border_hover='#dadada', border_focus='#bdbdbd', faint='#ababab',
+                        accent_text='#8a5cf5', accent_hover='#a68af9', danger='#e93147',
+                        input_bg='#ffffff', button_bg='#ffffff', button_hover='#fafafa',
+                        warning='#ec7500')
+    ui = theme.ui
+    # Keep all UI roles opaque for legacy components. Shared base rules use
+    # alpha() so overlays also work on surfaces other than the primary one.
+    ui.update(titlebar_bg=ui['sidebar_bg'], titlebar_fg=ui['foreground'], title_fg=ui['muted'],
+              status_bg=ui['sidebar_bg'], status_fg=ui['muted'],
+              selection_active=_mix_color(ui['sidebar_bg'], '#8a5cf5', .15),
+              selection_inactive=_mix_color(ui['sidebar_bg'], ui['overlay'], .067),
+              hover=_mix_color(ui['sidebar_bg'], ui['overlay'], .067),
+              tab_close_hover=_mix_color(ui['bg'], ui['overlay'], .067),
+              editor_selection=_mix_color(ui['bg'], ui['accent'], .33 if dark else .2),
+              close_hover=ui['danger'], toast_bg=ui['surface_alt'])
+    return theme
 
 
 THEMES: tuple[Theme, ...] = (
@@ -226,14 +294,17 @@ THEMES: tuple[Theme, ...] = (
            '#176b62', '#cfc9b8',
            ('#8a9380', '#aa413c', '#a55d28', '#856017', '#4e702e', '#23736b', '#396b93', '#875b88'),
            selection='#c5ded1'),
+    _idgent_theme(True),
+    _idgent_theme(False),
 )
 
-DEFAULT_THEME_ID = 'dark-plus'
+DEFAULT_THEME_ID = 'idgent-dark'
 
 
 def get_theme(theme_id: str | None) -> Theme:
-    """Return the named theme, falling back to Dark+ for unknown IDs."""
-    return next((theme for theme in THEMES if theme.id == theme_id), THEMES[0])
+    """Return the named theme, falling back to the default for unknown IDs."""
+    default = next(theme for theme in THEMES if theme.id == DEFAULT_THEME_ID)
+    return next((theme for theme in THEMES if theme.id == theme_id), default)
 
 
 def theme_ids() -> tuple[str, ...]:

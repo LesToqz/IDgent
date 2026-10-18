@@ -1,6 +1,9 @@
 """Theme registration, strict CSS parsing, and realized GTK widget checks."""
 import os
+import hashlib
+import json
 from pathlib import Path
+import re
 import tempfile
 import time
 import unittest
@@ -12,10 +15,10 @@ os.environ["GDK_BACKEND"] = "x11"
 from idgent import style
 from idgent.settings_dialog import build_css as build_settings_css
 from idgent.search import build_css as build_search_css
-from idgent.editor import EditorPanel
-from idgent.explorer import ExplorerPanel
+from idgent.editor import EditorPanel, build_css as build_editor_css
+from idgent.explorer import ExplorerPanel, build_css as build_explorer_css
 from idgent.terminal import TerminalPanel
-from idgent.terminal_bar import AddButton, LimitToast, PaneHeader
+from idgent.terminal_bar import AddButton, LimitToast, PaneHeader, build_css as build_terminal_css
 from idgent.titlebar import TITLEBAR_CSS, TitleBar
 from idgent.themes import THEMES, get_theme
 from dataclasses import replace
@@ -53,6 +56,126 @@ class StyleTest(unittest.TestCase):
                 self.assertIn('.idgent-resize-gate', style.build_css(theme))
                 self.assertIn(build_settings_css(theme.ui), style.build_css(theme))
                 self.assertIn(build_search_css(theme.ui), style.build_css(theme))
+                for builder in (build_explorer_css, build_editor_css, build_terminal_css):
+                    self.assertIn(builder(theme.ui), style.build_css(theme))
+
+    def test_tokens_match_spec(self):
+        spec = json.loads((Path(__file__).resolve().parents[1] /
+                           'docs/reference_app-tokens.json').read_text())
+        self.assertEqual(style.TOKENS, dict(spacing=spec['size']['spacing'], radius=spec['radius'],
+                                          durations=spec['motion']['duration'],
+                                          easings=spec['motion']['easing']))
+
+    def test_extracted_dark_plus_component_rules_are_unchanged(self):
+        # Baseline declarations extracted from style.py before WP-1. Ignore
+        # whitespace, but pin selectors, declaration order and values. Future
+        # component restyling packages should deliberately update these hashes.
+        baselines = (
+            (build_explorer_css, '9de9a3bae71c2a8ec8183097004e78860b43485d9543727de6ea1982f6fa15b2'),
+            (build_editor_css, 'fb50cdcd94fa21ef79796db3a0c13315098dd4141b88c93f58aff43ee82daae1'),
+            (build_terminal_css, '5cf348fc2cae43cc050eceac641519d44c9694a26debe418d7631a44a89d693b'),
+        )
+        for builder, expected in baselines:
+            with self.subTest(component=builder.__module__):
+                normalized = ' '.join(builder(get_theme('dark-plus').ui).split())
+                self.assertEqual(hashlib.sha256(normalized.encode()).hexdigest(), expected)
+
+    def test_base_rules_and_instant_states(self):
+        for theme in THEMES:
+            with self.subTest(theme=theme.id):
+                css = style.build_css(theme)
+                rules = dict(re.findall(r'([^{}]+)\{([^{}]*)\}', css))
+                for selector, body in rules.items():
+                    if ':hover' in selector or ':selected' in selector or ':checked' in selector:
+                        self.assertNotIn('transition:', body, selector)
+                transitions = [(selector, body) for selector, body in rules.items()
+                               if 'transition:' in body and 'transition: none;' not in body]
+                self.assertEqual({selector.strip() for selector, _ in transitions},
+                                 {'entry', 'paned > separator'})
+                self.assertIn('border-color 140ms', css)
+                self.assertIn('background-color 200ms', css)
+                self.assertIn(f'box-shadow: 0 0 0 2px {theme.ui["border_focus"]}', css)
+                self.assertIn(f'background: alpha({theme.ui["overlay"]}, 0.067)', css)
+                self.assertIn('paned > separator:hover, paned > separator:active', css)
+                self.assertIn('-gtk-outline-radius: 5px', css)
+                self.assertNotIn(':focus-visible', css)
+
+    def controls_window(self, theme):
+        style.apply_theme(theme)
+        window = Gtk.Window()
+        self.addCleanup(window.destroy)
+        window.set_default_size(320, 180)
+        fixed = Gtk.Fixed()
+        window.add(fixed)
+        button, entry = Gtk.Button(label='Hover'), Gtk.Entry()
+        button.set_size_request(160, 30)
+        entry.set_size_request(160, 30)
+        fixed.put(button, 24, 24)
+        fixed.put(entry, 24, 88)
+        window.show_all()
+        window.present()
+        self.assertTrue(self.poll(window.is_active))
+        return window, button, entry
+
+    def pixel(self, window, widget, x, y):
+        x, y = widget.translate_coordinates(window, x, y)
+        pixbuf = Gdk.pixbuf_get_from_window(window.get_window(), x, y, 1, 1)
+        self.assertIsNotNone(pixbuf)
+        return tuple(pixbuf.get_pixels()[:3])
+
+    def test_hovered_button_pixels_are_overlay_tinted(self):
+        for name in ('idgent-dark', 'idgent-light', 'dracula'):
+            with self.subTest(theme=name):
+                theme = get_theme(name)
+                window, button, entry = self.controls_window(theme)
+                entry.grab_focus()
+                self.assertEqual(button.get_allocated_height(), 30)
+                button.set_state_flags(Gtk.StateFlags.PRELIGHT, False)
+                bg, overlay = theme.ui['bg'], theme.ui['overlay']
+                expected = tuple(round(int(bg[i:i + 2], 16) * .933 +
+                                       int(overlay[i:i + 2], 16) * .067) for i in (1, 3, 5))
+                # Style resolves immediately; only the next paint needs polling.
+                color = button.get_style_context().get_background_color(button.get_state_flags())
+                self.assertAlmostEqual(color.alpha, .067, places=3)
+                self.assertTrue(self.poll(lambda: all(abs(a - b) <= 1 for a, b in zip(
+                    self.pixel(window, button, 8, 15), expected))))
+                window.destroy()
+
+    def test_focused_entry_pixels_show_border_and_two_pixel_ring(self):
+        for name in ('idgent-dark', 'idgent-light', 'dracula'):
+            with self.subTest(theme=name):
+                theme = get_theme(name)
+                window, button, entry = self.controls_window(theme)
+                button.grab_focus()
+                background = tuple(int(theme.ui['bg'][i:i + 2], 16) for i in (1, 3, 5))
+                self.assertTrue(self.poll(lambda: self.pixel(window, entry, -1, 15) == background))
+                self.assertEqual(entry.get_allocated_height(), 30)
+                window.set_focus_visible(True)
+                entry.grab_focus()
+                self.assertTrue(self.poll(entry.has_focus))
+                ring = tuple(int(theme.ui['border_focus'][i:i + 2], 16) for i in (1, 3, 5))
+                self.assertTrue(self.poll(lambda: all(self.pixel(window, entry, x, 15) == ring
+                                                     for x in (-2, -1, 0))))
+                self.assertEqual(self.pixel(window, entry, -3, 15), background)
+                window.destroy()
+
+    def test_button_outline_follows_keyboard_focus_visibility(self):
+        theme = get_theme('idgent-dark')
+        window, button, _ = self.controls_window(theme)
+        button.grab_focus()
+        self.assertTrue(self.poll(button.has_focus))
+        ring = (0x55, 0x55, 0x55)
+        window.set_focus_visible(False)
+        button.queue_draw()
+        self.assertTrue(self.poll(lambda: self.pixel(window, button, -2, 15) != ring))
+        window.set_focus_visible(True)
+        # Setting this property directly does not invalidate the widget as an
+        # actual keyboard-focus event does; request its next paint explicitly.
+        button.queue_draw()
+        self.assertTrue(self.poll(lambda: self.pixel(window, button, -2, 15) == ring))
+        window.set_focus_visible(False)
+        button.queue_draw()
+        self.assertTrue(self.poll(lambda: self.pixel(window, button, -2, 15) != ring))
 
     def test_live_switch_uses_one_provider_and_updates_widgets(self):
         style.apply_style()
@@ -186,7 +309,7 @@ class StyleTest(unittest.TestCase):
         self.assertEqual(scrolled.get_hscrollbar().get_allocated_height(), 8)
 
     def test_pane_header_and_toast_are_styled(self):
-        style.apply_style()
+        style.apply_style(get_theme('dark-plus'))
         window = Gtk.Window()
         self.addCleanup(window.destroy)
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
@@ -221,7 +344,7 @@ class StyleTest(unittest.TestCase):
         self.assertEqual(flat.get_border(Gtk.StateFlags.NORMAL).left, 0)
 
     def test_realized_add_button_normal_hover_and_limit_colours(self):
-        style.apply_style()
+        style.apply_style(get_theme('dark-plus'))
         window = Gtk.Window()
         self.addCleanup(window.destroy)
         button = AddButton()
@@ -285,7 +408,7 @@ class StyleTest(unittest.TestCase):
                 style._create_provider()
 
     def test_realized_panels_and_status_background(self):
-        style.apply_style()
+        style.apply_style(get_theme('dark-plus'))
         with tempfile.TemporaryDirectory() as root:
             path = Path(root) / 'example.py'
             path.write_text('print("Dark+")\n')

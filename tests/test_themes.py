@@ -1,6 +1,8 @@
 """Theme catalogue integrity and independent WCAG contrast checks."""
 import dataclasses
+import json
 import os
+from pathlib import Path
 import subprocess
 import sys
 import unittest
@@ -32,7 +34,8 @@ class ThemesTest(unittest.TestCase):
     def test_catalogue_and_lookup(self):
         expected = ('dark-plus', 'light-plus', 'monokai', 'dracula', 'solarized-dark',
                     'solarized-light', 'nord', 'one-dark', 'github-dark',
-                    'idgent-midnight', 'idgent-ember', 'idgent-paper')
+                    'idgent-midnight', 'idgent-ember', 'idgent-paper',
+                    'idgent-dark', 'idgent-light')
         self.assertEqual(themes.theme_ids(), expected)
         self.assertEqual(len({t.name for t in themes.THEMES}), len(expected))
         self.assertEqual(len({(t.ui['bg'], t.ui['accent']) for t in themes.THEMES}), len(expected))
@@ -40,13 +43,15 @@ class ThemesTest(unittest.TestCase):
             self.assertIs(themes.get_theme(t.id), t)
             self.assertRegex(t.id, r'^[a-z][a-z0-9-]+$')
         for unknown in (None, '', 'missing', [], {}):
-            self.assertIs(themes.get_theme(unknown), themes.THEMES[0])
+            self.assertIs(themes.get_theme(unknown), themes.get_theme(themes.DEFAULT_THEME_ID))
         with self.assertRaises(dataclasses.FrozenInstanceError):
             themes.THEMES[0].name = 'changed'
 
     def test_complete_and_valid_colors(self):
         roles = set(themes.THEMES[0].ui)
-        self.assertTrue({'bg', 'editor_fg', 'accent', 'status_bg', 'input_bg'} <= roles)
+        self.assertTrue({'bg', 'editor_fg', 'accent', 'status_bg', 'input_bg',
+                         'surface_alt', 'border_hover', 'border_focus', 'faint',
+                         'accent_text', 'accent_hover', 'overlay', 'danger'} <= roles)
         for t in themes.THEMES:
             with self.subTest(theme=t.id):
                 self.assertEqual(set(t.ui), roles)
@@ -58,6 +63,8 @@ class ThemesTest(unittest.TestCase):
                           *(s.foreground for s in t.syntax.values())):
                     self.assertRegex(c, r'^#[0-9a-fA-F]{6}$')
                 for c in t.terminal.ansi:
+                    self.assertRegex(c, r'^#[0-9a-f]{6}$')
+                for c in t.ui.values():
                     self.assertRegex(c, r'^#[0-9a-f]{6}$')
                 self.assertEqual(t.dark, luminance(t.ui['bg']) < .3)
 
@@ -82,6 +89,30 @@ class ThemesTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 themes.TerminalColors('#ffffff', '#000000', '#ffffff', palette)
 
+    def test_idgent_palettes_match_spec_and_have_original_legible_syntax(self):
+        spec = json.loads((Path(__file__).resolve().parents[1] /
+                           'docs/reference_app-tokens.json').read_text())
+        roles = dict(bg='background-primary', sidebar_bg='background-secondary',
+                     surface_alt='background-primary-alt', border='background-modifier-border',
+                     border_hover='background-modifier-border-hover',
+                     border_focus='background-modifier-border-focus', foreground='text-normal',
+                     muted='text-muted', faint='text-faint', accent='interactive-accent',
+                     accent_text='text-accent', accent_hover='interactive-accent-hover',
+                     danger='text-error', input_bg='background-modifier-form-field')
+        for mode in ('dark', 'light'):
+            theme = themes.get_theme('idgent-' + mode)
+            with self.subTest(theme=theme.id):
+                for role, token in roles.items():
+                    self.assertEqual(theme.ui[role], spec['color'][mode][token], role)
+                self.assertEqual(theme.ui['overlay'], '#ffffff' if theme.dark else '#000000')
+                self.assertEqual(len(set(theme.terminal.ansi)), 16)
+                for syntax in theme.syntax.values():
+                    self.assertGreaterEqual(contrast(syntax.foreground, theme.ui['bg']), 3)
+                for other in themes.THEMES:
+                    if other is not theme:
+                        self.assertNotEqual(theme.syntax, other.syntax)
+                        self.assertNotEqual(theme.terminal.ansi, other.terminal.ansi)
+
     def test_dark_plus_matches_original(self):
         t = themes.get_theme('dark-plus')
         self.assertEqual(t.syntax, DARK_PLUS)
@@ -96,4 +127,7 @@ class ThemesTest(unittest.TestCase):
             status_bg='#007acc', status_fg='#ffffff', button_bg='#333333', button_hover='#505050',
             input_bg='#333333', scrollbar='#424242', scrollbar_hover='#4f4f4f',
             scrollbar_active='#686868', tab_close_hover='#383838', cursor='#ffffff',
-            close_hover='#c42b1c', close_fg='#ffffff', hover_fg='#ffffff'))
+            close_hover='#c42b1c', close_fg='#ffffff', hover_fg='#ffffff',
+            surface_alt='#1e1e1e', border_hover='#434343', border_focus='#636363',
+            faint='#858585', accent_text='#007acc', accent_hover='#298acc',
+            overlay='#ffffff', danger='#c42b1c'))
