@@ -547,7 +547,7 @@
         const off = C.dotR + 7 * k;
         const yFor = (sd) => (sd > 0 ? ay + off : ay - off - h);
         const cands = [];
-        for (const sd of [inward, -inward]) for (const dx of [-w / 2, 4, -w + 4, colW * 0.5, -colW * 0.5 - w]) cands.push({ x: ax + dx, y: yFor(sd), side: sd });
+        for (const row of [0, 1]) for (const sd of [inward, -inward]) for (const dx of [-w / 2, 4, -w + 4, colW * 0.5, -colW * 0.5 - w]) cands.push({ x: ax + dx, y: yFor(sd) + sd * row * (h + 6), side: sd });
         want.push({ kind, node: nd.i, lane: nd.lane, text, full: (r.kind === 'tag' ? 'tag ' : r.kind === 'remote' ? 'remote ' : 'branch ') + r.name, w, h, ax, ay, cands, dashed: r.kind === 'remote', refKind: r.kind, priority: (kind === 'tag' ? PRIORITY.tag : PRIORITY.ref) - nd.i / 1e7 });
       }
     }
@@ -574,8 +574,13 @@
       const segs = edgeSegments(X(e.p), Y(e.p), X(e.c), Y(e.c), e.route, colW);
       for (const s of segs) {
         if (s.t !== 'C') continue;
-        const x0 = Math.min(s.x0, s.x1), x1 = Math.max(s.x0, s.x1), y0 = Math.min(s.y0, s.y1), y1 = Math.max(s.y0, s.y1);
-        soft.add({ x: x0 + (x1 - x0) * 0.15, y: y0 + 4, w: (x1 - x0) * 0.7, h: Math.max(1, y1 - y0 - 8) });
+        // sample the curve: labels should not cover the line itself (its bounding box is fine)
+        for (let t = 0.08; t < 0.95; t += 0.07) {
+          const u = 1 - t;
+          const px = u * u * u * s.x0 + 3 * u * u * t * s.c1x + 3 * u * t * t * s.c2x + t * t * t * s.x1;
+          const py = u * u * u * s.y0 + 3 * u * u * t * s.c1y + 3 * u * t * t * s.c2y + t * t * t * s.y1;
+          soft.add({ x: px - 3, y: py - 3, w: 6, h: 6 });
+        }
       }
       void p; void c;
     }

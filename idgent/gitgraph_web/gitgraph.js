@@ -894,8 +894,7 @@
         const now = performance.now();
         press.samples.push([now, x, y]);
         while (press.samples.length > 2 && now - press.samples[0][0] > 90) press.samples.shift();
-        draw(now);
-        perf.frames++;
+        kick();                                   // coalesced: drawn once in the next animation frame
       }
       return;
     }
@@ -941,7 +940,7 @@
     if (!e.ctrlKey && (e.shiftKey || Math.abs(dx) > Math.abs(dy))) {
       zoomT = null;
       cam.x += dx / cam.s; cam.y += (e.shiftKey ? 0 : dy) / cam.s;
-      clampCam(); draw(); perf.frames++;
+      clampCam(); kick();
       return;
     }
     const base = zoomT ? zoomT.s : cam.s;
@@ -1024,7 +1023,7 @@
 
   // ------------------------------------------------------------ states
   const ICONS = {
-    loading: '<svg viewBox="0 0 48 48"><path d="M10 24h28" /><circle cx="12" cy="24" r="3.5" class="a"/><circle cx="24" cy="24" r="3.5"/><circle cx="36" cy="24" r="3.5"/><path d="M24 24c4 0 6-8 12-8" class="a"/></svg>',
+    loading: '<svg viewBox="0 0 48 48"><path d="M5 31h38"/><path d="M14 31c6 0 6-13 13-13h6" class="a"/><circle cx="10" cy="31" r="4"/><circle cx="24" cy="31" r="4"/><circle cx="38" cy="31" r="4"/><circle cx="36" cy="18" r="4" class="a"/></svg>',
     empty: '<svg viewBox="0 0 48 48"><circle cx="24" cy="24" r="6" class="a"/><path d="M6 24h12M30 24h12" stroke-dasharray="3 3"/></svg>',
     'not-a-repo': '<svg viewBox="0 0 48 48"><path d="M8 14h12l4 4h16v20H8z"/><path d="M19 28l10 0" class="a"/></svg>',
     'git-missing': '<svg viewBox="0 0 48 48"><path d="M24 6l18 18-18 18L6 24z"/><path d="M24 17v10M24 31v.5" class="a"/></svg>',
@@ -1065,7 +1064,7 @@
     if (data.ok === false) { setState(STATES[data.error] ? data.error : 'error', STATES[data.error] ? '' : data.error); return; }
     const t0 = performance.now();
     const NL = G.layout(data);
-    if (!NL.nodes.length) { L = NL; setState('empty'); return; }
+    if (!NL.nodes.length) { L = NL; selected = cursor = hover = unhover = -1; anim = []; ghosts = []; setState('empty'); return; }
     G.assignColors(NL, pal.lanes.length, pal.skip);
     perf.layoutMs = performance.now() - t0;
     const now = performance.now();
@@ -1079,8 +1078,7 @@
       if (hl) { const p = labelPos(hl, now); prevHeadLabel = { x: p.x, y: p.y, hash: L.nodes[L.head].hash }; }
     }
     const oldL = L;
-    const selHash = selected >= 0 && oldL ? oldL.nodes[selected].hash : null;
-    const curHash = cursor >= 0 && oldL ? oldL.nodes[cursor].hash : null;
+    const selHash = hashAt(selected), curHash = hashAt(cursor);
     let overlap = 0;
     for (const nd of NL.nodes) if (prev.has(nd.hash)) overlap++;
     L = NL; dataRaw = data;
@@ -1179,6 +1177,8 @@
   }));
   if (mql && mql.addEventListener) mql.addEventListener('change', safe(() => { document.body.classList.toggle('reduce', reduce()); draw(); }));
 
+  function hashAt(i) { return L && i >= 0 && i < L.nodes.length ? L.nodes[i].hash : null; }
+
   // ------------------------------------------------------------ API
   Object.assign(IDGit, {
     setData: safe(setData),
@@ -1236,8 +1236,7 @@
       frames: perf.frames, running: !!raf, paused, state: viewState, commits: L ? L.nodes.length : 0, lanes: L ? L.lanes.length : 0,
       slots: L ? L.maxSlot - L.minSlot + 1 : 0, laneGap: gap, scale: cam.s, cam: { x: cam.x, y: cam.y }, width: W, height: H,
       animating: performance.now() < animUntil || !!camTw || !!zoomT || !!inertia, layoutMs: perf.layoutMs, labelMs: perf.labelMs,
-      drawMs: perf.drawMs, revealMs: perf.revealMs, selected: selected >= 0 ? L.nodes[selected].hash : null,
-      cursor: cursor >= 0 && L ? L.nodes[cursor].hash : null, hover: hover >= 0 && L ? L.nodes[hover].hash : null,
+      drawMs: perf.drawMs, revealMs: perf.revealMs, selected: hashAt(selected), cursor: hashAt(cursor), hover: hashAt(hover),
       pulse: pulseEl.classList.contains('on'), reduceMotion: reduce(), tip: tipEl.classList.contains('show'),
     }),
   });
@@ -1264,6 +1263,7 @@
     home: () => moveCamera(homeView(), 0),
     setView: (x, y, s) => { camTw = null; zoomT = null; inertia = null; cam.x = x; cam.y = y; cam.s = s; camHome = false; draw(); },
     pulseNow: () => wakePulse(),
+    palette: () => ({ bg: pal.bgCss, dark: pal.dark, main: pal.main, lanes: pal.lanes, head: pal.head, headFg: pal.headFg, muted: pal.muted, calloutText: pal.calloutText }),
   };
 
   // ------------------------------------------------------------ boot

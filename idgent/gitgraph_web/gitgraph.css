@@ -73,7 +73,7 @@ body.reduce *, body.reduce *::before, body.reduce *::after { transition: none !i
   opacity: 1; transition: opacity 0.2s; }
 .state[hidden] { display: none; }
 .state-card { display: flex; flex-direction: column; align-items: center; text-align: center; max-width: 360px; padding: 16px; gap: 6px; }
-.state-icon svg { width: 42px; height: 42px; fill: none; stroke: var(--muted); stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; opacity: 0.8; }
+.state-icon svg { width: 48px; height: 48px; fill: none; stroke: var(--muted); stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; opacity: 0.8; }
 .state-icon svg .a { stroke: var(--accent); }
 .state-title { font: 600 15px var(--ui-font); color: var(--text); margin-top: 4px; }
 .state-hint { font: 12.5px/1.45 var(--ui-font); color: var(--muted); }
@@ -90,3 +90,4 @@ body.reduce *, body.reduce *::before, body.reduce *::after { transition: none !i
 body.paused .skeleton i, body.reduce .skeleton i { animation: none; }
 @keyframes shimmer { 0% { background-position: 100% 0; } 100% { background-position: 0 0; } }
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.state-icon svg circle { fill: var(--bg); }

@@ -379,15 +379,34 @@ class GitGraphPageTests(unittest.TestCase):
         px = p.js("(() => { const c = document.getElementById('gg'); const d = c.getContext('2d').getImageData(3, 3, 1, 1).data; return Array.from(d); })()")
         self.assertGreater(px[0], 240)
         self.assertEqual(p.js("getComputedStyle(document.body).backgroundColor"), 'rgb(255, 255, 255)')
+        self._check_contrast('light')
         p.call('setTheme', DARK)
+        self._check_contrast('dark')
         px = p.js("(() => { const c = document.getElementById('gg'); const d = c.getContext('2d').getImageData(3, 3, 1, 1).data; return Array.from(d); })()")
         self.assertLess(px[0], 40)
         self.assertEqual(p.errors(), [])
+
+    def _check_contrast(self, label):
+        def lum(h):
+            c = [int(h[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+            c = [v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4 for v in c]
+            return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
+
+        def ratio(a, b):
+            la, lb = lum(a), lum(b)
+            return (max(la, lb) + 0.05) / (min(la, lb) + 0.05)
+        pal = self.page.js('IDGit._debug.palette()')
+        for lane in pal['lanes'] + [pal['main']]:
+            self.assertGreaterEqual(ratio(lane['text'], lane['fill']), 4.5, (label, lane))
+            self.assertGreaterEqual(ratio(lane['css'], pal['bg']), 2.9, (label, lane))
+        self.assertGreaterEqual(ratio(pal['headFg'], pal['head']), 4.5, label)
+        self.assertGreaterEqual(ratio(pal['muted'], pal['bg']), 4.5, label)
 
     def test_07_states(self):
         p = self.page
         texts = {'loading': 'Loading history', 'empty': 'No commits yet', 'not-a-repo': 'Not a Git repository',
                  'git-missing': 'Git is not installed', 'error': 'Could not read'}
+        p.call('setData', dict(SHOW, commits=[]))
         for kind, text in texts.items():
             p.call('setState', kind, 'boom' if kind == 'error' else None)
             p.pump(0.05)
@@ -582,6 +601,14 @@ class GitGraphPageTests(unittest.TestCase):
             info = p.measure_fps(1.5, zoom)
             self.perf['zoom_fps_%d' % n] = round(info['fps'], 1)
             p.settle(10)
+            if n == 1500:                       # worst case: the whole width at minimum zoom
+                p.js('IDGit._debug.setView(IDGit._debug.view().x, IDGit._debug.view().y, 0.25); true')
+                p.pointer('pointerdown', cx, cy)
+                info = p.measure_fps(1.5, drive)
+                p.pointer('pointerup', cx, cy, buttons=0)
+                self.perf['pan_fps_1500_min_zoom'] = round(info['fps'], 1)
+                self.perf['draw_ms_1500_min_zoom'] = round(p.stats()['drawMs'], 2)
+                p.settle(10)
         self.assertGreater(self.perf['pan_fps_300'], 30)
         self.assertGreater(self.perf['pan_fps_1500'], 15)
         self.assertEqual(p.errors(), [])
@@ -616,6 +643,12 @@ class GitGraphShots(unittest.TestCase):
                 if after:
                     after()
                 p.snapshot(name)
+            p.resize(1500, 700)
+            p.call('setTheme', DARK)
+            p.call('setState', 'loading')
+            p.call('setData', SHOW)
+            p.pump(0.3)
+            p.snapshot('gg-dark-reveal-mid')
             shot('gg-dark-1500x700', DARK, SHOW, 1500, 700)
             shot('gg-light-1500x700', LIGHT, SHOW, 1500, 700)
             shot('gg-dark-bottom-1100x300', DARK, SHOW, 1100, 300)
@@ -640,7 +673,7 @@ class GitGraphShots(unittest.TestCase):
             shot('gg-dark-fit', DARK, SHOW, 1500, 700, lambda: (p.js("IDGit._debug.fit(); true"), p.pump(0.2)))
             shot('gg-dark-synth300-fit', DARK, p.js('GitGraphCore.synth(300, 3)'), 1500, 700, lambda: (p.js("IDGit._debug.fit(); true"), p.pump(0.2)))
             p.resize(900, 400)
-            for kind in ('loading', 'not-a-repo', 'empty', 'git-missing'):
+            for kind in ('not-a-repo', 'empty', 'git-missing', 'loading'):
                 p.call('setState', kind)
                 p.pump(0.2)
                 p.snapshot('gg-state-' + kind)
