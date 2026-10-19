@@ -51,7 +51,8 @@ class ThemesTest(unittest.TestCase):
         roles = set(themes.THEMES[0].ui)
         self.assertTrue({'bg', 'editor_fg', 'accent', 'status_bg', 'input_bg',
                          'surface_alt', 'border_hover', 'border_focus', 'faint',
-                         'accent_text', 'accent_hover', 'overlay', 'danger'} <= roles)
+                         'accent_text', 'accent_hover', 'overlay', 'danger',
+                         'git_new', 'git_modified', 'git_conflict'} <= roles)
         for t in themes.THEMES:
             with self.subTest(theme=t.id):
                 self.assertEqual(set(t.ui), roles)
@@ -82,6 +83,14 @@ class ThemesTest(unittest.TestCase):
                     self.assertGreaterEqual(contrast(value.foreground, u['bg']),
                                             2.2 if kind == 'comment' else 3)
             self.assertGreaterEqual(contrast(t.terminal.foreground, t.terminal.background), 7)
+
+    def test_git_colors_are_readable_on_sidebar_and_selected_rows(self):
+        for theme in themes.THEMES:
+            selected = themes._mix_color(theme.ui['sidebar_bg'], theme.ui['overlay'], .067)
+            for role in ('git_new', 'git_modified', 'git_conflict'):
+                with self.subTest(theme=theme.id, role=role):
+                    self.assertGreaterEqual(contrast(theme.ui[role], theme.ui['sidebar_bg']), 4.5)
+                    self.assertGreaterEqual(contrast(theme.ui[role], selected), 4.5)
 
     def test_terminal_palette_rejects_invalid_ansi(self):
         for palette in (('#ffffff',) * 15, ('#ffffff',) * 17,
@@ -130,4 +139,5 @@ class ThemesTest(unittest.TestCase):
             close_hover='#c42b1c', close_fg='#ffffff', hover_fg='#ffffff',
             surface_alt='#1e1e1e', border_hover='#434343', border_focus='#636363',
             faint='#858585', accent_text='#007acc', accent_hover='#298acc',
-            overlay='#ffffff', danger='#c42b1c'))
+            overlay='#ffffff', danger='#c42b1c',
+            git_new='#73c991', git_modified='#e2c08d', git_conflict='#e87c80'))

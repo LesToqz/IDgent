@@ -138,6 +138,10 @@ def _extend_ui(ui, dark):
               faint=ui['muted'], accent_text=_legible(ui['accent'], ui['bg'], 3),
               accent_hover=_mix_color(ui['accent'], ui['foreground'], .2),
               overlay='#ffffff' if dark else '#000000', danger=ui['close_hover'])
+    selected = _mix_color(ui['sidebar_bg'], ui['overlay'], .067)
+    colors = ('#73c991', '#e2c08d', '#e4676b') if dark else ('#2e7d32', '#895503', '#ad0707')
+    for role, color in zip(('git_new', 'git_modified', 'git_conflict'), colors):
+        ui[role] = _legible(_legible(color, ui['sidebar_bg'], 4.5), selected, 4.5)
 
 
 _extend_ui(_DARK_UI, True)
