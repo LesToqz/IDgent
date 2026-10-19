@@ -1,0 +1,92 @@
+/* IDgent Git graph page. Colours are CSS variables set by IDGit.setTheme. */
+:root {
+  --bg: #1c1c1c; --surface: #282828; --surface-alt: #232323; --border: #333333;
+  --text: #dadada; --muted: #b3b3b3; --accent: #8a5cf5; --accent-fg: #ffffff; --head: #8a5cf5;
+  --shadow: rgba(0, 0, 0, 0.45); --accent-55: rgba(138, 92, 245, 0.55); --accent-45b: #5a3f9a; --accent-13: rgba(138, 92, 245, 0.13); --accent-22s: #3c3354; --hover: rgba(255, 255, 255, 0.07); --bar-bg: rgba(40, 40, 40, 0.78);
+  --ui-font: Inter, "Segoe UI", Cantarell, system-ui, sans-serif;
+  --mono-font: "JetBrains Mono", "DejaVu Sans Mono", monospace;
+}
+html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: var(--bg); color: var(--text);
+  font: 13px/1.35 var(--ui-font); -webkit-user-select: none; user-select: none; }
+#view { position: absolute; inset: 0; overflow: hidden; }
+#gg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; outline: none; cursor: grab; touch-action: none; }
+#gg.drag { cursor: grabbing; }
+#gg.over { cursor: pointer; }
+#gg:focus-visible { box-shadow: inset 0 0 0 2px var(--accent-55); }
+
+/* HEAD breathing ring: a CSS animation on one small element, only while awake (see gitgraph.js) */
+#pulse { position: absolute; left: 0; top: 0; width: 30px; height: 30px; margin: -15px 0 0 -15px; border-radius: 50%;
+  pointer-events: none; opacity: 0; will-change: transform, opacity; }
+#pulse > i { position: absolute; inset: 0; border-radius: 50%; border: 2px solid var(--head); opacity: 0; }
+#pulse.on > i { animation: breathe 2.8s ease-in-out infinite; }
+#pulse.on > i + i { animation-delay: 1.4s; }
+body.paused #pulse > i, body.reduce #pulse > i { animation: none !important; }
+@keyframes breathe { 0% { transform: scale(0.9); opacity: 0; } 30% { opacity: 0.5; } 100% { transform: scale(1.75); opacity: 0; } }
+
+/* toolbar */
+.bar { position: absolute; top: 8px; right: 8px; display: flex; align-items: center; gap: 2px; padding: 3px;
+  background: var(--bar-bg); border: 1px solid var(--border); border-radius: 9px; box-shadow: 0 4px 14px var(--shadow);
+  -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); opacity: 0.82; transition: opacity 0.16s; z-index: 3; }
+.bar:hover, .bar:focus-within { opacity: 1; }
+.bar .sep { width: 1px; height: 16px; background: var(--border); margin: 0 3px; }
+.btn { appearance: none; border: 0; background: transparent; color: var(--muted); width: 26px; height: 24px; padding: 0;
+  border-radius: 6px; display: grid; place-items: center; cursor: pointer; transition: background 0.12s, color 0.12s; }
+.btn:hover { background: var(--hover); color: var(--text); }
+.btn:active { transform: translateY(0.5px); }
+.btn:focus-visible, .chip:focus-visible, .state-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.btn svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.btn svg circle { fill: currentColor; stroke: none; }
+.btn svg circle.thin { fill: none; stroke: currentColor; stroke-width: 1.3; }
+.btn.spin svg { animation: spin 0.9s linear infinite; }
+body.paused .btn.spin svg { animation-play-state: paused; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.chip { appearance: none; border: 1px solid var(--border); background: transparent; color: var(--muted); height: 22px;
+  padding: 0 8px 0 6px; border-radius: 11px; font: 600 11px var(--ui-font); display: inline-flex; align-items: center; gap: 5px;
+  cursor: pointer; margin-left: 2px; transition: background 0.18s, color 0.18s, border-color 0.18s; }
+.chip i { width: 7px; height: 7px; border-radius: 50%; border: 1.5px solid currentColor; box-sizing: border-box; position: relative;
+  transition: background 0.18s, transform 0.22s cubic-bezier(.3, 1.6, .5, 1); transform: scale(0.85); }
+.chip.on { color: var(--accent-text, var(--accent)); border-color: var(--accent-45b);
+  background: var(--accent-13); }
+.chip.on i { background: currentColor; transform: scale(1.1); }
+.chip:hover { color: var(--text); }
+.bar.narrow .chip { padding: 0 6px; font-size: 10px; }
+body.reduce *, body.reduce *::before, body.reduce *::after { transition: none !important; }
+
+/* tooltip card */
+.tip { position: absolute; left: 0; top: 0; max-width: 340px; min-width: 150px; padding: 9px 11px 9px; box-sizing: border-box;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px; color: var(--text);
+  box-shadow: 0 8px 24px var(--shadow), 0 1px 3px var(--shadow); pointer-events: none; z-index: 5;
+  opacity: 0; transition: opacity 0.12s ease-out; visibility: hidden; }
+.tip.show { opacity: 1; visibility: visible; }
+.tip .t-hash { font: 600 12px var(--mono-font); color: var(--accent-text, var(--accent)); letter-spacing: 0.2px; display: flex; gap: 8px; align-items: baseline; }
+.tip .t-hash .t-kind { font: 600 10px var(--ui-font); color: var(--muted); text-transform: uppercase; letter-spacing: 0.6px; }
+.tip .t-subj { margin-top: 4px; font: 500 13px/1.38 var(--ui-font); color: var(--text); overflow: hidden; display: -webkit-box;
+  -webkit-line-clamp: 2; -webkit-box-orient: vertical; word-break: break-word; }
+.tip .t-time { margin-top: 6px; font: 12px var(--ui-font); color: var(--muted); white-space: nowrap; }
+.tip .t-time b { font-weight: 500; color: var(--text); opacity: 0.85; }
+.tip .t-meta { margin-top: 2px; font: 11.5px var(--ui-font); color: var(--muted); opacity: 0.85; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tip .t-line { font: 12px/1.45 var(--ui-font); color: var(--text); white-space: pre-line; word-break: break-word; }
+.tip .t-line.m { color: var(--muted); }
+
+/* empty / error / loading states */
+.state { position: absolute; inset: 0; display: grid; place-items: center; background: var(--bg); z-index: 4;
+  opacity: 1; transition: opacity 0.2s; }
+.state[hidden] { display: none; }
+.state-card { display: flex; flex-direction: column; align-items: center; text-align: center; max-width: 360px; padding: 16px; gap: 6px; }
+.state-icon svg { width: 42px; height: 42px; fill: none; stroke: var(--muted); stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; opacity: 0.8; }
+.state-icon svg .a { stroke: var(--accent); }
+.state-title { font: 600 15px var(--ui-font); color: var(--text); margin-top: 4px; }
+.state-hint { font: 12.5px/1.45 var(--ui-font); color: var(--muted); }
+.state-btn { margin-top: 8px; appearance: none; border: 1px solid var(--border); background: var(--surface); color: var(--text);
+  font: 500 12px var(--ui-font); padding: 5px 12px; border-radius: 6px; cursor: pointer; }
+.state-btn:hover { border-color: var(--accent); }
+.skeleton { display: none; width: 220px; margin-top: 10px; gap: 9px; flex-direction: column; }
+.state.loading .skeleton { display: flex; }
+.skeleton i { display: block; height: 6px; border-radius: 3px;
+  background: linear-gradient(90deg, var(--surface) 0%, var(--accent-22s) 50%, var(--surface) 100%);
+  background-size: 300% 100%; animation: shimmer 1.6s ease-in-out infinite; }
+.skeleton i:nth-child(2) { width: 78%; margin-left: 12%; animation-delay: 0.15s; }
+.skeleton i:nth-child(3) { width: 55%; animation-delay: 0.3s; }
+body.paused .skeleton i, body.reduce .skeleton i { animation: none; }
+@keyframes shimmer { 0% { background-position: 100% 0; } 100% { background-position: 0 0; } }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
