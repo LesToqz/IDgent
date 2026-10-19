@@ -261,7 +261,44 @@ class GraphSettingsTest(unittest.TestCase):
         self.assertEqual(result['colorGroups'], [{'query': 'tag:a', 'color': '#abcdef'}])
         self.assertNotIn('unknown', settings.load()['graph'])
         self.assertEqual(settings.load()['keep'], 7)
-        self.assertEqual(settings.get_value('graph'), result)
+        self.assertNotIn('graph', settings.DEFAULTS)
+        self.assertNotIn('graph', settings.get_values())
+        with self.assertRaises(ValueError):
+            settings.get_value('graph')
+
+    def test_graph_survives_theme_and_font_save(self):
+        self.assertTrue(settings.set_graph({'showTags': True, 'scale': 2}))
+        graph = settings.get_graph()
+        self.assertTrue(settings.set_theme_id('nord'))
+        self.assertTrue(settings.set_font_size('editor_font_size', 16))
+        self.assertTrue(settings.set_values(settings.get_values()))
+        self.assertEqual(settings.get_graph(), graph)
+        self.assertEqual(json.loads(settings.settings_path().read_text())['graph'], graph)
+
+    def test_other_settings_survive_graph_save(self):
+        other = {'theme': 'nord', 'editor_font_size': 16, 'auto_pair': False,
+                 'future': {'enabled': True}}
+        self.assertTrue(settings.save(other))
+        self.assertTrue(settings.set_graph({'showTags': True}))
+        data = json.loads(settings.settings_path().read_text())
+        self.assertEqual({key: data[key] for key in other}, other)
+
+    def test_corrupted_graph_is_normalized_on_load_and_save(self):
+        path = settings.settings_path()
+        path.parent.mkdir(parents=True)
+        for corrupt in (None, 'broken', [], 42):
+            with self.subTest(corrupt=corrupt):
+                path.write_text(json.dumps({'graph': corrupt, 'theme': 'nord'}))
+                self.assertEqual(settings.load()['graph'], settings.GRAPH_DEFAULTS)
+                self.assertEqual(settings.get_graph(), settings.GRAPH_DEFAULTS)
+                self.assertTrue(settings.set_font_size('editor_font_size', 16))
+                self.assertEqual(json.loads(path.read_text())['graph'], settings.GRAPH_DEFAULTS)
+        path.write_text(json.dumps({'graph': {'showTags': True, 'unknown': 3,
+                                             'scale': -10}}))
+        graph = settings.load()['graph']
+        self.assertTrue(graph['showTags'])
+        self.assertNotIn('unknown', graph)
+        self.assertEqual(graph['scale'], settings.GRAPH_LIMITS['scale'][0])
 
     def test_every_numeric_bound_and_invalid_value(self):
         for key, (low, high) in settings.GRAPH_LIMITS.items():

@@ -500,13 +500,16 @@ class TerminalPanel(Gtk.Box):
             self._close_pane(pane)
 
     def _current_pane(self) -> _Pane | None:
+        return self._focused_pane() or (self._active if self._active in self._panes else None)
+
+    def _focused_pane(self) -> _Pane | None:
         # get_focus also works before the toplevel receives focus-in events.
         toplevel = self.get_toplevel()
         focus = toplevel.get_focus() if isinstance(toplevel, Gtk.Window) else None
         return next((pane for pane in self._panes
                      if focus is not None and (focus is (pane.terminal or pane.view)
                          or focus.is_ancestor(pane.content))),
-                    self._active if self._active in self._panes else None)
+                    None)
 
     def _focus_changed(self, terminal, _event, pane, focused):
         context = terminal.get_style_context()
@@ -522,9 +525,10 @@ class TerminalPanel(Gtk.Box):
     def _close_pane(self, pane: _Pane) -> None:
         if pane.closed:
             return
+        # The last active pane can be in the background while the editor has focus.
+        refocus = self._focused_pane() is pane
         if pane is self._maximized:
-            self.restore()
-        refocus = self._current_pane() is pane
+            self.restore(focus=refocus)
         self._set_active(self._current_pane())
         pane.closed = True
         pane.cancellable.cancel()
@@ -600,7 +604,7 @@ class TerminalPanel(Gtk.Box):
         if was_normal:
             self.emit("maximize-toggled", True)
 
-    def restore(self) -> None:
+    def restore(self, *, focus: bool = True) -> None:
         """Show all panes again after a maximize."""
         if self._maximized is None:
             return
@@ -613,7 +617,8 @@ class TerminalPanel(Gtk.Box):
         self._update_layout()
         for pane in self._panes:
             pane.header.set_maximized(False)
-        self.focus_terminal()
+        if focus:
+            self.focus_terminal()
         self.emit("maximize-toggled", False)
         self._commit_layout()
 

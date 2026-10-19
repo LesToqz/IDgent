@@ -31,7 +31,11 @@ def load() -> dict:
     """Read settings; missing, unreadable and malformed files behave as empty."""
     try:
         data = json.loads(_path().read_text(encoding='utf-8'))
-        return data if isinstance(data, dict) else {}
+        if not isinstance(data, dict):
+            return {}
+        if 'graph' in data:
+            data['graph'] = normalize_graph(data['graph'])
+        return data
     except (OSError, ValueError, UnicodeError):
         return {}
 
@@ -47,6 +51,8 @@ def save(data: dict) -> bool:
         target = _path()
         merged = load()
         merged.update(data)
+        if 'graph' in merged:
+            merged['graph'] = normalize_graph(merged['graph'])
         payload = json.dumps(merged, indent=2, ensure_ascii=False) + '\n'
         target.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=target.parent,
@@ -161,8 +167,6 @@ _FONT_NAME_MAX = 200
 
 def normalize(key: str, value: object) -> object:
     """Validate one value: clamp numbers, otherwise invalid values use the default."""
-    if key == 'graph':
-        return normalize_graph(value)
     if key == 'theme':
         return get_theme(value if isinstance(value, str) else None).id
     if key in FONT_KEYS:
@@ -197,7 +201,7 @@ def get_value(key: str) -> object:
 
 
 def get_values() -> dict:
-    """Every known key, validated, from one read of the file."""
+    """Settings dialog keys, validated, excluding the separate graph namespace."""
     data = load()
     return {key: normalize(key, data.get(key)) for key in DEFAULTS}
 
@@ -243,7 +247,6 @@ GRAPH_STEPS = {
     'repelStrength': 'any', 'linkStrength': 'any', 'linkDistance': 1,
     'scale': None, 'localDepth': 1, 'localJumps': 1,
 }
-DEFAULTS['graph'] = GRAPH_DEFAULTS
 
 
 def normalize_graph(value: object) -> dict:

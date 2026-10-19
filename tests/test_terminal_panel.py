@@ -297,6 +297,42 @@ class TerminalPanelTest(unittest.TestCase):
         self.assertEqual(self.panel.terminal_count(), 0)
         self.assertEqual(events, [True])
 
+    def test_background_shell_exit_preserves_external_focus(self):
+        self.check_background_shell_exit(maximized=False)
+
+    def test_background_maximized_shell_exit_preserves_external_focus(self):
+        self.check_background_shell_exit(maximized=True)
+
+    def check_background_shell_exit(self, *, maximized):
+        self.panel.new_terminal()
+        exiting = self.panel._panes[-1]
+        self.wait_spawn(exiting)
+        if maximized:
+            self.panel.toggle_maximize(exiting)
+        self.window.remove(self.panel)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        editor = Gtk.TextView()
+        box.pack_start(editor, True, True, 0)
+        box.pack_start(self.panel, True, True, 0)
+        self.window.add(box)
+        self.window.show_all()
+        editor.grab_focus()
+        self.assertIs(self.window.get_focus(), editor)
+        self.assertIs(self.panel._current_pane(), exiting)
+        self.send(exiting.terminal, 'exit')
+        self.assertTrue(poll(lambda: self.panel.terminal_count() == 1))
+        self.assertIs(self.window.get_focus(), editor)
+
+    def test_stale_focus_idle_preserves_later_pane_selection(self):
+        first = self.panel._panes[0]
+        self.panel.new_terminal()
+        second = self.panel._panes[-1]
+        self.panel._header_focus(first)
+        self.panel._focus_idle(second)
+        self.assertIs(self.window.get_focus(), first.terminal)
+        self.wait_spawn(second)
+        self.assertIs(self.window.get_focus(), first.terminal)
+
     def test_reparent_keeps_shell_and_output(self):
         tab = self.panel._panes[0]
         pid = tab.pid
