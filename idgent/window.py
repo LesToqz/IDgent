@@ -100,6 +100,7 @@ class MainWindow(Gtk.ApplicationWindow):
                               self.editor.open_file_at(path, line, column, length))
         self.explorer.connect("search-escaped", self._search_escaped)
         self.editor.connect("current-file-changed", self._current_file_changed)
+        self.connect("focus-in-event", lambda *_: (self.explorer.refresh_git(), False)[1])
         self.explorer.set_text_provider(self.editor.buffer_text)
         self.explorer.connect('path-renamed', self._graph_paths_changed)
         self.explorer.connect('path-deleted', self._graph_paths_changed)
@@ -252,12 +253,15 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def _current_file_changed(self, _editor: EditorPanel, path: str) -> None:
         self.explorer.set_current_file(path or None)
+        self.explorer.refresh_git()
         for view in self._graph_views():
             view.set_active_file(path or None)
         for tab in self.editor.tabs:
             if not getattr(tab, '_graph_connected', False):
                 tab._graph_connected = True
                 self._graph_tabs[tab.page] = tab
+                tab.buffer.connect('modified-changed', lambda buffer:
+                                   self.explorer.refresh_git() if not buffer.get_modified() else None)
                 tab.buffer.connect('changed', lambda _buffer, tab=tab: self._graph_text_changed(tab))
                 tab.buffer.connect('modified-changed', lambda buffer, tab=tab:
                                    self._graph_saved(tab) if not buffer.get_modified() else None)

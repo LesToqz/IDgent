@@ -1,15 +1,17 @@
 """Lazy filesystem explorer with theme-driven navigation and removal preferences."""
 
 import os
+import threading
 from collections.abc import Callable
 
 import gi
 
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
-from gi.repository import Gdk, GObject, Gtk, Pango
+from gi.repository import Gdk, Gio, GLib, GObject, Gtk, Pango
 
-from . import fsops
+from . import fsops, gitstatus
+from .themes import get_theme
 from .search import SearchPanel
 
 
@@ -30,6 +32,18 @@ class ExplorerPanel(Gtk.Box):
         self.show_hidden = True
         self.confirm_delete = True
         self.delete_mode = "delete"
+        self._git_enabled = True
+        self._git_snapshot = gitstatus.Snapshot()
+        self._git_generation = 0
+        self._git_timeout = 0
+        self._git_running = False
+        self._git_closed = False
+        self._git_lock = threading.Lock()
+        self._git_idle = 0
+        self._git_monitor = None
+        self._git_dir = None
+        self._file_monitor = None
+        self.connect("destroy", self._stop_git)
         self._loaded: set[str] = set()
         self.store = Gtk.TreeStore(str, str, str)
         self.tree = Gtk.TreeView(model=self.store)
@@ -51,6 +65,10 @@ class ExplorerPanel(Gtk.Box):
         self._text_cell = label
         column.pack_start(label, True)
         column.add_attribute(label, "text", 1)
+        column.set_cell_data_func(label, self._git_cell_data)
+        self._badge_cell = Gtk.CellRendererText(xalign=1, scale=.85, width_chars=2)
+        column.pack_end(self._badge_cell, False)
+        column.set_cell_data_func(self._badge_cell, self._git_cell_data)
         self.tree.append_column(column)
         self.tree.connect("row-expanded", self._on_expanded)
         self.tree.connect("row-activated", self._on_activated)
@@ -86,6 +104,116 @@ class ExplorerPanel(Gtk.Box):
         self.set_font_size(10)
         self.set_root(root)
 
+    def _git_cell_data(self, column, cell, model, row, data=None):
+        icon, name, path = model[row][:]
+        statuses = self._git_snapshot.folders if icon == "folder" else self._git_snapshot.files
+        status = statuses.get(path) if self._git_enabled else None
+        if cell is self._badge_cell:
+            cell.set_property("text", status.badge if status else "")
+        if status:
+            role = "git_" + status.kind
+            found, color = self.tree.get_style_context().lookup_color("idgent_" + role)
+            if not found:
+                color = Gdk.RGBA()
+                color.parse(get_theme(None).ui[role])
+            cell.set_property("foreground-rgba", color)
+        cell.set_property("foreground-set", status is not None)
+
+    def refresh_git(self) -> None:
+        """Debounce scans, immediately invalidating any in-flight result."""
+        if self._git_closed:
+            return
+        self._git_generation += 1
+        if self._git_timeout:
+            GLib.source_remove(self._git_timeout)
+            self._git_timeout = 0
+        if self._git_enabled:
+            self._git_timeout = GLib.timeout_add(150, self._start_git)
+
+    def set_git_enabled(self, enabled: bool) -> None:
+        self._git_enabled = bool(enabled)
+        if not self._git_enabled:
+            self._git_snapshot = gitstatus.Snapshot()
+            self._set_git_monitor(None)
+            self.tree.queue_draw()
+        self.refresh_git()
+
+    def _start_git(self):
+        self._git_timeout = 0
+        if self._git_running or self._git_closed:
+            return GLib.SOURCE_REMOVE
+        self._git_running = True
+        generation, root = self._git_generation, self.root
+
+        def work():
+            snapshot = gitstatus.collect_status(root)
+            with self._git_lock:
+                if not self._git_closed:
+                    self._git_idle = GLib.idle_add(self._deliver_git, generation, snapshot)
+
+        threading.Thread(target=work, name="idgent-explorer-git", daemon=True).start()
+        return GLib.SOURCE_REMOVE
+
+    def _deliver_git(self, generation, snapshot):
+        with self._git_lock:
+            self._git_idle = 0
+            if self._git_closed:
+                return GLib.SOURCE_REMOVE
+        self._git_running = False
+        if generation == self._git_generation and self._git_enabled:
+            self._git_snapshot = snapshot
+            self._set_git_monitor(snapshot.git_dir)
+            self.tree.queue_draw()
+        elif self._git_enabled and not self._git_timeout:
+            self._git_timeout = GLib.timeout_add(150, self._start_git)
+        return GLib.SOURCE_REMOVE
+
+    def _set_git_monitor(self, directory):
+        if directory == self._git_dir:
+            return
+        if self._git_monitor:
+            self._git_monitor.cancel()
+            self._git_monitor = None
+        self._git_dir = directory
+        if directory:
+            try:
+                self._git_monitor = Gio.File.new_for_path(directory).monitor_directory(
+                    Gio.FileMonitorFlags.WATCH_MOVES, None)
+                self._git_monitor.connect("changed", self._git_metadata_changed)
+            except GLib.Error:
+                pass
+
+    def _git_metadata_changed(self, monitor, file, other, event):
+        if any(item and item.get_basename() in ("index", "HEAD", "packed-refs")
+               for item in (file, other)):
+            self.refresh_git()
+
+    def _watch_current_file(self, path):
+        if self._file_monitor:
+            self._file_monitor.cancel()
+            self._file_monitor = None
+        if path:
+            # Watch the parent so an editor's atomic replacement keeps working.
+            path = os.path.abspath(path)
+            try:
+                self._file_monitor = Gio.File.new_for_path(os.path.dirname(path)).monitor_directory(
+                    Gio.FileMonitorFlags.WATCH_MOVES, None)
+                self._file_monitor.connect("changed", lambda monitor, file, other, event:
+                    self.refresh_git() if any(item and item.get_path() == path
+                                              for item in (file, other)) else None)
+            except GLib.Error:
+                pass
+
+    def _stop_git(self, *_args):
+        with self._git_lock:
+            self._git_closed = True
+            for source in (self._git_timeout, self._git_idle):
+                if source:
+                    GLib.source_remove(source)
+            self._git_timeout = self._git_idle = 0
+        self._set_git_monitor(None)
+        self._watch_current_file(None)
+
     def set_font_size(self, size: int) -> None:
         """Resize file names and reserve enough height for their Pango metrics."""
         self.font_size = size
@@ -100,13 +228,18 @@ class ExplorerPanel(Gtk.Box):
         self.search.set_font_size(size)
 
     def set_root(self, path: str) -> None:
+        self._git_snapshot = gitstatus.Snapshot()
+        self._set_git_monitor(None)
+        self._watch_current_file(None)
         self.root = os.path.abspath(path)
+        self.refresh_git()
         self._rebuild({self.root}, None)
         self.search.set_root(self.root)
 
     def refresh(self) -> None:
         self._rebuild(self._expanded_paths(), self._selected_path())
         self._refresh_search()
+        self.refresh_git()
 
     def set_show_hidden(self, show: bool) -> None:
         """Show dot-files and dot-folders in the navigator (default True)."""
@@ -126,6 +259,7 @@ class ExplorerPanel(Gtk.Box):
 
     def set_current_file(self, path: str | None) -> None:
         """Reveal the active editor file and list its search results first."""
+        self._watch_current_file(path)
         self.search.set_current_file(path or None)
         if not path:
             self.tree.get_selection().unselect_all()
@@ -269,6 +403,7 @@ class ExplorerPanel(Gtk.Box):
         expanded = self._expanded_paths() | {parent, self.root}
         self._rebuild(expanded, result)
         self._refresh_search()
+        self.refresh_git()
         return result
 
     def _rename(self, path: str, name: str) -> str:
@@ -281,6 +416,7 @@ class ExplorerPanel(Gtk.Box):
         self.emit("path-renamed", path, result)
         # After the signal, so open tabs already carry their new paths.
         self._refresh_search()
+        self.refresh_git()
         return result
 
     def _delete(self, path: str, *, permanent: bool = False) -> str:
@@ -291,6 +427,7 @@ class ExplorerPanel(Gtk.Box):
         self._rebuild(self._expanded_paths(), self._selected_path())
         self.emit("path-deleted", result)
         self._refresh_search()
+        self.refresh_git()
         return result
 
     def _window(self) -> Gtk.Window | None:
@@ -440,6 +577,9 @@ class ExplorerPanel(Gtk.Box):
 def build_css(ui: dict[str, str]) -> str:
     """Render the navigator's instant states from theme UI roles."""
     return f'''
+@define-color idgent_git_new {ui['git_new']};
+@define-color idgent_git_modified {ui['git_modified']};
+@define-color idgent_git_conflict {ui['git_conflict']};
 .idgent-explorer, .idgent-explorer viewport, .idgent-explorer scrolledwindow,
 .idgent-explorer treeview {{ background: {ui['sidebar_bg']}; color: {ui['foreground']}; }}
 .idgent-explorer-header {{ background: {ui['sidebar_bg']}; min-height: 24px; padding: 8px; }}
