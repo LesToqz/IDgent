@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Git graph</title>
+<link rel="stylesheet" href="gitgraph.css">
+</head>
+<body>
+<div id="view">
+  <canvas id="gg" tabindex="0" role="img" aria-label="Git commit graph"></canvas>
+  <div id="pulse" aria-hidden="true"></div>
+  <div id="bar" class="bar" role="toolbar" aria-label="Graph controls">
+    <button type="button" id="b-fit" class="btn" title="Fit everything (double-click empty space)" aria-label="Fit"><svg viewBox="0 0 16 16"><path d="M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4"/></svg></button>
+    <button type="button" id="b-head" class="btn" title="Jump to HEAD (End)" aria-label="Jump to HEAD"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="2.6"/><circle cx="8" cy="8" r="5.6" class="thin"/></svg></button>
+    <span class="sep"></span>
+    <button type="button" id="b-out" class="btn" title="Zoom out (-)" aria-label="Zoom out"><svg viewBox="0 0 16 16"><path d="M3.5 8h9"/></svg></button>
+    <button type="button" id="b-in" class="btn" title="Zoom in (+)" aria-label="Zoom in"><svg viewBox="0 0 16 16"><path d="M3.5 8h9M8 3.5v9"/></svg></button>
+    <span class="sep"></span>
+    <button type="button" id="b-refresh" class="btn" title="Refresh" aria-label="Refresh"><svg viewBox="0 0 16 16"><path d="M13 8a5 5 0 1 1-1.6-3.7"/><path d="M13 2.5v3h-3"/></svg></button>
+    <span class="sep"></span>
+    <button type="button" id="c-remote" class="chip on" aria-pressed="true" title="Show remote branches"><i></i>Remote</button>
+    <button type="button" id="c-tags" class="chip on" aria-pressed="true" title="Show tags"><i></i>Tags</button>
+  </div>
+  <div id="tip" class="tip" role="tooltip" aria-hidden="true"></div>
+  <div id="state" class="state" hidden>
+    <div class="state-card">
+      <div class="state-icon" id="state-icon"></div>
+      <div class="state-title" id="state-title"></div>
+      <div class="state-hint" id="state-hint"></div>
+      <div class="skeleton" id="state-skel" aria-hidden="true"><i></i><i></i><i></i></div>
+      <button type="button" class="state-btn" id="state-btn" hidden>Try again</button>
+    </div>
+  </div>
+  <div id="live" class="sr" aria-live="polite"></div>
+</div>
+<script src="gitgraph_core.js"></script>
+<script src="gitgraph.js"></script>
+</body>
+</html>

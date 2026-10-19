@@ -1,0 +1,532 @@
+{
+ "ok": true,
+ "error": null,
+ "repo": {
+  "name": "acme-app",
+  "root": "/home/dev/acme-app",
+  "default_branch": "master"
+ },
+ "head": {
+  "hash": "a7f685fe25bd4cf9d0ce2fcc369a56439cb924a9",
+  "branch": "master",
+  "detached": false
+ },
+ "dirty": {
+  "changed": 2
+ },
+ "total": 31,
+ "truncated": false,
+ "commits": [
+  {
+   "hash": "a7f685fe25bd4cf9d0ce2fcc369a56439cb924a9",
+   "short": "a7f685f",
+   "parents": [
+    "6eef4da903ce4d7632b0f04154c2c887cb54a165"
+   ],
+   "subject": "Polish the graph colours",
+   "author": "Ada Lovelace",
+   "email": "ada@acme.dev",
+   "ts": 1792328000,
+   "tz": 120,
+   "cts": 1792328030,
+   "refs": [
+    {
+     "name": "master",
+     "kind": "branch",
+     "current": true
+    }
+   ],
+   "merged_name": null
+  },
+  {
+   "hash": "6eef4da903ce4d7632b0f04154c2c887cb54a165",
+   "short": "6eef4da",
+   "parents": [
+    "d2f148064d05057193cd64f77a5cc44000bddc0d"
+   ],
+   "subject": "Update docs for v0.2",
+   "author": "Ada Lovelace",
+   "email": "ada@acme.dev",
+   "ts": 1792324000,
+   "tz": 120,
+   "cts": 1792324030,
+   "refs": [
+    {
+     "name": "v0.2",
+     "kind": "tag"
+    },
+    {
+     "name": "origin/master",
+     "kind": "remote"
+    }
+   ],
+   "merged_name": null
+  },
+  {
+   "hash": "d2f148064d05057193cd64f77a5cc44000bddc0d",
+   "short": "d2f1480",
+   "parents": [
+    "ed70c8417eb7aaf509724a8fad1b353419090a78",
+    "5cc7e0ffd2f9505583c56b805882816287ba4276"
+   ],
+   "subject": "Merge branch 'hotfix/critical'",
+   "author": "Grace Hopper",
+   "email": "ada@acme.dev",
+   "ts": 1792313200,
+   "tz": 120,
+   "cts": 1792313230,
+   "refs": [],
+   "merged_name": "hotfix/critical"
+  },
+  {
+   "hash": "94264cef6130102dcfdb4c69dcbb481964d67b1e",
+   "short": "94264ce",
+   "parents": [
+    "d209ccb541ad152f4387418ab1e01186bea0a025"
+   ],
+   "subject": "WIP: graph polish experiments",
+   "author": "Ada Lovelace",
+   "email": "ada@acme.dev",
+   "ts": 1792302400,
+   "tz": 120,
+   "cts": 1792302430,
+   "refs": [
+    {
+     "name": "experiment/graph-polish",
+     "kind": "branch"
+    }
+   ],
+   "merged_name": null
+  },
+  {
+   "hash": "5cc7e0ffd2f9505583c56b805882816287ba4276",
+   "short": "5cc7e0f",
+   "parents": [
+    "f7d2f0a8be0c949bc51ca597a69ba83b3a5f0546"
+   ],
+   "subject": "Hotfix: update the changelog",
+   "author": "Grace Hopper",
+   "email": "ada@acme.dev",
+   "ts": 1792291600,
+   "tz": 120,
+   "cts": 1792291630,
+   "refs": [
+    {
+     "name": "hotfix/critical",
+     "kind": "branch"
+    },
+    {
+     "name": "origin/hotfix/critical",
+     "kind": "remote"
+    }
+   ],
+   "merged_name": null
+  },
+  {
+   "hash": "d209ccb541ad152f4387418ab1e01186bea0a025",
+   "short": "d209ccb",
+   "parents": [
+    "ed70c8417eb7aaf509724a8fad1b353419090a78"
+   ],
+   "subject": "Try a radial layout",
+   "author": "Ada Lovelace",
+   "email": "ada@acme.dev",
+   "ts": 1792280800,
+   "tz": 120,
+   "cts": 1792280830,
+   "refs": [],
+   "merged_name": null
+  },
+  {
+   "hash": "f7d2f0a8be0c949bc51ca597a69ba83b3a5f0546",
+   "short": "f7d2f0a",
+   "parents": [
+    "ff05a3640eaeaed6158f2dc5bed675e1302d6453"
+   ],
+   "subject": "Hotfix: bump patch version",
+   "author": "Grace Hopper",
+   "email": "ada@acme.dev",
+   "ts": 1792270000,
+   "tz": 120,
+   "cts": 1792270030,
+   "refs": [],
+   "merged_name": null
+  },
+  {
+   "hash": "ed70c8417eb7aaf509724a8fad1b353419090a78",
+   "short": "ed70c84",
+   "parents": [
+    "d4868cbbe26a4fc6c5ca50080199fe638e8d74b8"
+   ],
+   "subject": "Tune the cache size",
+   "author": "Ada Lovelace",
+   "email": "ada@acme.dev",
+   "ts": 1792259200,
+   "tz": 120,
+   "cts": 1792259230,
+   "refs": [],
+   "merged_name": null
+  },
+  {
+   "hash": "ff05a3640eaeaed6158f2dc5bed675e1302d6453",
+   "short": "ff05a36",
+   "parents": [
+    "9923f7daddfcc5d45c6d2caebfa8e2a3c67f11bd"
+   ],
+   "subject": "Hotfix: add regression test",
+   "author": "Grace Hopper",
+   "email": "ada@acme.dev",
+   "ts": 1792248400,
+   "tz": 120,
+   "cts": 1792248430,
+   "refs": [],
+   "merged_name": null
+  },
+  {
+   "hash": "d4868cbbe26a4fc6c5ca50080199fe638e8d74b8",
+   "short": "d4868cb",
+   "parents": [
+    "89e16a2afe4859cdf1a9a81a3b6c4a7de4b0e7a2"
+   ],
+   "subject": "Improve error messages",
+   "author": "Ada Lovelace",
+   "email": "ada@acme.dev",
+   "ts": 1792237600,
+   "tz": 120,
+   "cts": 1792237630,
+   "refs": [],
+   "merged_name": null
+  },
+  {
+   "hash": "9923f7daddfcc5d45c6d2caebfa8e2a3c67f11bd",
+   "short": "9923f7d",
+   "parents": [
+    "89e16a2afe4859cdf1a9a81a3b6c4a7de4b0e7a2"
+   ],
+   "subject": "Hotfix: guard against a null session",
+   "author": "Grace Hopper",
+   "email": "ada@acme.dev",
+   "ts": 1792226800,
+   "tz": 120,
+   "cts": 1792226830,
+   "refs": [],
+   "merged_name": null
+  },
+  {
+   "hash": "89e16a2afe4859cdf1a9a81a3b6c4a7de4b0e7a2",
+   "short": "89e16a2",
+   "parents": [
+    "54638663bb5cf16c5d1f6768130d8416c6cd24f6",
+    "f9fba2a3b96d5af3982b64b21a6a2d2f574105e1"
+   ],
+   "subject": "Merge branch 'feature/ui'",
+   "author": "Ada Lovelace",
+   "email": "ada@acme.dev",
+   "ts": 1792216000,
+   "tz": 120,
+   "cts": 1792216030,
+   "refs": [],
+   "merged_name": "feature/ui"
+  },
+  {
+   "hash": "f9fba2a3b96d5af3982b64b21a6a2d2f574105e1",
+   "short": "f9fba2a",
+   "parents": [
+    "e6378b6c6dec5a5586fd59af1bae94408e480926"
+   ],
+   "subject": "UI: polish transitions",
+   "author": "Ada Lovelace",
+   "email": "ada@acme.dev",
+   "ts": 1792205200,
+   "tz": 120,
+   "cts": 1792205230,
+   "refs": [
+    {
+     "name": "feature/ui",
+     "kind": "branch"
+    }
+   ],
+   "merged_name": null
+  },
+  {
+   "hash": "54638663bb5cf16c5d1f6768130d8416c6cd24f6",
+   "short": "5463866",
+   "parents": [
+    "9e8e609d51307fb915660f31b6171f8de5f954a5"
+   ],
+   "subject": "Add telemetry opt-out",
+   "author": "Ada Lovelace",
+   "email": "ada@acme.dev",
+   "ts": 1792194400,
+   "tz": 120,
+   "cts": 1792194430,
+   "refs": [],
+   "merged_name": null
+  },
+  {
+   "hash": "e6378b6c6dec5a5586fd59af1bae94408e480926",
+   "short": "e6378b6",
+   "parents": [
+    "41a91e22f8fc15e60062447a5db669f3e8575ea8"
+   ],
+   "subject": "UI: dark theme tokens",
+   "author": "Ada Lovelace",
+   "email": "ada@acme.dev",
+   "ts": 1792183600,
+   "tz": 120,
+   "cts": 1792183630,
+   "refs": [],
+   "merged_name": null
+  },
+  {
+   "hash": "9e8e609d51307fb915660f31b6171f8de5f954a5",
+   "short": "9e8e609",
+   "parents": [
+    "955e4de7a8c06eafeb104d31d0892539ccf33bf3"
+   ],
+   "subject": "Refactor config loader",
+   "author": "Ada Lovelace",
+   "email": "ada@acme.dev",
+   "ts": 1792172800,
+   "tz": 120,
+   "cts": 1792172830,
+   "refs": [],
+   "merged_name": null
+  },
+  {
+   "hash": "41a91e22f8fc15e60062447a5db669f3e8575ea8",
+   "short": "41a91e2",
+   "parents": [
+    "955e4de7a8c06eafeb104d31d0892539ccf33bf3"
+   ],
+   "subject": "UI: new sidebar layout",
+   "author": "Ada Lovelace",
+   "email": "ada@acme.dev",
+   "ts": 1792162000,
+   "tz": 120,
+   "cts": 1792162030,
+   "refs": [],
+   "merged_name": null
+  },
+  {
+   "hash": "955e4de7a8c06eafeb104d31d0892539ccf33bf3",
+   "short": "955e4de",
+   "parents": [
+    "d1676289efe0e94463b0712fc020c4ae64857b02"
+   ],
+   "subject": "Fix typo in docs",
+   "author": "Ada Lovelace",
+   "email": "ada@acme.dev",
+   "ts": 1792151200,
+   "tz": 120,
+   "cts": 1792151230,
+   "refs": [],
+   "merged_name": null
+  },
+  {
+   "hash": "d1676289efe0e94463b0712fc020c4ae64857b02",
+   "short": "d167628",
+   "parents": [
+    "8ffc05ce89f670dfe9cb83826ee08aac13a8942e",
+    "3122aed6d1c8643a14aad85ca659df7c9006894d",
+    "a2f7aa4ea3b5f8f7c162b13023d36947e952ff9d"
+   ],
+   "subject": "Merge pull request #42 from acme/feature/auth",
+   "author": "Ada Lovelace",
+   "email": "ada@acme.dev",
+   "ts": 1792140400,
+   "tz": 120,
+   "cts": 1792140430,
+   "refs": [],
+   "merged_name": "feature/auth"
+  },
+  {
+   "hash": "a2f7aa4ea3b5f8f7c162b13023d36947e952ff9d",
+   "short": "a2f7aa4",
+   "parents": [
+    "3ce4510cf8b0b7488ace95d96b571fd870106d86"
+   ],
+   "subject": "API: rate limiting middleware",
+   "author": "Ada Lovelace",
+   "email": "ada@acme.dev",
+   "ts": 1792129600,
+   "tz": 120,
+   "cts": 1792129630,
+   "refs": [
+    {
+     "name": "feature/api",
+     "kind": "branch"
+    }
+   ],
+   "merged_name": null
+  },
+  {
+   "hash": "3ce4510cf8b0b7488ace95d96b571fd870106d86",
+   "short": "3ce4510",
+   "parents": [
+    "4625aa7d9a458a3ed6beb1cae965e2873a6ce797"
+   ],
+   "subject": "Add cursor pagination",
+   "author": "Ada Lovelace",
+   "email": "ada@acme.dev",
+   "ts": 1792118800,
+   "tz": 120,
+   "cts": 1792118830,
+   "refs": [],
+   "merged_name": null
+  },
+  {
+   "hash": "4625aa7d9a458a3ed6beb1cae965e2873a6ce797",
+   "short": "4625aa7",
+   "parents": [
+    "859829a2da122081ae98bbaed38ce26ae95834f6"
+   ],
+   "subject": "Add /users endpoint",
+   "author": "Ada Lovelace",
+   "email": "ada@acme.dev",
+   "ts": 1792108000,
+   "tz": 120,
+   "cts": 1792108030,
+   "refs": [],
+   "merged_name": null
+  },
+  {
+   "hash": "3122aed6d1c8643a14aad85ca659df7c9006894d",
+   "short": "3122aed",
+   "parents": [
+    "996f313f3d6da961cb0de0d47fbe8c99f90fc19a"
+   ],
+   "subject": "Auth: refresh tokens on expiry",
+   "author": "Ada Lovelace",
+   "email": "ada@acme.dev",
+   "ts": 1792097200,
+   "tz": 120,
+   "cts": 1792097230,
+   "refs": [],
+   "merged_name": null
+  },
+  {
+   "hash": "8ffc05ce89f670dfe9cb83826ee08aac13a8942e",
+   "short": "8ffc05c",
+   "parents": [
+    "735ab81a224e9e91a128c5e663a7fcde85fa71e1"
+   ],
+   "subject": "Bump dependencies",
+   "author": "Ada Lovelace",
+   "email": "ada@acme.dev",
+   "ts": 1792086400,
+   "tz": 120,
+   "cts": 1792086430,
+   "refs": [],
+   "merged_name": null
+  },
+  {
+   "hash": "859829a2da122081ae98bbaed38ce26ae95834f6",
+   "short": "859829a",
+   "parents": [
+    "735ab81a224e9e91a128c5e663a7fcde85fa71e1"
+   ],
+   "subject": "Scaffold REST API",
+   "author": "Ada Lovelace",
+   "email": "ada@acme.dev",
+   "ts": 1792075600,
+   "tz": 120,
+   "cts": 1792075630,
+   "refs": [],
+   "merged_name": null
+  },
+  {
+   "hash": "996f313f3d6da961cb0de0d47fbe8c99f90fc19a",
+   "short": "996f313",
+   "parents": [
+    "4dce14f09caa0c3a5a399d189bc56047df803e2a"
+   ],
+   "subject": "Add JWT session handling",
+   "author": "Ada Lovelace",
+   "email": "ada@acme.dev",
+   "ts": 1792064800,
+   "tz": 120,
+   "cts": 1792064830,
+   "refs": [],
+   "merged_name": null
+  },
+  {
+   "hash": "735ab81a224e9e91a128c5e663a7fcde85fa71e1",
+   "short": "735ab81",
+   "parents": [
+    "95d244195e7e4d32e8f4b2f05b2adb845946483a"
+   ],
+   "subject": "Update README with setup steps",
+   "author": "Ada Lovelace",
+   "email": "ada@acme.dev",
+   "ts": 1792054000,
+   "tz": 120,
+   "cts": 1792054030,
+   "refs": [],
+   "merged_name": null
+  },
+  {
+   "hash": "4dce14f09caa0c3a5a399d189bc56047df803e2a",
+   "short": "4dce14f",
+   "parents": [
+    "95d244195e7e4d32e8f4b2f05b2adb845946483a"
+   ],
+   "subject": "Add login form",
+   "author": "Ada Lovelace",
+   "email": "ada@acme.dev",
+   "ts": 1792043200,
+   "tz": 120,
+   "cts": 1792043230,
+   "refs": [],
+   "merged_name": null
+  },
+  {
+   "hash": "95d244195e7e4d32e8f4b2f05b2adb845946483a",
+   "short": "95d2441",
+   "parents": [
+    "2fbbd9c15e6889eaa4fa66dd3e944760b10f02bf"
+   ],
+   "subject": "Set up CI pipeline",
+   "author": "Ada Lovelace",
+   "email": "ada@acme.dev",
+   "ts": 1792032400,
+   "tz": 120,
+   "cts": 1792032430,
+   "refs": [
+    {
+     "name": "v0.1",
+     "kind": "tag"
+    }
+   ],
+   "merged_name": null
+  },
+  {
+   "hash": "2fbbd9c15e6889eaa4fa66dd3e944760b10f02bf",
+   "short": "2fbbd9c",
+   "parents": [
+    "3108aaf45948f3cd37b4a55731c19c4fa9d33ca5"
+   ],
+   "subject": "Add project scaffolding",
+   "author": "Ada Lovelace",
+   "email": "ada@acme.dev",
+   "ts": 1792021600,
+   "tz": 120,
+   "cts": 1792021630,
+   "refs": [],
+   "merged_name": null
+  },
+  {
+   "hash": "3108aaf45948f3cd37b4a55731c19c4fa9d33ca5",
+   "short": "3108aaf",
+   "parents": [],
+   "subject": "Initial commit",
+   "author": "Ada Lovelace",
+   "email": "ada@acme.dev",
+   "ts": 1792010800,
+   "tz": 120,
+   "cts": 1792010830,
+   "refs": [],
+   "merged_name": null
+  }
+ ]
+}

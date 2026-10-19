@@ -1,0 +1,533 @@
+{
+ "ok": true,
+ "error": null,
+ "repo": {
+  "name": "IDgent",
+  "root": "/home/dev/IDgent",
+  "default_branch": "master"
+ },
+ "head": {
+  "hash": "cc6c5a36441160cf5200f8f1814ac39e75709a99",
+  "branch": "master",
+  "detached": false
+ },
+ "dirty": {
+  "changed": 0
+ },
+ "total": 33,
+ "truncated": false,
+ "commits": [
+  {
+   "hash": "cc6c5a36441160cf5200f8f1814ac39e75709a99",
+   "short": "cc6c5a3",
+   "parents": [
+    "3692072b207ef8a1f38094c3f423b4a134e569b8"
+   ],
+   "subject": "chore(ceo): session log (badges removed, pushed)",
+   "author": "Ada Lovelace",
+   "email": "ada@acme.dev",
+   "ts": 1791178200,
+   "tz": 120,
+   "cts": 1791178230,
+   "refs": [
+    {
+     "name": "master",
+     "kind": "branch",
+     "current": true
+    },
+    {
+     "name": "origin/master",
+     "kind": "remote"
+    }
+   ],
+   "merged_name": null
+  },
+  {
+   "hash": "3692072b207ef8a1f38094c3f423b4a134e569b8",
+   "short": "3692072",
+   "parents": [
+    "1a0959f3a117790ae9cf3bcac71503096d17e648",
+    "73520abced86afff6bd7f328ecedeb303943fafc"
+   ],
+   "subject": "Merge ceo/codex/explorer-no-badges: explorer no badges lands on master",
+   "author": "Ada Lovelace",
+   "email": "ada@acme.dev",
+   "ts": 1791172800,
+   "tz": 120,
+   "cts": 1791172830,
+   "refs": [],
+   "merged_name": "ceo/codex/explorer-no-badges"
+  },
+  {
+   "hash": "73520abced86afff6bd7f328ecedeb303943fafc",
+   "short": "73520ab",
+   "parents": [
+    "d47b244ebda30ca459a1131b50eaa3d98a55b5ed"
+   ],
+   "subject": "feat(explorer-no-badges): explorer no badges part 3",
+   "author": "Ada Lovelace",
+   "email": "ada@acme.dev",
+   "ts": 1791167400,
+   "tz": 120,
+   "cts": 1791167430,
+   "refs": [],
+   "merged_name": null
+  },
+  {
+   "hash": "d47b244ebda30ca459a1131b50eaa3d98a55b5ed",
+   "short": "d47b244",
+   "parents": [
+    "37eb340d2f70bc3c3bd49a31a890a651db239807"
+   ],
+   "subject": "feat(explorer-no-badges): explorer no badges part 2",
+   "author": "Ada Lovelace",
+   "email": "ada@acme.dev",
+   "ts": 1791162000,
+   "tz": 120,
+   "cts": 1791162030,
+   "refs": [],
+   "merged_name": null
+  },
+  {
+   "hash": "37eb340d2f70bc3c3bd49a31a890a651db239807",
+   "short": "37eb340",
+   "parents": [
+    "1a0959f3a117790ae9cf3bcac71503096d17e648"
+   ],
+   "subject": "feat(explorer-no-badges): explorer no badges part 1",
+   "author": "Ada Lovelace",
+   "email": "ada@acme.dev",
+   "ts": 1791156600,
+   "tz": 120,
+   "cts": 1791156630,
+   "refs": [],
+   "merged_name": null
+  },
+  {
+   "hash": "1a0959f3a117790ae9cf3bcac71503096d17e648",
+   "short": "1a0959f",
+   "parents": [
+    "bbb1818d0e4af6524ff901cf152def23dff79115",
+    "9d62d4cf26aa91f5ffccf93b093819655c7372df"
+   ],
+   "subject": "Merge ceo/codex/gutter-sync: gutter sync lands on master",
+   "author": "Ada Lovelace",
+   "email": "ada@acme.dev",
+   "ts": 1791151200,
+   "tz": 120,
+   "cts": 1791151230,
+   "refs": [],
+   "merged_name": "ceo/codex/gutter-sync"
+  },
+  {
+   "hash": "bbb1818d0e4af6524ff901cf152def23dff79115",
+   "short": "bbb1818",
+   "parents": [
+    "b9661afd3e93badf9f3adbf00f2bb32ae8247b7a"
+   ],
+   "subject": "chore(ceo): session log",
+   "author": "Ada Lovelace",
+   "email": "ada@acme.dev",
+   "ts": 1791145800,
+   "tz": 120,
+   "cts": 1791145830,
+   "refs": [],
+   "merged_name": null
+  },
+  {
+   "hash": "9d62d4cf26aa91f5ffccf93b093819655c7372df",
+   "short": "9d62d4c",
+   "parents": [
+    "3fb913ef722ccd140ccc8a63e96a6e71a3e13dea"
+   ],
+   "subject": "feat(gutter-sync): gutter sync part 2",
+   "author": "Ada Lovelace",
+   "email": "ada@acme.dev",
+   "ts": 1791140400,
+   "tz": 120,
+   "cts": 1791140430,
+   "refs": [],
+   "merged_name": null
+  },
+  {
+   "hash": "3fb913ef722ccd140ccc8a63e96a6e71a3e13dea",
+   "short": "3fb913e",
+   "parents": [
+    "b9661afd3e93badf9f3adbf00f2bb32ae8247b7a"
+   ],
+   "subject": "feat(gutter-sync): gutter sync part 1",
+   "author": "Ada Lovelace",
+   "email": "ada@acme.dev",
+   "ts": 1791135000,
+   "tz": 120,
+   "cts": 1791135030,
+   "refs": [],
+   "merged_name": null
+  },
+  {
+   "hash": "b9661afd3e93badf9f3adbf00f2bb32ae8247b7a",
+   "short": "b9661af",
+   "parents": [
+    "b986da311e4e4b45fb4d6479b1c46f37c39eca5f",
+    "cefe9737df8533abef77018ab3d92197abc854c6"
+   ],
+   "subject": "Merge ceo/claude/titlebar-dock: titlebar dock lands on master",
+   "author": "Ada Lovelace",
+   "email": "ada@acme.dev",
+   "ts": 1791129600,
+   "tz": 120,
+   "cts": 1791129630,
+   "refs": [],
+   "merged_name": "ceo/claude/titlebar-dock"
+  },
+  {
+   "hash": "cefe9737df8533abef77018ab3d92197abc854c6",
+   "short": "cefe973",
+   "parents": [
+    "b986da311e4e4b45fb4d6479b1c46f37c39eca5f"
+   ],
+   "subject": "feat(titlebar-dock): titlebar dock part 1",
+   "author": "Ada Lovelace",
+   "email": "ada@acme.dev",
+   "ts": 1791124200,
+   "tz": 120,
+   "cts": 1791124230,
+   "refs": [],
+   "merged_name": null
+  },
+  {
+   "hash": "b986da311e4e4b45fb4d6479b1c46f37c39eca5f",
+   "short": "b986da3",
+   "parents": [
+    "19ab78bf813f9b82ff3c24a278cf67f3e61ac3f5",
+    "3b6ac09c78d7cadedd678cc763e78b86bf464766"
+   ],
+   "subject": "Merge ceo/codex/terminal-bar: terminal bar lands on master",
+   "author": "Ada Lovelace",
+   "email": "ada@acme.dev",
+   "ts": 1791118800,
+   "tz": 120,
+   "cts": 1791118830,
+   "refs": [],
+   "merged_name": "ceo/codex/terminal-bar"
+  },
+  {
+   "hash": "19ab78bf813f9b82ff3c24a278cf67f3e61ac3f5",
+   "short": "19ab78b",
+   "parents": [
+    "279cd1997a4cc9d8086756e3049dcda3e625a4e5"
+   ],
+   "subject": "chore(ceo): session log",
+   "author": "Ada Lovelace",
+   "email": "ada@acme.dev",
+   "ts": 1791113400,
+   "tz": 120,
+   "cts": 1791113430,
+   "refs": [],
+   "merged_name": null
+  },
+  {
+   "hash": "3b6ac09c78d7cadedd678cc763e78b86bf464766",
+   "short": "3b6ac09",
+   "parents": [
+    "78eafc9acf9ee70f7bcbb11bf87742d380ecc1a3"
+   ],
+   "subject": "feat(terminal-bar): terminal bar part 3",
+   "author": "Ada Lovelace",
+   "email": "ada@acme.dev",
+   "ts": 1791108000,
+   "tz": 120,
+   "cts": 1791108030,
+   "refs": [],
+   "merged_name": null
+  },
+  {
+   "hash": "78eafc9acf9ee70f7bcbb11bf87742d380ecc1a3",
+   "short": "78eafc9",
+   "parents": [
+    "6fd9cd5e2f6230648b25b7b3e9673025d322c2be"
+   ],
+   "subject": "feat(terminal-bar): terminal bar part 2",
+   "author": "Ada Lovelace",
+   "email": "ada@acme.dev",
+   "ts": 1791102600,
+   "tz": 120,
+   "cts": 1791102630,
+   "refs": [],
+   "merged_name": null
+  },
+  {
+   "hash": "6fd9cd5e2f6230648b25b7b3e9673025d322c2be",
+   "short": "6fd9cd5",
+   "parents": [
+    "279cd1997a4cc9d8086756e3049dcda3e625a4e5"
+   ],
+   "subject": "feat(terminal-bar): terminal bar part 1",
+   "author": "Ada Lovelace",
+   "email": "ada@acme.dev",
+   "ts": 1791097200,
+   "tz": 120,
+   "cts": 1791097230,
+   "refs": [],
+   "merged_name": null
+  },
+  {
+   "hash": "279cd1997a4cc9d8086756e3049dcda3e625a4e5",
+   "short": "279cd19",
+   "parents": [
+    "43a0a2f9a7f47c64e09ea9392a866a5dbab6b6bc",
+    "af15c59eec57d7abf5b57e0912bd0cf7eb67a4a6"
+   ],
+   "subject": "Merge ceo/codex/settings-dialog: settings dialog lands on master",
+   "author": "Ada Lovelace",
+   "email": "ada@acme.dev",
+   "ts": 1791091800,
+   "tz": 120,
+   "cts": 1791091830,
+   "refs": [],
+   "merged_name": "ceo/codex/settings-dialog"
+  },
+  {
+   "hash": "af15c59eec57d7abf5b57e0912bd0cf7eb67a4a6",
+   "short": "af15c59",
+   "parents": [
+    "39a82a46e191191344961fbb046547550a3c7f71"
+   ],
+   "subject": "feat(settings-dialog): settings dialog part 2",
+   "author": "Ada Lovelace",
+   "email": "ada@acme.dev",
+   "ts": 1791086400,
+   "tz": 120,
+   "cts": 1791086430,
+   "refs": [],
+   "merged_name": null
+  },
+  {
+   "hash": "39a82a46e191191344961fbb046547550a3c7f71",
+   "short": "39a82a4",
+   "parents": [
+    "43a0a2f9a7f47c64e09ea9392a866a5dbab6b6bc"
+   ],
+   "subject": "feat(settings-dialog): settings dialog part 1",
+   "author": "Ada Lovelace",
+   "email": "ada@acme.dev",
+   "ts": 1791081000,
+   "tz": 120,
+   "cts": 1791081030,
+   "refs": [],
+   "merged_name": null
+  },
+  {
+   "hash": "43a0a2f9a7f47c64e09ea9392a866a5dbab6b6bc",
+   "short": "43a0a2f",
+   "parents": [
+    "f8e0edaa354a55b17eda2115c40a49195f44c049",
+    "84764bb805d7050742324126de7f6419e0beacdd"
+   ],
+   "subject": "Merge ceo/claude/graph-view: graph view lands on master",
+   "author": "Ada Lovelace",
+   "email": "ada@acme.dev",
+   "ts": 1791075600,
+   "tz": 120,
+   "cts": 1791075630,
+   "refs": [],
+   "merged_name": "ceo/claude/graph-view"
+  },
+  {
+   "hash": "f8e0edaa354a55b17eda2115c40a49195f44c049",
+   "short": "f8e0eda",
+   "parents": [
+    "31743608a665186a084a6d92fa2343cb720e2667"
+   ],
+   "subject": "chore(ceo): session log",
+   "author": "Ada Lovelace",
+   "email": "ada@acme.dev",
+   "ts": 1791070200,
+   "tz": 120,
+   "cts": 1791070230,
+   "refs": [],
+   "merged_name": null
+  },
+  {
+   "hash": "84764bb805d7050742324126de7f6419e0beacdd",
+   "short": "84764bb",
+   "parents": [
+    "31743608a665186a084a6d92fa2343cb720e2667"
+   ],
+   "subject": "feat(graph-view): graph view part 1",
+   "author": "Ada Lovelace",
+   "email": "ada@acme.dev",
+   "ts": 1791064800,
+   "tz": 120,
+   "cts": 1791064830,
+   "refs": [],
+   "merged_name": null
+  },
+  {
+   "hash": "31743608a665186a084a6d92fa2343cb720e2667",
+   "short": "3174360",
+   "parents": [
+    "5b69b42a1e053a38c29ab10230ba634d79701527",
+    "8fe8b022e7307c3b1f565001a333142e4c771b30"
+   ],
+   "subject": "Merge ceo/codex/search-panel: search panel lands on master",
+   "author": "Ada Lovelace",
+   "email": "ada@acme.dev",
+   "ts": 1791059400,
+   "tz": 120,
+   "cts": 1791059430,
+   "refs": [],
+   "merged_name": "ceo/codex/search-panel"
+  },
+  {
+   "hash": "8fe8b022e7307c3b1f565001a333142e4c771b30",
+   "short": "8fe8b02",
+   "parents": [
+    "5928fd1bfab9428dacf201772735fb36a51a6420"
+   ],
+   "subject": "feat(search-panel): search panel part 3",
+   "author": "Ada Lovelace",
+   "email": "ada@acme.dev",
+   "ts": 1791054000,
+   "tz": 120,
+   "cts": 1791054030,
+   "refs": [],
+   "merged_name": null
+  },
+  {
+   "hash": "5928fd1bfab9428dacf201772735fb36a51a6420",
+   "short": "5928fd1",
+   "parents": [
+    "34fe5b15ed5d16bace558c4df29854c0a19e15b0"
+   ],
+   "subject": "feat(search-panel): search panel part 2",
+   "author": "Ada Lovelace",
+   "email": "ada@acme.dev",
+   "ts": 1791048600,
+   "tz": 120,
+   "cts": 1791048630,
+   "refs": [],
+   "merged_name": null
+  },
+  {
+   "hash": "34fe5b15ed5d16bace558c4df29854c0a19e15b0",
+   "short": "34fe5b1",
+   "parents": [
+    "5b69b42a1e053a38c29ab10230ba634d79701527"
+   ],
+   "subject": "feat(search-panel): search panel part 1",
+   "author": "Ada Lovelace",
+   "email": "ada@acme.dev",
+   "ts": 1791043200,
+   "tz": 120,
+   "cts": 1791043230,
+   "refs": [],
+   "merged_name": null
+  },
+  {
+   "hash": "5b69b42a1e053a38c29ab10230ba634d79701527",
+   "short": "5b69b42",
+   "parents": [
+    "96c23e3277df68d432b8de2e178323d67bc6d4f6",
+    "476c7856220341b6c43afacabb02632845112141"
+   ],
+   "subject": "Merge ceo/codex/explorer-git: explorer git lands on master",
+   "author": "Ada Lovelace",
+   "email": "ada@acme.dev",
+   "ts": 1791037800,
+   "tz": 120,
+   "cts": 1791037830,
+   "refs": [],
+   "merged_name": "ceo/codex/explorer-git"
+  },
+  {
+   "hash": "96c23e3277df68d432b8de2e178323d67bc6d4f6",
+   "short": "96c23e3",
+   "parents": [
+    "afc9c3ff85c5c38be89282cf446ca0fda0fbb5ee"
+   ],
+   "subject": "chore(ceo): session log",
+   "author": "Ada Lovelace",
+   "email": "ada@acme.dev",
+   "ts": 1791032400,
+   "tz": 120,
+   "cts": 1791032430,
+   "refs": [],
+   "merged_name": null
+  },
+  {
+   "hash": "476c7856220341b6c43afacabb02632845112141",
+   "short": "476c785",
+   "parents": [
+    "747bf1a142c9f5891234d7dc8a5ab6132b112791"
+   ],
+   "subject": "feat(explorer-git): explorer git part 2",
+   "author": "Ada Lovelace",
+   "email": "ada@acme.dev",
+   "ts": 1791027000,
+   "tz": 120,
+   "cts": 1791027030,
+   "refs": [],
+   "merged_name": null
+  },
+  {
+   "hash": "747bf1a142c9f5891234d7dc8a5ab6132b112791",
+   "short": "747bf1a",
+   "parents": [
+    "afc9c3ff85c5c38be89282cf446ca0fda0fbb5ee"
+   ],
+   "subject": "feat(explorer-git): explorer git part 1",
+   "author": "Ada Lovelace",
+   "email": "ada@acme.dev",
+   "ts": 1791021600,
+   "tz": 120,
+   "cts": 1791021630,
+   "refs": [],
+   "merged_name": null
+  },
+  {
+   "hash": "afc9c3ff85c5c38be89282cf446ca0fda0fbb5ee",
+   "short": "afc9c3f",
+   "parents": [
+    "1ce2b66a039360c95841cc93e2e6af2dd1139001",
+    "a6e04a23e678eae2260352888e31a2407ed7cf13"
+   ],
+   "subject": "Merge ceo/claude/pane-split: pane split lands on master",
+   "author": "Ada Lovelace",
+   "email": "ada@acme.dev",
+   "ts": 1791016200,
+   "tz": 120,
+   "cts": 1791016230,
+   "refs": [],
+   "merged_name": "ceo/claude/pane-split"
+  },
+  {
+   "hash": "a6e04a23e678eae2260352888e31a2407ed7cf13",
+   "short": "a6e04a2",
+   "parents": [
+    "1ce2b66a039360c95841cc93e2e6af2dd1139001"
+   ],
+   "subject": "feat(pane-split): pane split part 1",
+   "author": "Ada Lovelace",
+   "email": "ada@acme.dev",
+   "ts": 1791010800,
+   "tz": 120,
+   "cts": 1791010830,
+   "refs": [],
+   "merged_name": null
+  },
+  {
+   "hash": "1ce2b66a039360c95841cc93e2e6af2dd1139001",
+   "short": "1ce2b66",
+   "parents": [],
+   "subject": "Initial import",
+   "author": "Ada Lovelace",
+   "email": "ada@acme.dev",
+   "ts": 1791005400,
+   "tz": 120,
+   "cts": 1791005430,
+   "refs": [],
+   "merged_name": null
+  }
+ ]
+}
