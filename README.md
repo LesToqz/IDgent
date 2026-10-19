@@ -29,11 +29,17 @@ bash packaging/install.sh --uninstall
 
 ## Layout and editing
 
-One top bar contains File/View menus, the title **IDgent**, and window buttons.
+IDgent follows the look and feel of the Reference app note app: flat neutral surfaces,
+one accent colour, rounded tabs, instant hover/selection feedback and motion only
+where something moves (sliding toggles, notices, terminal panes).
+
+One top bar contains File/View menus, the title **IDgent**, a settings cog and the
+window buttons. The explorer sidebar starts 300 px wide.
 The explorer on the left supports searching (see Search in Files), creating
 files/folders, renaming, deleting and refreshing. Renames retarget open files; deletions mark affected tabs deleted.
 File → Open Folder changes the explorer root and the directory for new shells;
-existing shells keep their directories. Deletion is permanent.
+existing shells keep their directories. Deletion is permanent by default; Settings →
+Files can move deleted items to the system trash instead.
 
 The editor has tabs, line numbers, current-line and matching-bracket highlights,
 undo/redo, indentation, line comments and zoom via Ctrl+Plus/Minus or Ctrl+wheel;
@@ -81,22 +87,72 @@ from the box to the results.
   and create, so they never point at files that are gone. While the box or results
   have focus, the explorer's F2 / Delete / F5 / Ctrl+Shift+N do nothing to the tree.
 
+## Quick Switcher and Command Palette
+
+Both open as a box near the top of the window (no dimming; click outside or press
+**Esc** to close, which returns focus to where it was). Type to filter with fuzzy
+matching (matched letters are bold); **Up/Down** move, **Enter** chooses.
+
+- **Quick Switcher** — **Ctrl+P** or **Ctrl+O** (File → Quick Switcher…). Lists the
+  files of the open folder (the Search in Files ignored folders are skipped; hidden
+  files follow *Show hidden files*; at most 20,000 files). With an empty query the
+  recently active and open files come first. Enter opens the file in the editor.
+- **Command Palette** — **Ctrl+Shift+P** (View → Command Palette…). Every File and
+  View menu action plus Open settings, Show hotkeys, Next theme, Toggle Markdown
+  preview and editor zoom in/out/reset, each with its shortcut shown as a chip.
+  Recently run commands are listed first.
+
+Ctrl+P, Ctrl+O and F1 are left to a focused terminal (readline, vim, mc and htop
+use them); Ctrl+Shift+P works everywhere. Notices (small toasts at the top right)
+appear only for things with no other feedback, such as a settings file that could
+not be written; click one to dismiss it.
+
 ## Settings
 
-File → Settings… (**Ctrl+,**) opens a non-modal dialog; changes apply immediately
-and are saved.
+The header-bar cog or **Ctrl+,** opens the Settings window (there is no File menu
+entry); **F1** opens it on the Hotkeys page. It is non-modal: changes apply
+immediately to open tabs, the explorer and both terminal docks, and are saved at
+once. Search the left pane to filter settings across pages; Esc clears the search,
+then closes the window.
 
-- **Color theme** — the theme picker lives here (see Themes below).
-- **Text size** — three independent spin buttons with per-row Reset: *Terminal*
-  (7–32 pt, default 11), *Editor (file content)* (7–32 pt, default 11) and *Explorer
-  (file names)* (8–24 pt, default 10; also sizes the search results).
+| Page | Setting | Default | Key |
+| --- | --- | --- | --- |
+| Appearance | Color theme | IDgent Dark | `theme` |
+| | Accent color (swatches, Reset = theme accent) | theme accent | `accent` |
+| | Reduce motion (turns off interface animations) | off | `reduce_motion` |
+| | Interface font (Restore = system font) | system | `ui_font` |
+| | Explorer text size, 8–24 pt (also search results) | 10 | `explorer_font_size` |
+| Editor | Editor text size, 7–32 pt | 11 | `editor_font_size` |
+| | Editor font (Restore = monospace; not the Markdown preview) | monospace | `editor_font` |
+| | Line numbers | on | `line_numbers` |
+| | Highlight current line | on | `highlight_line` |
+| | Markdown: open in preview (newly opened tabs) | off | `md_default_preview` |
+| | Markdown: readable line length (700 px preview column) | on | `md_readable_width` |
+| | Indent using tabs | off | `indent_tabs` |
+| | Indent width, 2–8 | 4 | `indent_width` |
+| | Auto-pair brackets and quotes | on | `auto_pair` |
+| Files | Show hidden files (explorer and Quick Switcher) | on | `show_hidden` |
+| | Confirm before deleting | on | `confirm_delete` |
+| | Deleted files: Move to system trash / Delete permanently | Delete permanently | `delete_mode` |
+| | Ignored folders (read-only list) | — | — |
+| Terminal | Terminal text size, 7–32 pt | 11 | `terminal_font_size` |
+| | Cursor shape: block / I-beam / underline | block | `terminal_cursor` |
+| | Blinking cursor | on | `terminal_blink` |
+| | Scrollback lines, 1000–100000 | 10000 | `terminal_scrollback` |
+| | Open bottom terminal at start-up (applies from the next start) | on | `terminal_autostart` |
+| Hotkeys | Searchable list of every shortcut | — | — |
+| About | Version, settings file path, licences | — | — |
 
 Settings are stored as JSON in `~/.config/idgent/settings.json`
 (`$XDG_CONFIG_HOME/idgent/settings.json` when set), written atomically with mode
-0600, with the keys `theme`, `terminal_font_size`, `editor_font_size` and
-`explorer_font_size`. A missing, unreadable or invalid file falls back to defaults;
-out-of-range sizes are clamped. Zooming with Ctrl+Plus/Minus/wheel is temporary:
-the saved size is what Ctrl+0 returns to and what new sessions start with.
+0600; unknown keys are preserved. A missing, unreadable or invalid file falls back
+to defaults; invalid values use their default and numbers are clamped. If the file
+cannot be written, the change still applies for the session and an error notice
+says so. Zooming with Ctrl+Plus/Minus/wheel is temporary: the saved size is what
+Ctrl+0 returns to and what new sessions start with.
+
+**Reduce motion** (or `IDGENT_REDUCE_MOTION=1`, or GTK's *enable animations* turned
+off) makes toggles, notices and terminal pane changes instant.
 
 ## Markdown preview
 
@@ -143,13 +199,17 @@ screen is not re-flowed, preventing duplicated prompts.
 
 ## Themes
 
-Pick a theme in File → Settings… for a live switch, or press **Ctrl+Alt+T** (no menu
-entry) to cycle to the next one, wrapping after the last.
+Pick a theme in Settings → Appearance for a live switch, or press **Ctrl+Alt+T**
+(also a Command Palette entry) to cycle to the next one, wrapping after the last.
+The accent colour setting recolours the accent of any theme.
 Editor syntax, chrome, the explorer and both terminal docks change without restarting
 shells; new tabs and terminals inherit the theme. The selection is saved in the
-settings file described above. Missing, invalid or unreadable settings fall back to Dark+.
+settings file described above. Fresh installs, and missing, invalid or unreadable
+settings, use **IDgent Dark**; a theme you saved before is kept.
 
-- **Dark+** — charcoal with familiar blue and purple syntax accents; the default.
+- **IDgent Dark** — Reference app-like neutral greys with a purple accent; the default.
+- **IDgent Light** — the light counterpart: white and soft grey with a purple accent.
+- **Dark+** — charcoal with familiar blue and purple syntax accents.
 - **Light+** — white editor with blue and purple accents.
 - **Monokai** — warm dark grey with bright pink, green and yellow syntax.
 - **Dracula** — purple-grey with pastel pink, purple and green.
@@ -171,7 +231,10 @@ These are app bindings; GTK text editing and shell bindings also apply.
 | Ctrl+S | Save current file; terminal focus forwards Ctrl+S to the shell (XOFF) |
 | Ctrl+Shift+S | Save all files |
 | Ctrl+Q | Quit the app |
-| Ctrl+, | Open Settings (theme and text sizes) |
+| Ctrl+P / Ctrl+O | Quick Switcher (not while a terminal has focus) |
+| Ctrl+Shift+P | Command Palette (everywhere, terminals included) |
+| Ctrl+, | Open Settings |
+| F1 | Open Settings on the Hotkeys page (not while a terminal has focus) |
 | Ctrl+B | Toggle explorer |
 | Ctrl+Shift+F | Search in Files: focus the explorer search box, pre-filled from a one-line selection |
 | Ctrl+` | Toggle bottom terminal dock and focus it when shown |
@@ -183,7 +246,7 @@ These are app bindings; GTK text editing and shell bindings also apply.
 | Ctrl+Z / Ctrl+Shift+Z | Undo / redo (editor) |
 | Ctrl+F | Find in the current file (editor); Enter finds next match |
 | Ctrl+Shift+V | Toggle Markdown rendered preview / source (`.md`, `.markdown` tabs) |
-| Esc | In the explorer search box or results: clear the query, back to the editor |
+| Esc | Close the Quick Switcher / Command Palette; in the explorer search box or results: clear the query, back to the editor |
 | Ctrl+Tab / Ctrl+Shift+Tab | Next / previous editor tab |
 | Ctrl+PageDown / Ctrl+PageUp | Next / previous editor tab |
 | Ctrl+/ | Toggle line comments (Python, shell, TOML, YAML, conf) |
@@ -209,5 +272,9 @@ sudo apt install xvfb
 GDK_BACKEND=x11 xvfb-run -a python3 -m unittest discover -s tests
 ```
 
-No GtkSourceView, persisted layout/session, or Wayland-specific testing.
+No GtkSourceView, persisted window geometry/layout/session, or Wayland-specific testing.
+GTK 3 CSS limits the Reference app look: no tree indent guides, no concave curves under
+the active tab, and menus/tooltips are separate windows whose rounded corners and
+shadows depend on the compositor. Ctrl+P inside the explorer tree opens the Quick
+Switcher instead of GTK's emacs-style "move up".
 Ctrl+Q is the app quit key, including when a terminal has focus.

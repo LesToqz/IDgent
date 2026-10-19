@@ -466,7 +466,7 @@ print('startup-ok')
         file_menu = menu_bar.get_children()[0].get_submenu()
         with patch.object(editor, 'atomic_write', wraps=editor.atomic_write) as write, \
              patch.object(self.window.editor, '_save', wraps=self.window.editor._save) as save:
-            file_menu.get_children()[1].activate()
+            next(item for item in file_menu.get_children() if item.get_label() == 'Save').activate()
             save.assert_called_once_with(tab)
             write.assert_called_once_with(str(path), 'leave Ctrl+S to the shell\n', 'LF')
         self.assertEqual(path.read_text(), 'leave Ctrl+S to the shell\n')

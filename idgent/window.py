@@ -1,5 +1,13 @@
-"""Application window, panel layout, menus, and shared commands."""
+"""Application window, panel layout, menus, and shared commands.
 
+The content sits in an ``OverlayHost`` (quick switcher, command palette and
+notices). Every settings key is applied at start-up and live from the
+settings window's signals. Window-level hotkeys (Ctrl+P/Ctrl+O quick
+switcher, F1 hotkeys page) yield to a focused terminal so readline/vim keep
+them; Ctrl+Shift+P (command palette) works everywhere.
+"""
+
+import os
 from pathlib import Path
 from typing import Callable
 
@@ -9,13 +17,32 @@ gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
 from gi.repository import Gdk, Gtk
 
-from idgent import settings, style
+from idgent import motion, settings, style
+from idgent.overlay import OverlayHost
+from idgent.palette import Command, CommandPalette, QuickSwitcher
+from idgent.search import SKIP_DIRS
 from idgent.themes import THEMES, Theme, get_theme
 from idgent.explorer import ExplorerPanel
 from idgent.editor import EditorPanel
 from idgent.terminal import TerminalPanel
 from idgent.titlebar import TitleBar
-from idgent.settings_dialog import SettingsDialog
+from idgent.settings_dialog import DEFAULT_HOTKEYS, SettingsDialog
+
+# Upper bound for the quick switcher's file walk (keeps huge trees responsive).
+MAX_SWITCHER_FILES = 20000
+RECENT_FILES = 50
+_CTRL = Gdk.ModifierType.CONTROL_MASK
+_CTRL_SHIFT = Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.SHIFT_MASK
+_DELETE_MODES = {'permanent': 'delete', 'trash': 'trash'}
+
+
+def accel_text(accelerator: str) -> str:
+    """'<Control><Shift>s' -> 'Ctrl+Shift+S' (the settings Hotkeys format)."""
+    key, modifiers = Gtk.accelerator_parse(accelerator)
+    parts = [name for mask, name in ((Gdk.ModifierType.CONTROL_MASK, 'Ctrl'),
+                                     (Gdk.ModifierType.SHIFT_MASK, 'Shift'),
+                                     (Gdk.ModifierType.MOD1_MASK, 'Alt')) if modifiers & mask]
+    return '+'.join(parts + [Gtk.accelerator_get_label(key, 0)])
 
 
 class MainWindow(Gtk.ApplicationWindow):
@@ -30,19 +57,32 @@ class MainWindow(Gtk.ApplicationWindow):
 
         self._settings_dialog = None
         self._font_sizes = settings.get_font_sizes()
+        stored = settings.get_values()
+        self._values = {key: stored[key] for key in settings.NEW_KEYS}
+        self._commands: list[Command] = []
+        self._recent_files: list[str] = []
+        self._switcher = self._palette = None
+        motion.set_reduce_motion(self._values['reduce_motion'])
         self.explorer = ExplorerPanel(self.root)
         self.editor = EditorPanel()
         self.explorer.set_font_size(self._font_sizes["explorer_font_size"])
         self.editor.set_font_size(self._font_sizes["editor_font_size"])
         self.editor.set_default_font_size(self._font_sizes["editor_font_size"])
         terminal_size = self._font_sizes["terminal_font_size"]
-        self.terminal_bottom = TerminalPanel(self.root, font_size=terminal_size)
+        autostart = self._values['terminal_autostart']
+        self.terminal_bottom = TerminalPanel(self.root, autostart=autostart,
+                                             font_size=terminal_size)
         self.terminal_right = TerminalPanel(self.root, autostart=False, stacked=True,
                                             font_size=terminal_size)
         self.terminal_right.set_no_show_all(True)
+        if not autostart:
+            self.terminal_bottom.set_no_show_all(True)
         for panel in (self.terminal_bottom, self.terminal_right):
             panel.connect("last-closed", self._hide_terminal)
             panel.connect("maximize-toggled", self._terminal_maximize_toggled)
+        for key in settings.NEW_KEYS:
+            if key not in ('accent', 'ui_font', 'editor_font', 'reduce_motion'):
+                self._apply_setting(key)
         self.explorer.connect("file-activated", lambda _, path: self.editor.open_file(path))
         self.explorer.connect("path-renamed", lambda _, old, new: self.editor.on_path_renamed(old, new))
         self.explorer.connect("path-deleted", lambda _, path: self.editor.on_path_deleted(path))
@@ -50,8 +90,7 @@ class MainWindow(Gtk.ApplicationWindow):
                               lambda _, path, line, column, length:
                               self.editor.open_file_at(path, line, column, length))
         self.explorer.connect("search-escaped", self._search_escaped)
-        self.editor.connect("current-file-changed",
-                            lambda _, path: self.explorer.set_current_file(path or None))
+        self.editor.connect("current-file-changed", self._current_file_changed)
         self.explorer.set_text_provider(self.editor.buffer_text)
 
         self.dock_bottom = Gtk.Paned(orientation=Gtk.Orientation.VERTICAL)
@@ -66,14 +105,16 @@ class MainWindow(Gtk.ApplicationWindow):
         self.sidebar = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
         self.sidebar.pack1(self.explorer, resize=False, shrink=False)
         self.sidebar.pack2(self.dock, resize=True, shrink=False)
-        self.sidebar.set_position(260)
+        self.sidebar.set_position(300)
 
         self.titlebar = TitleBar(self._build_menu())
         self.titlebar.connect("settings-requested", lambda _: self.open_settings())
         self.set_titlebar(self.titlebar)
         layout = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         layout.pack_start(self.sidebar, True, True, 0)
-        self.add(layout)
+        self.overlay = OverlayHost(layout)
+        self.add(self.overlay)
+        self._add_commands()
         self._update_title()
         self.connect("delete-event", self._on_delete)
         self.set_theme(self.theme.id, persist=False)
@@ -83,14 +124,21 @@ class MainWindow(Gtk.ApplicationWindow):
         accelerators = Gtk.AccelGroup()
         self.add_accel_group(accelerators)
 
-        def item(menu: Gtk.Menu, label: str, callback: Callable[[], object],
-                 shortcut: str | None = None) -> Gtk.MenuItem:
+        def item(menu: Gtk.Menu, group: str, label: str, callback: Callable[[], object],
+                 shortcut: str | None = None, hint: tuple[str, ...] = ()) -> Gtk.MenuItem:
+            """``shortcut`` is a real accelerator; ``hint`` accelerators are only shown
+            (the window's key handler owns them so a focused terminal keeps them)."""
             entry = Gtk.MenuItem(label=label)
             entry.connect("activate", lambda _: callback())
             if shortcut:
                 key, modifiers = Gtk.accelerator_parse(shortcut)
                 entry.add_accelerator("activate", accelerators, key, modifiers,
                                       Gtk.AccelFlags.VISIBLE)
+            elif hint:
+                entry.get_child().set_accel(*Gtk.accelerator_parse(hint[0]))
+            keys = (shortcut,) if shortcut else hint
+            self._commands.append(Command(f"{group}: {label.rstrip('…')}", callback,
+                                          tuple(accel_text(key) for key in keys)))
             menu.append(entry)
             return entry
 
@@ -100,17 +148,22 @@ class MainWindow(Gtk.ApplicationWindow):
             entry = Gtk.MenuItem(label=label)
             entry.set_submenu(menu)
             bar.append(entry)
-        item(file_menu, "Open Folder…", self.open_folder)
-        item(file_menu, "Save", lambda: self.editor.save_current(), "<Control>s")
-        item(file_menu, "Save All", lambda: self.editor.save_all(), "<Control><Shift>s")
-        item(file_menu, "Quit", self.close, "<Control>q")
-        item(view_menu, "Terminal Below", self.toggle_terminal_bottom, "<Control>grave")
-        item(view_menu, "Terminal on Right", self.toggle_terminal_right, "<Control><Alt>grave")
-        item(view_menu, "Split Terminal", self.split_terminal, "<Control><Shift>5")
-        item(view_menu, "Toggle Terminal Fullscreen", self.toggle_terminal_fullscreen,
+        item(file_menu, "File", "Quick Switcher…", self.open_quick_switcher,
+             hint=("<Control>p", "<Control>o"))
+        item(file_menu, "File", "Open Folder…", self.open_folder)
+        item(file_menu, "File", "Save", lambda: self.editor.save_current(), "<Control>s")
+        item(file_menu, "File", "Save All", lambda: self.editor.save_all(), "<Control><Shift>s")
+        item(file_menu, "File", "Quit", self.close, "<Control>q")
+        item(view_menu, "View", "Command Palette…", self.open_command_palette,
+             "<Control><Shift>p")
+        item(view_menu, "View", "Terminal Below", self.toggle_terminal_bottom, "<Control>grave")
+        item(view_menu, "View", "Terminal on Right", self.toggle_terminal_right,
+             "<Control><Alt>grave")
+        item(view_menu, "View", "Split Terminal", self.split_terminal, "<Control><Shift>5")
+        item(view_menu, "View", "Toggle Terminal Fullscreen", self.toggle_terminal_fullscreen,
              "<Control><Shift>F11")
-        item(view_menu, "Toggle Explorer Sidebar", self.toggle_explorer, "<Control>b")
-        item(view_menu, "Search in Files", self.search_in_files, "<Control><Shift>f")
+        item(view_menu, "View", "Toggle Explorer Sidebar", self.toggle_explorer, "<Control>b")
+        item(view_menu, "View", "Search in Files", self.search_in_files, "<Control><Shift>f")
         key, modifiers = Gtk.accelerator_parse("<Control>comma")
         accelerators.connect(key, modifiers, Gtk.AccelFlags.VISIBLE,
                              lambda *_: (self.open_settings(), True)[1])
@@ -119,7 +172,96 @@ class MainWindow(Gtk.ApplicationWindow):
                              lambda *_: (self.next_theme(), True)[1])
         return bar
 
-    def open_settings(self) -> None:
+    def _add_commands(self) -> None:
+        """Palette-only commands (after the menu actions, in this order)."""
+        for label, callback, keys in (
+            ("Settings: Open settings", self.open_settings, ("Ctrl+,",)),
+            ("Settings: Show hotkeys", lambda: self.open_settings("hotkeys"), ("F1",)),
+            ("Theme: Next theme", self.next_theme, ("Ctrl+Alt+T",)),
+            ("Editor: Toggle Markdown preview", self.toggle_markdown_view, ("Ctrl+Shift+V",)),
+            ("Editor: Zoom in", lambda: self.editor.zoom(1), ("Ctrl+=",)),
+            ("Editor: Zoom out", lambda: self.editor.zoom(-1), ("Ctrl+-",)),
+            ("Editor: Reset zoom",
+             lambda: self.editor.set_font_size(self.editor.default_font_size), ("Ctrl+0",)),
+        ):
+            self._commands.append(Command(label, callback, keys))
+
+    def commands(self) -> list[Command]:
+        """Every command-palette entry (menu actions first) with its hotkey labels."""
+        return list(self._commands)
+
+    def hotkeys(self) -> list[tuple[str, str]]:
+        """(label, accelerator) pairs for the settings Hotkeys page: the commands,
+        then the panel-local shortcuts not already listed."""
+        pairs = [(command.label, " / ".join(command.hotkey))
+                 for command in self._commands if command.hotkey]
+        used = {key for _label, keys in pairs for key in keys.split(" / ")}
+        return pairs + [(label, keys) for label, keys in DEFAULT_HOTKEYS
+                        if not set(keys.split(" / ")) & used]
+
+    # Overlay prompts -----------------------------------------------------------
+
+    def _project_files(self) -> list[str]:
+        """Files under the root (search ignore list; hidden ones per the setting)."""
+        hidden = self._values["show_hidden"]
+        files: list[str] = []
+        for top, dirs, names in os.walk(self.root):
+            dirs[:] = sorted(name for name in dirs if name not in SKIP_DIRS
+                             and (hidden or not name.startswith(".")))
+            for name in sorted(names):
+                if hidden or not name.startswith("."):
+                    files.append(os.path.join(top, name))
+                    if len(files) >= MAX_SWITCHER_FILES:
+                        return files
+        return files
+
+    def _switcher_recent(self) -> list[str]:
+        """Recently active files first, then the other open tabs."""
+        open_paths = [tab.path for tab in self.editor.tabs if tab.path]
+        return self._recent_files + [path for path in open_paths
+                                     if path not in self._recent_files]
+
+    def _current_file_changed(self, _editor: EditorPanel, path: str) -> None:
+        self.explorer.set_current_file(path or None)
+        if path:
+            if path in self._recent_files:
+                self._recent_files.remove(path)
+            self._recent_files.insert(0, path)
+            del self._recent_files[RECENT_FILES:]
+
+    def open_quick_switcher(self) -> None:
+        """Show the file switcher (recent files first on an empty query)."""
+        if self._switcher is None:
+            # Every file already opens in its own tab: no "open in new tab" variant.
+            self._switcher = QuickSwitcher(
+                self._project_files, root=self.root, recent_provider=self._switcher_recent,
+                instructions=(("↑↓", "to navigate"), ("↵", "to open"), ("esc", "to dismiss")))
+            self._switcher.connect("chosen",
+                                   lambda _, item, _mods: self.editor.open_file(item.data))
+        self._switcher.root = self.root
+        self._restore_terminal_fullscreen()
+        self.overlay.show_prompt(self._switcher)
+
+    def open_command_palette(self) -> None:
+        """Show the command palette (recently run commands first)."""
+        if self._palette is None:
+            self._palette = CommandPalette(self.commands)
+        self.overlay.show_prompt(self._palette)
+
+    def notify(self, text: str, level: str = "info") -> None:
+        self.overlay.notify(text, level=level)
+
+    def _notify_unsaved_settings(self) -> None:
+        self.notify(f"Could not save settings to {settings.settings_path()}", "error")
+
+    def toggle_markdown_view(self) -> None:
+        mode = self.editor.markdown_mode()
+        if mode is not None:
+            self.editor.set_markdown_mode("preview" if mode == "source" else "source")
+
+    # Settings -------------------------------------------------------------------
+
+    def open_settings(self, page: str | None = None) -> None:
         """Present the window's reusable, non-modal live settings dialog."""
         if self._settings_dialog is None:
             self._settings_dialog = SettingsDialog(
@@ -127,8 +269,17 @@ class MainWindow(Gtk.ApplicationWindow):
             self._settings_dialog.connect("theme-selected",
                                           lambda _, theme_id: self.set_theme(theme_id))
             self._settings_dialog.connect("font-size-changed", self._font_size_changed)
-        self._settings_dialog.show_all()
-        self._settings_dialog.present()
+            self._settings_dialog.connect("setting-changed", self._setting_changed)
+        dialog = self._settings_dialog
+        # Live values: they win over the file when a save failed.
+        dialog.set_values({**settings.get_values(), "theme": self.theme.id,
+                           **self._font_sizes, **self._values})
+        dialog.set_hotkeys(self.hotkeys())
+        dialog.show_all()
+        if page is not None:
+            dialog.nav_list.select_page(page)
+            dialog.set_focus(dialog.nav_list.rows[page])
+        dialog.present()
 
     def _font_size_changed(self, _dialog, key: str, size: int) -> None:
         self._font_sizes[key] = size
@@ -140,12 +291,68 @@ class MainWindow(Gtk.ApplicationWindow):
             self.editor.set_default_font_size(size)
         elif key == "explorer_font_size":
             self.explorer.set_font_size(size)
-        settings.set_font_size(key, size)
+        if not settings.set_font_size(key, size):
+            self._notify_unsaved_settings()
+
+    def _setting_changed(self, _dialog, key: str, value: object) -> None:
+        """Apply a key the dialog already validated and persisted."""
+        self._values[key] = value
+        self._apply_setting(key)
+        if key == "terminal_autostart":
+            self.notify("The start-up terminal setting applies from the next start.")
+        if settings.get_value(key) != value:
+            self._notify_unsaved_settings()
+
+    def _apply_setting(self, key: str) -> None:
+        values = self._values
+        value = values[key]
+        terminals = (self.terminal_bottom, self.terminal_right)
+        if key in ("accent", "ui_font", "editor_font"):
+            self._apply_style()
+            if key == "editor_font":
+                # Re-measure gutter width and tab stops for the new family.
+                for tab in self.editor.tabs:
+                    tab.set_font_size(self.editor.font_size)
+        elif key == "reduce_motion":
+            motion.set_reduce_motion(value)
+        elif key == "line_numbers":
+            self.editor.set_line_numbers(value)
+        elif key == "highlight_line":
+            self.editor.set_highlight_line(value)
+        elif key in ("indent_tabs", "indent_width"):
+            self.editor.set_indent(values["indent_tabs"], values["indent_width"])
+        elif key == "auto_pair":
+            self.editor.set_auto_pair(value)
+        elif key == "md_default_preview":
+            self.editor.set_md_default_preview(value)
+        elif key == "md_readable_width":
+            self.editor.set_md_readable_width(value)
+        elif key == "show_hidden":
+            self.explorer.set_show_hidden(value)
+        elif key == "confirm_delete":
+            self.explorer.set_confirm_delete(value)
+        elif key == "delete_mode":
+            self.explorer.set_delete_mode(_DELETE_MODES[value])
+        elif key == "terminal_cursor":
+            for panel in terminals:
+                panel.set_cursor_shape(value)
+        elif key == "terminal_blink":
+            for panel in terminals:
+                panel.set_cursor_blink(value)
+        elif key == "terminal_scrollback":
+            for panel in terminals:
+                panel.set_scrollback(value)
+        # terminal_autostart is read once, when the window is built.
+
+    def _apply_style(self, theme: Theme | None = None) -> None:
+        style.apply_theme(self.theme if theme is None else theme, accent=self._values["accent"],
+                          ui_font=self._values["ui_font"],
+                          editor_font=self._values["editor_font"])
 
     def set_theme(self, theme_id: str, persist: bool = True) -> None:
         """Recolour existing widgets and defaults without restarting any shells."""
         theme = get_theme(theme_id)
-        style.apply_theme(theme)
+        self._apply_style(theme)
         self.editor.set_syntax_style(theme.syntax)
         self.editor.set_chrome(theme.chrome)
         colors = theme.terminal
@@ -154,8 +361,8 @@ class MainWindow(Gtk.ApplicationWindow):
         self.theme = theme
         if self._settings_dialog is not None:
             self._settings_dialog.set_theme_id(theme.id)
-        if persist:
-            settings.set_theme_id(theme.id)
+        if persist and not settings.set_theme_id(theme.id):
+            self._notify_unsaved_settings()
 
     def next_theme(self) -> None:
         index = next(i for i, theme in enumerate(THEMES) if theme.id == self.theme.id)
@@ -318,9 +525,25 @@ class MainWindow(Gtk.ApplicationWindow):
         finally:
             dialog.destroy()
 
+    def _terminal_focused(self) -> bool:
+        focus = self.get_focus()
+        return focus is not None and any(focus.is_ancestor(panel) for panel in
+                                         (self.terminal_bottom, self.terminal_right))
+
     def do_key_press_event(self, event: Gdk.EventKey) -> bool:
         focus = self.get_focus()
         modifiers = event.state & Gtk.accelerator_get_default_mod_mask()
+        if modifiers == _CTRL_SHIFT and event.keyval in (Gdk.KEY_p, Gdk.KEY_P):
+            self.open_command_palette()
+            return True
+        # Ctrl+P/Ctrl+O/F1 stay with a focused terminal (readline, vim, mc, htop).
+        if not self._terminal_focused():
+            if modifiers == _CTRL and event.keyval in (Gdk.KEY_p, Gdk.KEY_o):
+                self.open_quick_switcher()
+                return True
+            if not modifiers and event.keyval == Gdk.KEY_F1:
+                self.open_settings("hotkeys")
+                return True
         # Handle before GTK/editor bindings can consume the menu shortcut.
         if (modifiers == Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.SHIFT_MASK
                 and event.keyval == Gdk.KEY_F11):
