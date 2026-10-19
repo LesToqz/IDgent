@@ -927,7 +927,7 @@
       add.addEventListener('click', safe(() => {
         const list = (settings.colorGroups || []).slice();
         list.push({ query: '', color: G.newGroupColor(list.length, pal.dark) });
-        settings.colorGroups = list; renderGroups(); groupsChanged();
+        settings.colorGroups = list; groupsKey = null; renderGroupsIfChanged(); groupsChanged();
         const inputs = groupsBox.querySelectorAll('input'); if (inputs.length) inputs[inputs.length - 1].focus();
       }));
       b.appendChild(add);
@@ -970,11 +970,15 @@
       const row = el('div', 'group');
       const q = el('input', '', { type: 'text', placeholder: 'Enter query...', spellcheck: 'false', 'aria-label': 'Group query' });
       q.value = g.query || '';
-      q.addEventListener('input', safe(() => { settings.colorGroups[k] = Object.assign({}, settings.colorGroups[k], { query: q.value }); groupsChanged(); }));
+      q.addEventListener('input', safe(() => {
+        settings.colorGroups = settings.colorGroups.slice();
+        settings.colorGroups[k] = Object.assign({}, settings.colorGroups[k], { query: q.value });
+        groupsKey = JSON.stringify(settings.colorGroups); groupsChanged();
+      }));
       const sw = el('button', 'swatch', { type: 'button', 'data-tip': 'Click to change color', 'aria-label': 'Group colour' });
       sw.style.background = G.toHex(G.parseColor(g.color));
       sw.addEventListener('click', safe((e) => { e.stopPropagation(); openPopup(k, sw); }));
-      const del = iconBtn('x', 'Delete group', () => { settings.colorGroups = settings.colorGroups.filter((_, j) => j !== k); renderGroups(); groupsChanged(); });
+      const del = iconBtn('x', 'Delete group', () => { settings.colorGroups = settings.colorGroups.filter((_, j) => j !== k); renderGroupsIfChanged(); groupsChanged(); });
       row.appendChild(q); row.appendChild(sw); row.appendChild(del);
       groupsBox.appendChild(row);
     });
@@ -991,7 +995,7 @@
     const setColor = (c) => {
       settings.colorGroups = settings.colorGroups.slice();
       settings.colorGroups[k] = Object.assign({}, settings.colorGroups[k], { color: colorValue(k, c) });
-      anchor.style.background = G.toHex(c); groupsChanged();
+      anchor.style.background = G.toHex(c); groupsKey = JSON.stringify(settings.colorGroups); groupsChanged();
     };
     for (const c of pal.groups) {
       const b = el('button', 'swatch', { type: 'button', 'aria-label': G.toHex(c) });
@@ -1038,11 +1042,16 @@
   let groupsKey = null;
   function renderGroupsIfChanged() {
     const key = JSON.stringify(settings.colorGroups || []);
-    if (key === groupsKey) return;
+    if (key === groupsKey || !groupsBox) return;
     groupsKey = key;
-    if (groupsBox && !groupsBox.contains(document.activeElement)) renderGroups();
+    // keep the caret in the query box being edited across a re-render
+    const inputs = [...groupsBox.querySelectorAll('input')];
+    const at = inputs.indexOf(document.activeElement);
+    const caret = at >= 0 ? document.activeElement.selectionStart : 0;
+    renderGroups();
+    const again = groupsBox.querySelectorAll('input');
+    if (at >= 0 && again[at]) { again[at].focus(); try { again[at].setSelectionRange(caret, caret); } catch (e) { /* ignore */ } }
   }
-
   let panelTimer = 0;
   function setPanelOpen(open, user) {
     const isOpen = !controlsEl.classList.contains('is-close') && !controlsEl.classList.contains('is-closing');
