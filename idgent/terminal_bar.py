@@ -4,6 +4,7 @@ from __future__ import annotations
 import gi
 
 gi.require_version("Gtk", "3.0")
+gi.require_version("Gdk", "3.0")
 from gi.repository import Gdk, GLib, GObject, Gtk, Pango
 
 from idgent import motion
@@ -230,7 +231,6 @@ class AddButton(_IconButton):
         self.popover.add(self.choices)
         self.choices.connect("row-activated", lambda _box, row: self.choose(row.kind))
         self.popover.connect("key-press-event", self._chooser_key)
-        self.popover.connect("closed", lambda _p: self.grab_focus())
         self.connect("clicked", self._open)
         self.connect("destroy", lambda _b: self.popover.destroy())
 

@@ -525,12 +525,14 @@ if __name__ == "__main__":
 
 
 class GraphPaneTest(unittest.TestCase):
+    stacked = False
+
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         self.window = Gtk.Window()
         self.window.set_default_size(800, 400)
-        self.panel = TerminalPanel(self.directory.name, autostart=False)
+        self.panel = TerminalPanel(self.directory.name, autostart=False, stacked=self.stacked)
         self.panel.ANIMATION_MS = 0
         self.window.add(self.panel)
         self.window.show_all()
@@ -597,6 +599,16 @@ class GraphPaneTest(unittest.TestCase):
         self.assertEqual(calls, [True])
         self.assertEqual(limits, [True, True])
 
+    def test_chooser_activation_keeps_new_pane_focus(self):
+        self.panel.graph_factory = Gtk.Entry
+        self.panel.add_button.clicked()
+        self.assertTrue(self.panel.add_button.popover.get_visible())
+        self.panel.add_button.choices.emit('row-activated',
+                                          self.panel.add_button.choices.get_row_at_index(1))
+        graph = self.panel.graph_views()[0]
+        self.assertTrue(poll(lambda: not self.panel.add_button.popover.get_visible()))
+        self.assertTrue(poll(lambda: self.window.get_focus() == graph))
+
     def test_last_graph_close_and_destroyed_reject(self):
         events = []
         self.panel.connect('last-closed', lambda _p: events.append(True))
@@ -608,3 +620,7 @@ class GraphPaneTest(unittest.TestCase):
         self.assertEqual(events, [True])
         self.panel.destroy()
         self.assertFalse(self.panel.add_graph())
+
+
+class StackedGraphPaneTest(GraphPaneTest):
+    stacked = True
