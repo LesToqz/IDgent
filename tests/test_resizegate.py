@@ -273,6 +273,20 @@ class ResizeGateTest(unittest.TestCase):
         self.assertIsNone(self.gate._timer)
         self.assertEqual(self.gate._answers, [])
 
+    def test_empty_vte_does_not_wait_for_a_nonexistent_program(self):
+        self.gate.remove(self.child)
+        terminal = Vte.Terminal()
+        configure(terminal)
+        self.gate.add(terminal)
+        self.gate.show_all()
+        self.assertTrue(poll(terminal.get_mapped))
+        for width in (500, 300, 450):
+            allocate(self.gate, width, 200)
+            self.assertEqual(self.gate._committed, (width, 200))
+            self.assertEqual(self.gate._answers, [])
+            self.assertIsNone(self.gate._release)
+        self.assertIsNone(terminal.get_pty())
+
     def test_waiting_terminal_holds_geometry_until_it_answers(self):
         source = self.hold()
         allocate(self.gate, 260, 130)

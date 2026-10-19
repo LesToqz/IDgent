@@ -357,7 +357,8 @@ class TerminalPanel(Gtk.Box):
                 terminal.remove_tick_callback(tick)
                 tick = None
             if paint_handler is not None:
-                paint_clock.disconnect(paint_handler)
+                if paint_clock.handler_is_connected(paint_handler):
+                    paint_clock.disconnect(paint_handler)
                 paint_handler = None
 
         def cleanup(*_args):
