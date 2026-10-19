@@ -660,3 +660,85 @@ class GraphPaneTest(unittest.TestCase):
 
 class StackedGraphPaneTest(GraphPaneTest):
     stacked = True
+
+
+class GitGraphPaneTest(GraphPaneTest):
+    def test_gitgraph_lifecycle_limits_focus_and_numbering(self):
+        class FakeView(Gtk.Box):
+            def __init__(self):
+                super().__init__()
+                self.entry = Gtk.Entry()
+                self.add(self.entry)
+                self.shutdowns = 0
+            def do_grab_focus(self):
+                self.entry.grab_focus()
+            def shutdown(self):
+                self.shutdowns += 1
+        calls, limits, closed = [], [], []
+        self.panel.gitgraph_factory = lambda: calls.append(True) or FakeView()
+        self.panel.connect('limit-reached', lambda _p: limits.append(True))
+        self.panel.connect('last-closed', lambda _p: closed.append(True))
+        with patch.object(self.panel, '_defer_spawn'):
+            self.panel.new_terminal()
+        self.panel.add_button.choose('gitgraph')
+        view = self.panel.gitgraph_views()[0]
+        pane = self.panel._panes[1]
+        self.assertIsNone(pane.terminal)
+        self.assertNotIsInstance(pane.frame, ResizeGate)
+        self.assertEqual(pane.header.text, 'Git graph')
+        self.assertEqual(pane.header.delete_button.get_tooltip_text(), 'Close git graph')
+        self.assertEqual((self.panel.gitgraph_count(), self.panel.has_gitgraph()), (1, True))
+        with patch.object(self.panel, '_defer_spawn'):
+            self.panel.new_terminal()
+        self.assertEqual(self.panel.header_labels(), ['bash1', 'Git graph', 'bash2'])
+        self.assertEqual((self.panel.pane_count(), self.panel.terminal_count()), (3, 2))
+        self.panel.add_button.choose('gitgraph')
+        self.assertTrue(poll(lambda: self.window.get_focus() is view.entry))
+        self.assertEqual(calls, [True])
+        self.assertEqual(limits, [])
+        self.assertFalse(self.panel.add_graph(Gtk.Entry()))
+        self.assertEqual(limits, [True])
+        pane.header.fullscreen_button.clicked()
+        self.assertIs(self.panel._maximized, pane)
+        self.assertFalse(self.panel._panes[0].frame.get_visible())
+        self.panel.restore()
+        self.assertTrue(self.panel._panes[0].frame.get_visible())
+        self.panel.set_font_size(14)
+        self.panel.set_cursor_blink(False)
+        self.panel.set_scrollback(3000)
+        for terminal in list(self.panel._panes):
+            if terminal.terminal is not None:
+                self.panel._close_pane(terminal)
+        self.assertEqual(closed, [])
+        self.assertEqual(self.panel.header_labels(), ['Git graph'])
+        pane.header.delete_button.clicked()
+        self.assertEqual(view.shutdowns, 1)
+        self.assertEqual(closed, [True])
+        self.assertFalse(self.panel.has_gitgraph())
+        self.panel.destroy()
+        self.assertFalse(self.panel.add_gitgraph())
+
+    def test_gitgraph_animation_releases_limit_and_shuts_down_immediately(self):
+        class FakeView(Gtk.Entry):
+            def shutdown(self):
+                events.append('shutdown')
+        events = []
+        self.panel.connect('last-closed', lambda _p: events.append('closed'))
+        self.panel.add_gitgraph(FakeView())
+        pane = self.panel._active
+        self.panel.ANIMATION_MS = 60
+        with patch.object(self.panel, '_animated', return_value=True):
+            self.panel.close_current()
+        self.assertEqual(events, ['shutdown'])
+        self.assertEqual(self.panel.gitgraph_count(), 0)
+        self.assertIn(pane, self.panel._closing)
+        self.assertTrue(self.panel.add_gitgraph(Gtk.Entry()))
+        self.assertTrue(poll(lambda: not self.panel._closing))
+        self.assertEqual(events, ['shutdown'])
+        self.panel.ANIMATION_MS = 0
+        self.panel.close_current()
+        self.assertEqual(events, ['shutdown', 'closed'])
+
+
+class StackedGitGraphPaneTest(GitGraphPaneTest):
+    stacked = True

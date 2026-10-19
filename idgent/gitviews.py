@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import threading
 import time
+import weakref
 
 import gi
 
@@ -142,7 +143,18 @@ class _WebHost(Gtk.Box):
             self._context = CommitView._shared_context
         else:
             self._context = WebKit2.WebContext.new_ephemeral()
-        self.webview = WebKit2.WebView(web_context=self._context, user_content_manager=self._manager)
+        related = next((v.webview for v in CommitView._live_views
+                        if not v._closed and v.webview is not None), None) if self._share_context else None
+        if related is not None:
+            # A context alone permits one process per tab. Related views share it;
+            # pass the software-rendering settings at construction to avoid mixed
+            # rendering policies in that process before our setters run.
+            self.webview = WebKit2.WebView(related_view=related, settings=related.get_settings(),
+                                         user_content_manager=self._manager)
+        else:
+            self.webview = WebKit2.WebView(web_context=self._context, user_content_manager=self._manager)
+        if self._share_context:
+            CommitView._live_views.add(self)
         prefs = self.webview.get_settings()
         debug = os.environ.get('IDGENT_GRAPH_DEBUG') == '1'
         prefs.set_enable_developer_extras(debug)
@@ -283,7 +295,14 @@ class _WebHost(Gtk.Box):
             if reload and uri == self._page_uri and self._inline_page is not None:
                 # load_html has no backing file for WebKit's ordinary reload.
                 decision.ignore()
-                self.webview.load_html(self._inline_page, self._page_uri)
+                self._load_changed(self.webview, self._webkit.LoadEvent.STARTED)
+                def reload_inline():
+                    source = GLib.main_current_source()
+                    self._sources.discard(source.get_id())
+                    if not self._closed:
+                        self.webview.load_html(self._inline_page, self._page_uri)
+                    return GLib.SOURCE_REMOVE
+                self._sources.add(GLib.idle_add(reload_inline))
                 return True
             if uri not in (self._page_uri, 'about:blank') or (self._ready and not reload):
                 decision.ignore()
@@ -342,8 +361,12 @@ class _WebHost(Gtk.Box):
             self.webview.stop_loading()
             self.webview.try_close()
             # A commit tab must never terminate its siblings' shared process.
-            if not self._share_context:
+            if self._share_context:
+                CommitView._live_views.discard(self)
+            if not self._share_context or not CommitView._live_views:
                 self.webview.terminate_web_process()
+                if self._share_context:
+                    CommitView._shared_context = None
             self.webview.destroy()
             self.webview = None
             self._manager = self._context = None
@@ -513,6 +536,7 @@ class GitGraphView(_WebHost):
 class CommitView(_WebHost):
     __gsignals__ = {'open-file': (GObject.SignalFlags.RUN_LAST, None, (str, int))}
     _api = 'IDCommit'
+    _live_views = weakref.WeakSet()
     _page = 'gitcommit_web/commit.html'
     _share_context = True
     _commands = frozenset(('setCommit', 'setState', 'setTheme', 'setSettings',
