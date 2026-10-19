@@ -1,0 +1,38 @@
+{
+  "ok": true,
+  "error": null,
+  "hash": "5b70b3fe9a498cb442721c3c0704a8868caa4342",
+  "short": "5b70b3f",
+  "parents": [
+    "d1d89706f66754827f2dee4bf1f60878d3408235"
+  ],
+  "subject": "Record an empty milestone",
+  "body": "",
+  "author": {
+    "name": "Ada Example",
+    "email": "ada@example.test",
+    "ts": 1736272800,
+    "tz": 0
+  },
+  "committer": {
+    "name": "Grace Example",
+    "email": "grace@example.test",
+    "ts": 1736272800,
+    "tz": 0
+  },
+  "refs": [
+    {
+      "name": "master",
+      "kind": "branch"
+    }
+  ],
+  "merge": false,
+  "diff_base": "d1d89706f66754827f2dee4bf1f60878d3408235",
+  "stats": {
+    "files": 0,
+    "additions": 0,
+    "deletions": 0
+  },
+  "truncated": false,
+  "files": []
+}

@@ -1,0 +1,477 @@
+{
+  "ok": true,
+  "error": null,
+  "hash": "e357decf0fddef8f07d844f3af33fc155d236d89",
+  "short": "e357dec",
+  "parents": [
+    "4871e2e5557745267c08569fd55eae723253cc9b"
+  ],
+  "subject": "Handle every kind of file change",
+  "body": "",
+  "author": {
+    "name": "Ada Example",
+    "email": "ada@example.test",
+    "ts": 1792423680,
+    "tz": 330
+  },
+  "committer": {
+    "name": "Grace Example",
+    "email": "grace@example.test",
+    "ts": 1792423680,
+    "tz": 330
+  },
+  "refs": [
+    {
+      "name": "master",
+      "kind": "branch"
+    }
+  ],
+  "merge": false,
+  "diff_base": "4871e2e5557745267c08569fd55eae723253cc9b",
+  "stats": {
+    "files": 7,
+    "additions": 86,
+    "deletions": 5
+  },
+  "truncated": true,
+  "files": [
+    {
+      "path": "crlf.txt",
+      "old_path": null,
+      "status": "modified",
+      "similarity": null,
+      "mode_change": null,
+      "binary": false,
+      "additions": 2,
+      "deletions": 2,
+      "too_large": false,
+      "language": null,
+      "hunks": [
+        {
+          "old_start": 1,
+          "old_lines": 2,
+          "new_start": 1,
+          "new_lines": 2,
+          "section": "",
+          "lines": [
+            {
+              "t": "-",
+              "o": 1,
+              "n": null,
+              "text": "old\r",
+              "k": []
+            },
+            {
+              "t": "-",
+              "o": 2,
+              "n": null,
+              "text": "last",
+              "k": []
+            },
+            {
+              "t": "\\",
+              "o": null,
+              "n": null,
+              "text": "\\ No newline at end of file",
+              "k": []
+            },
+            {
+              "t": "+",
+              "o": null,
+              "n": 1,
+              "text": "new\r",
+              "k": []
+            },
+            {
+              "t": "+",
+              "o": null,
+              "n": 2,
+              "text": "last!",
+              "k": []
+            },
+            {
+              "t": "\\",
+              "o": null,
+              "n": null,
+              "text": "\\ No newline at end of file",
+              "k": []
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "gone.py",
+      "old_path": null,
+      "status": "deleted",
+      "similarity": null,
+      "mode_change": [
+        "100644",
+        "000000"
+      ],
+      "binary": false,
+      "additions": 0,
+      "deletions": 1,
+      "too_large": false,
+      "language": "Python",
+      "hunks": [
+        {
+          "old_start": 1,
+          "old_lines": 1,
+          "new_start": 0,
+          "new_lines": 0,
+          "section": "",
+          "lines": [
+            {
+              "t": "-",
+              "o": 1,
+              "n": null,
+              "text": "print(\"farewell\")",
+              "k": [
+                [
+                  0,
+                  5,
+                  "builtin"
+                ],
+                [
+                  6,
+                  16,
+                  "string"
+                ]
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "image.dat",
+      "old_path": null,
+      "status": "modified",
+      "similarity": null,
+      "mode_change": null,
+      "binary": true,
+      "additions": 0,
+      "deletions": 0,
+      "too_large": false,
+      "language": null,
+      "hunks": []
+    },
+    {
+      "path": "large.py",
+      "old_path": null,
+      "status": "modified",
+      "similarity": null,
+      "mode_change": null,
+      "binary": false,
+      "additions": 80,
+      "deletions": 1,
+      "too_large": true,
+      "language": "Python",
+      "hunks": []
+    },
+    {
+      "path": "renamed.py",
+      "old_path": "old.py",
+      "status": "renamed",
+      "similarity": 96,
+      "mode_change": null,
+      "binary": false,
+      "additions": 1,
+      "deletions": 1,
+      "too_large": false,
+      "language": "Python",
+      "hunks": [
+        {
+          "old_start": 13,
+          "old_lines": 7,
+          "new_start": 13,
+          "new_lines": 7,
+          "section": "old_name_11 = 11",
+          "lines": [
+            {
+              "t": " ",
+              "o": 13,
+              "n": 13,
+              "text": "old_name_12 = 12",
+              "k": [
+                [
+                  0,
+                  11,
+                  "variable"
+                ],
+                [
+                  12,
+                  13,
+                  "operator"
+                ],
+                [
+                  14,
+                  16,
+                  "number"
+                ]
+              ]
+            },
+            {
+              "t": " ",
+              "o": 14,
+              "n": 14,
+              "text": "old_name_13 = 13",
+              "k": [
+                [
+                  0,
+                  11,
+                  "variable"
+                ],
+                [
+                  12,
+                  13,
+                  "operator"
+                ],
+                [
+                  14,
+                  16,
+                  "number"
+                ]
+              ]
+            },
+            {
+              "t": " ",
+              "o": 15,
+              "n": 15,
+              "text": "old_name_14 = 14",
+              "k": [
+                [
+                  0,
+                  11,
+                  "variable"
+                ],
+                [
+                  12,
+                  13,
+                  "operator"
+                ],
+                [
+                  14,
+                  16,
+                  "number"
+                ]
+              ]
+            },
+            {
+              "t": "-",
+              "o": 16,
+              "n": null,
+              "text": "old_name_15 = 15",
+              "k": [
+                [
+                  0,
+                  11,
+                  "variable"
+                ],
+                [
+                  12,
+                  13,
+                  "operator"
+                ],
+                [
+                  14,
+                  16,
+                  "number"
+                ]
+              ]
+            },
+            {
+              "t": "+",
+              "o": null,
+              "n": 16,
+              "text": "old_name_15 = 150",
+              "k": [
+                [
+                  0,
+                  11,
+                  "variable"
+                ],
+                [
+                  12,
+                  13,
+                  "operator"
+                ],
+                [
+                  14,
+                  17,
+                  "number"
+                ]
+              ]
+            },
+            {
+              "t": " ",
+              "o": 17,
+              "n": 17,
+              "text": "old_name_16 = 16",
+              "k": [
+                [
+                  0,
+                  11,
+                  "variable"
+                ],
+                [
+                  12,
+                  13,
+                  "operator"
+                ],
+                [
+                  14,
+                  16,
+                  "number"
+                ]
+              ]
+            },
+            {
+              "t": " ",
+              "o": 18,
+              "n": 18,
+              "text": "old_name_17 = 17",
+              "k": [
+                [
+                  0,
+                  11,
+                  "variable"
+                ],
+                [
+                  12,
+                  13,
+                  "operator"
+                ],
+                [
+                  14,
+                  16,
+                  "number"
+                ]
+              ]
+            },
+            {
+              "t": " ",
+              "o": 19,
+              "n": 19,
+              "text": "old_name_18 = 18",
+              "k": [
+                [
+                  0,
+                  11,
+                  "variable"
+                ],
+                [
+                  12,
+                  13,
+                  "operator"
+                ],
+                [
+                  14,
+                  16,
+                  "number"
+                ]
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "run.sh",
+      "old_path": null,
+      "status": "modified",
+      "similarity": null,
+      "mode_change": [
+        "100644",
+        "100755"
+      ],
+      "binary": false,
+      "additions": 0,
+      "deletions": 0,
+      "too_large": false,
+      "language": "Shell Script",
+      "hunks": []
+    },
+    {
+      "path": "日本語/😀 long name.py",
+      "old_path": null,
+      "status": "added",
+      "similarity": null,
+      "mode_change": [
+        "000000",
+        "100644"
+      ],
+      "binary": false,
+      "additions": 3,
+      "deletions": 0,
+      "too_large": false,
+      "language": "Python",
+      "hunks": [
+        {
+          "old_start": 0,
+          "old_lines": 0,
+          "new_start": 1,
+          "new_lines": 3,
+          "section": "",
+          "lines": [
+            {
+              "t": "+",
+              "o": null,
+              "n": 1,
+              "text": "# Unicode stays intact: 😀 café",
+              "k": [
+                [
+                  0,
+                  30,
+                  "comment"
+                ]
+              ]
+            },
+            {
+              "t": "+",
+              "o": null,
+              "n": 2,
+              "text": "value = \"long line long line long line long line long line long line long line long line long line long line long line long line long line long line long line long line long line long line long line long line long line long line long line long line long line long line long line long line long line long line long line long line long line long line long line long line long line long line long line long line long line long line long line long line long line \"",
+              "k": [
+                [
+                  0,
+                  5,
+                  "variable"
+                ],
+                [
+                  6,
+                  7,
+                  "operator"
+                ],
+                [
+                  8,
+                  460,
+                  "string"
+                ]
+              ]
+            },
+            {
+              "t": "+",
+              "o": null,
+              "n": 3,
+              "text": "\tprint(value)",
+              "k": [
+                [
+                  1,
+                  6,
+                  "builtin"
+                ],
+                [
+                  7,
+                  12,
+                  "variable"
+                ]
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

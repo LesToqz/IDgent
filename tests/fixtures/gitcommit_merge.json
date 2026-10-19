@@ -1,0 +1,102 @@
+{
+  "ok": true,
+  "error": null,
+  "hash": "d1d89706f66754827f2dee4bf1f60878d3408235",
+  "short": "d1d8970",
+  "parents": [
+    "d8891fdc15eeeae5adae5a1d00dfde0ae4725ff8",
+    "b5e5827e3bbf8a20c23a853748b31c540b5d3d4b"
+  ],
+  "subject": "Merge branch 'feature/context'",
+  "body": "",
+  "author": {
+    "name": "Ada Example",
+    "email": "ada@example.test",
+    "ts": 1792423680,
+    "tz": 330
+  },
+  "committer": {
+    "name": "Grace Example",
+    "email": "grace@example.test",
+    "ts": 1792423680,
+    "tz": 330
+  },
+  "refs": [
+    {
+      "name": "master",
+      "kind": "branch"
+    }
+  ],
+  "merge": true,
+  "diff_base": "d8891fdc15eeeae5adae5a1d00dfde0ae4725ff8",
+  "stats": {
+    "files": 1,
+    "additions": 2,
+    "deletions": 0
+  },
+  "truncated": false,
+  "files": [
+    {
+      "path": "src/feature.py",
+      "old_path": null,
+      "status": "added",
+      "similarity": null,
+      "mode_change": [
+        "000000",
+        "100644"
+      ],
+      "binary": false,
+      "additions": 2,
+      "deletions": 0,
+      "too_large": false,
+      "language": "Python",
+      "hunks": [
+        {
+          "old_start": 0,
+          "old_lines": 0,
+          "new_start": 1,
+          "new_lines": 2,
+          "section": "",
+          "lines": [
+            {
+              "t": "+",
+              "o": null,
+              "n": 1,
+              "text": "def expand_context():",
+              "k": [
+                [
+                  0,
+                  3,
+                  "keyword"
+                ],
+                [
+                  4,
+                  18,
+                  "function"
+                ]
+              ]
+            },
+            {
+              "t": "+",
+              "o": null,
+              "n": 2,
+              "text": "    return True",
+              "k": [
+                [
+                  4,
+                  10,
+                  "control"
+                ],
+                [
+                  11,
+                  15,
+                  "constant"
+                ]
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

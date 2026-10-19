@@ -1,0 +1,462 @@
+{
+  "ok": true,
+  "error": null,
+  "hash": "36e599656757205b7b506aa5da4f89f62354ea7b",
+  "short": "36e5996",
+  "parents": [
+    "99720581caed31bbae6b16d297725d3b01367f25"
+  ],
+  "subject": "Keep context available around distant changes",
+  "body": "Show the surrounding code without leaving the commit.\n\nKeep the initial review focused.",
+  "author": {
+    "name": "Ada Example",
+    "email": "ada@example.test",
+    "ts": 1792302600,
+    "tz": 330
+  },
+  "committer": {
+    "name": "Grace Example",
+    "email": "grace@example.test",
+    "ts": 1792302600,
+    "tz": 330
+  },
+  "refs": [
+    {
+      "name": "master",
+      "kind": "branch"
+    }
+  ],
+  "merge": false,
+  "diff_base": "99720581caed31bbae6b16d297725d3b01367f25",
+  "stats": {
+    "files": 1,
+    "additions": 3,
+    "deletions": 2
+  },
+  "truncated": false,
+  "files": [
+    {
+      "path": "src/context.py",
+      "old_path": null,
+      "status": "modified",
+      "similarity": null,
+      "mode_change": null,
+      "binary": false,
+      "additions": 3,
+      "deletions": 2,
+      "too_large": false,
+      "language": "Python",
+      "hunks": [
+        {
+          "old_start": 37,
+          "old_lines": 7,
+          "new_start": 37,
+          "new_lines": 8,
+          "section": "value_036 = 36",
+          "lines": [
+            {
+              "t": " ",
+              "o": 37,
+              "n": 37,
+              "text": "value_037 = 37",
+              "k": [
+                [
+                  0,
+                  9,
+                  "variable"
+                ],
+                [
+                  10,
+                  11,
+                  "operator"
+                ],
+                [
+                  12,
+                  14,
+                  "number"
+                ]
+              ]
+            },
+            {
+              "t": " ",
+              "o": 38,
+              "n": 38,
+              "text": "value_038 = 38",
+              "k": [
+                [
+                  0,
+                  9,
+                  "variable"
+                ],
+                [
+                  10,
+                  11,
+                  "operator"
+                ],
+                [
+                  12,
+                  14,
+                  "number"
+                ]
+              ]
+            },
+            {
+              "t": " ",
+              "o": 39,
+              "n": 39,
+              "text": "value_039 = 39",
+              "k": [
+                [
+                  0,
+                  9,
+                  "variable"
+                ],
+                [
+                  10,
+                  11,
+                  "operator"
+                ],
+                [
+                  12,
+                  14,
+                  "number"
+                ]
+              ]
+            },
+            {
+              "t": "-",
+              "o": 40,
+              "n": null,
+              "text": "value_040 = 40",
+              "k": [
+                [
+                  0,
+                  9,
+                  "variable"
+                ],
+                [
+                  10,
+                  11,
+                  "operator"
+                ],
+                [
+                  12,
+                  14,
+                  "number"
+                ]
+              ]
+            },
+            {
+              "t": "+",
+              "o": null,
+              "n": 40,
+              "text": "value_040 = 400",
+              "k": [
+                [
+                  0,
+                  9,
+                  "variable"
+                ],
+                [
+                  10,
+                  11,
+                  "operator"
+                ],
+                [
+                  12,
+                  15,
+                  "number"
+                ]
+              ]
+            },
+            {
+              "t": "+",
+              "o": null,
+              "n": 41,
+              "text": "inserted_value = 41",
+              "k": [
+                [
+                  0,
+                  14,
+                  "variable"
+                ],
+                [
+                  15,
+                  16,
+                  "operator"
+                ],
+                [
+                  17,
+                  19,
+                  "number"
+                ]
+              ]
+            },
+            {
+              "t": " ",
+              "o": 41,
+              "n": 42,
+              "text": "value_041 = 41",
+              "k": [
+                [
+                  0,
+                  9,
+                  "variable"
+                ],
+                [
+                  10,
+                  11,
+                  "operator"
+                ],
+                [
+                  12,
+                  14,
+                  "number"
+                ]
+              ]
+            },
+            {
+              "t": " ",
+              "o": 42,
+              "n": 43,
+              "text": "value_042 = 42",
+              "k": [
+                [
+                  0,
+                  9,
+                  "variable"
+                ],
+                [
+                  10,
+                  11,
+                  "operator"
+                ],
+                [
+                  12,
+                  14,
+                  "number"
+                ]
+              ]
+            },
+            {
+              "t": " ",
+              "o": 43,
+              "n": 44,
+              "text": "value_043 = 43",
+              "k": [
+                [
+                  0,
+                  9,
+                  "variable"
+                ],
+                [
+                  10,
+                  11,
+                  "operator"
+                ],
+                [
+                  12,
+                  14,
+                  "number"
+                ]
+              ]
+            }
+          ]
+        },
+        {
+          "old_start": 177,
+          "old_lines": 7,
+          "new_start": 178,
+          "new_lines": 7,
+          "section": "value_176 = 176",
+          "lines": [
+            {
+              "t": " ",
+              "o": 177,
+              "n": 178,
+              "text": "value_177 = 177",
+              "k": [
+                [
+                  0,
+                  9,
+                  "variable"
+                ],
+                [
+                  10,
+                  11,
+                  "operator"
+                ],
+                [
+                  12,
+                  15,
+                  "number"
+                ]
+              ]
+            },
+            {
+              "t": " ",
+              "o": 178,
+              "n": 179,
+              "text": "value_178 = 178",
+              "k": [
+                [
+                  0,
+                  9,
+                  "variable"
+                ],
+                [
+                  10,
+                  11,
+                  "operator"
+                ],
+                [
+                  12,
+                  15,
+                  "number"
+                ]
+              ]
+            },
+            {
+              "t": " ",
+              "o": 179,
+              "n": 180,
+              "text": "value_179 = 179",
+              "k": [
+                [
+                  0,
+                  9,
+                  "variable"
+                ],
+                [
+                  10,
+                  11,
+                  "operator"
+                ],
+                [
+                  12,
+                  15,
+                  "number"
+                ]
+              ]
+            },
+            {
+              "t": "-",
+              "o": 180,
+              "n": null,
+              "text": "value_180 = 180",
+              "k": [
+                [
+                  0,
+                  9,
+                  "variable"
+                ],
+                [
+                  10,
+                  11,
+                  "operator"
+                ],
+                [
+                  12,
+                  15,
+                  "number"
+                ]
+              ]
+            },
+            {
+              "t": "+",
+              "o": null,
+              "n": 181,
+              "text": "value_180 = 1800",
+              "k": [
+                [
+                  0,
+                  9,
+                  "variable"
+                ],
+                [
+                  10,
+                  11,
+                  "operator"
+                ],
+                [
+                  12,
+                  16,
+                  "number"
+                ]
+              ]
+            },
+            {
+              "t": " ",
+              "o": 181,
+              "n": 182,
+              "text": "value_181 = 181",
+              "k": [
+                [
+                  0,
+                  9,
+                  "variable"
+                ],
+                [
+                  10,
+                  11,
+                  "operator"
+                ],
+                [
+                  12,
+                  15,
+                  "number"
+                ]
+              ]
+            },
+            {
+              "t": " ",
+              "o": 182,
+              "n": 183,
+              "text": "value_182 = 182",
+              "k": [
+                [
+                  0,
+                  9,
+                  "variable"
+                ],
+                [
+                  10,
+                  11,
+                  "operator"
+                ],
+                [
+                  12,
+                  15,
+                  "number"
+                ]
+              ]
+            },
+            {
+              "t": " ",
+              "o": 183,
+              "n": 184,
+              "text": "value_183 = 183",
+              "k": [
+                [
+                  0,
+                  9,
+                  "variable"
+                ],
+                [
+                  10,
+                  11,
+                  "operator"
+                ],
+                [
+                  12,
+                  15,
+                  "number"
+                ]
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
