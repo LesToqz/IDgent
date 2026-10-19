@@ -145,7 +145,65 @@ class _StatusBar(Gtk.Box):
         return '  |  '.join(label.get_text() for label in self.items)
 
 
-class _EditorTab:
+class _TabHeader:
+    """Shared file/view tab chrome; content and lifetime belong to the panel."""
+    def _build_header(self, close, close_tooltip='Close tab', icon_name=None):
+        self._close = close
+        self.label = Gtk.Label(xalign=0)
+        self.label.set_ellipsize(Pango.EllipsizeMode.END)
+        self.label.set_max_width_chars(32)
+        self.header = Gtk.EventBox()
+        self.header.set_visible_window(False)
+        self.header.add_events(Gdk.EventMask.ENTER_NOTIFY_MASK | Gdk.EventMask.LEAVE_NOTIFY_MASK)
+        self.header.connect('enter-notify-event', lambda *_: self._hover_header(True))
+        self.header.connect('leave-notify-event', lambda *_: self._hover_header(False))
+        self.header.connect('button-press-event', self._header_press)
+        self.header.connect('unmap', lambda *_: self.header.set_margin_start(0))
+        self.header_inner = Gtk.Box(spacing=2)
+        self.header_inner.get_style_context().add_class('idgent-tab-inner')
+        self.header_inner.set_margin_top(3)
+        self.header_inner.set_margin_bottom(3)
+        self.header.add(self.header_inner)
+        if icon_name and Gtk.IconTheme.get_default().has_icon(icon_name):
+            image = Gtk.Image.new_from_icon_name(icon_name, Gtk.IconSize.MENU)
+            image.set_pixel_size(14)
+            self.header_inner.pack_start(image, False, False, 0)
+        self.header_inner.pack_start(self.label, True, True, 0)
+        self.close = Gtk.Button()
+        icon = Gtk.Image.new_from_icon_name('window-close-symbolic', Gtk.IconSize.MENU)
+        icon.set_pixel_size(14)
+        self.close.add(icon)
+        self.close.get_style_context().add_class('idgent-tab-close')
+        self.close.set_relief(Gtk.ReliefStyle.NONE)
+        self.close.set_tooltip_text(close_tooltip)
+        self.close.connect('clicked', lambda *_: self._close())
+        self.header_inner.pack_start(self.close, False, False, 0)
+        self.divider = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL)
+        self.divider.get_style_context().add_class('idgent-tab-divider')
+        self.divider.set_valign(Gtk.Align.CENTER)
+        self.header_inner.pack_end(self.divider, False, False, 0)
+
+    def _hover_header(self, hovered):
+        context = self.header_inner.get_style_context()
+        (context.add_class if hovered else context.remove_class)('hover')
+        return False
+
+    def _header_press(self, _widget, event):
+        if event.button == 2:
+            self._close()
+            return True
+        return False
+
+
+class _ViewTab(_TabHeader):
+    def __init__(self, panel, key, title, widget, tooltip, icon_name):
+        self.key, self.page = key, widget
+        self._build_header(lambda: panel.close_view_tab(key), icon_name=icon_name)
+        self.label.set_text(title)
+        self.header.set_tooltip_text(tooltip)
+
+
+class _EditorTab(_TabHeader):
     def __init__(self, panel: EditorPanel, path: str, text: str, ending: str, mtime: int):
         self.panel, self.path, self.ending, self.mtime = panel, path, ending, mtime
         self.deleted = False
@@ -183,35 +241,7 @@ class _EditorTab:
         self.page.add(self.md_stack)
         self.page.connect('destroy', self._destroy_markdown)
         self._sync_markdown()
-        self.label = Gtk.Label(xalign=0)
-        self.label.set_ellipsize(Pango.EllipsizeMode.END)
-        self.label.set_max_width_chars(32)
-        self.header = Gtk.EventBox()
-        self.header.set_visible_window(False)
-        self.header.add_events(Gdk.EventMask.ENTER_NOTIFY_MASK | Gdk.EventMask.LEAVE_NOTIFY_MASK)
-        self.header.connect('enter-notify-event', lambda *_: self._hover_header(True))
-        self.header.connect('leave-notify-event', lambda *_: self._hover_header(False))
-        self.header.connect('button-press-event', self._header_press)
-        self.header.connect('unmap', lambda *_: self.header.set_margin_start(0))
-        self.header_inner = Gtk.Box(spacing=2)
-        self.header_inner.get_style_context().add_class('idgent-tab-inner')
-        self.header_inner.set_margin_top(3)
-        self.header_inner.set_margin_bottom(3)
-        self.header.add(self.header_inner)
-        self.header_inner.pack_start(self.label, True, True, 0)
-        self.close = Gtk.Button()
-        icon = Gtk.Image.new_from_icon_name('window-close-symbolic', Gtk.IconSize.MENU)
-        icon.set_pixel_size(14)
-        self.close.add(icon)
-        self.close.get_style_context().add_class('idgent-tab-close')
-        self.close.set_relief(Gtk.ReliefStyle.NONE)
-        self.close.set_tooltip_text('Close file')
-        self.close.connect('clicked', lambda *_: panel._close_tab(self))
-        self.header_inner.pack_start(self.close, False, False, 0)
-        self.divider = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL)
-        self.divider.get_style_context().add_class('idgent-tab-divider')
-        self.divider.set_valign(Gtk.Align.CENTER)
-        self.header_inner.pack_end(self.divider, False, False, 0)
+        self._build_header(lambda: panel._close_tab(self), 'Close file')
         self.history: list[tuple[str, int]] = [(text, 0)]
         self.history_index = 0
         self.action_depth = 0
@@ -223,17 +253,6 @@ class _EditorTab:
         self.buffer.connect('mark-set', lambda *_: panel._update_status())
         self.view.connect('key-press-event', panel._key_press, self)
         self.update_title()
-
-    def _hover_header(self, hovered):
-        context = self.header_inner.get_style_context()
-        (context.add_class if hovered else context.remove_class)('hover')
-        return False
-
-    def _header_press(self, _widget, event):
-        if event.button == 2:
-            self.panel._close_tab(self)
-            return True
-        return False
 
     def set_font_size(self, size: int) -> None:
         self.chrome.set_font_size(size)
@@ -431,6 +450,7 @@ class EditorPanel(Gtk.Box):
     __gsignals__ = {
         # Absolute path of the active tab, '' when none is open.
         'current-file-changed': (GObject.SignalFlags.RUN_LAST, None, (str,)),
+        'view-tab-closed': (GObject.SignalFlags.RUN_LAST, None, (str,)),
     }
 
     def __init__(self):
@@ -444,12 +464,15 @@ class EditorPanel(Gtk.Box):
         self.auto_pair = self.md_default_preview = self.md_readable_width = False
         self._announced_path = ''
         self.tabs: list[_EditorTab] = []
+        self._view_tabs: dict[str, _ViewTab] = {}
+        self.connect('destroy', self._destroy_view_tabs)
+        self.connect('key-press-event', self._view_key_press)
         self.stack = Gtk.Stack()
         self.placeholder = Gtk.Label(label='IDgent  -  open a file from the explorer')
         self.placeholder.get_style_context().add_class('idgent-empty')
         self.stack.add_named(self.placeholder, 'empty')
         self.notebook = Gtk.Notebook(scrollable=True)
-        self.notebook.connect_after('switch-page', lambda *_: (self._update_tabs(), self._update_status(), self._announce_current()))
+        self.notebook.connect_after('switch-page', self._switched_page)
         self.notebook.connect('page-reordered', lambda *_: self._update_tabs())
         self.notebook.connect('size-allocate', lambda *_: self._size_tabs())
         self.stack.add_named(self.notebook, 'editor')
@@ -479,14 +502,101 @@ class EditorPanel(Gtk.Box):
         self.stack.set_visible_child_name('empty')
         self._update_status()
 
+    def _all_tabs(self):
+        return [*self.tabs, *self._view_tabs.values()]
+
+    def _switched_page(self, *_):
+        self._update_tabs()
+        self._update_status()
+        self._announce_current()
+        if self.current_view_key() is not None:
+            self.search_bar.set_search_mode(False)
+            self.focus_current()
+
+    def add_view_tab(self, key: str, title: str, widget: Gtk.Widget,
+                     tooltip: str | None = None, *, icon_name: str | None = None) -> bool:
+        """Append and select arbitrary content, or select an existing key."""
+        if key in self._view_tabs:
+            self.notebook.set_current_page(self.notebook.page_num(self._view_tabs[key].page))
+            self.focus_current()
+            return False
+        tab = _ViewTab(self, key, title, widget, tooltip, icon_name)
+        self._view_tabs[key] = tab
+        self.notebook.append_page(tab.page, tab.header)
+        self.notebook.set_tab_reorderable(tab.page, True)
+        tab.page.show_all()
+        tab.header.show_all()
+        self.stack.set_visible_child_name('editor')
+        self.notebook.set_current_page(self.notebook.page_num(tab.page))
+        self._switched_page()
+        return True
+
+    def has_view_tab(self, key) -> bool:
+        return key in self._view_tabs
+
+    def view_tab_widget(self, key) -> Gtk.Widget | None:
+        tab = self._view_tabs.get(key)
+        return tab.page if tab else None
+
+    def set_view_tab_title(self, key, title, tooltip=None) -> None:
+        tab = self._view_tabs.get(key)
+        if tab:
+            tab.label.set_text(title)
+            tab.header.set_tooltip_text(tooltip)
+
+    def current_view_key(self) -> str | None:
+        page = self.notebook.get_nth_page(self.notebook.get_current_page())
+        return next((key for key, tab in self._view_tabs.items() if tab.page == page), None)
+
+    def close_view_tab(self, key) -> bool:
+        tab = self._view_tabs.pop(key, None)
+        if tab is None:
+            return False
+        shutdown = getattr(tab.page, 'shutdown', None)
+        if callable(shutdown):
+            shutdown()
+        self._remove_page(tab)
+        self.emit('view-tab-closed', key)
+        return True
+
+    def _destroy_view_tabs(self, *_):
+        # destroy runs before GTK recursively destroys notebook children.
+        for key in list(self._view_tabs):
+            self.close_view_tab(key)
+
+    def _view_key_press(self, _widget, event):
+        if self.current_view_key() is None:
+            return False
+        return self._tab_shortcut(event)
+
+    def _tab_shortcut(self, event):
+        if not event.state & Gdk.ModifierType.CONTROL_MASK:
+            return False
+        key = event.keyval
+        if key in (Gdk.KEY_w, Gdk.KEY_W):
+            view_key = self.current_view_key()
+            if view_key is not None:
+                self.close_view_tab(view_key)
+            elif self._current():
+                self._close_tab(self._current())
+        elif key in (Gdk.KEY_Tab, Gdk.KEY_ISO_Left_Tab, Gdk.KEY_Page_Down, Gdk.KEY_Page_Up):
+            count = self.notebook.get_n_pages()
+            if count:
+                backwards = event.state & Gdk.ModifierType.SHIFT_MASK or key in (Gdk.KEY_ISO_Left_Tab, Gdk.KEY_Page_Up)
+                self.notebook.set_current_page((self.notebook.get_current_page() + (-1 if backwards else 1)) % count)
+                self.focus_current()
+        else:
+            return False
+        return True
+
     def _size_tabs(self):
-        width = max(120, min(200, (self.notebook.get_allocated_width() - 16) // max(1, len(self.tabs))))
-        for tab in self.tabs:
+        width = max(120, min(200, (self.notebook.get_allocated_width() - 16) // max(1, self.notebook.get_n_pages())))
+        for tab in self._all_tabs():
             tab.header.set_size_request(width - 8, 32)
 
     def _update_tabs(self):
         current = self.notebook.get_current_page()
-        for tab in self.tabs:
+        for tab in self._all_tabs():
             index = self.notebook.page_num(tab.page)
             context = tab.header_inner.get_style_context()
             (context.add_class if index == current else context.remove_class)('active')
@@ -576,6 +686,8 @@ class EditorPanel(Gtk.Box):
         return tab.md_mode if tab and tab.md_toggle else None
 
     def zoom(self, step: int) -> None:
+        if self.current_view_key() is not None:
+            return
         self.set_font_size(self.font_size + step)
 
     def _scroll(self, _view: Gtk.TextView, event: Gdk.EventScroll) -> bool:
@@ -623,7 +735,19 @@ class EditorPanel(Gtk.Box):
         tab = self._current()
         if tab:
             (tab.md_preview_view if tab.md_mode == 'preview' else tab.view).grab_focus()
-        return tab is not None
+            return True
+        page = self.view_tab_widget(self.current_view_key())
+        if page is None:
+            return False
+        top = _window(self)
+        focused = top.get_focus() if top else None
+        if focused is page or (focused is not None and focused.is_ancestor(page)):
+            return True
+        if page.get_can_focus():
+            page.grab_focus()
+        else:
+            page.child_focus(Gtk.DirectionType.TAB_FORWARD)
+        return True
 
     def open_file_at(self, path: str, line: int, column: int = 0, length: int = 0) -> None:
         """Open or focus a file and select [column, column+length) on a zero-based line."""
@@ -742,13 +866,18 @@ class EditorPanel(Gtk.Box):
             answer = _ask(self, f'Save changes to {os.path.basename(tab.path)}?', ('save', 'discard', 'cancel'))
             if answer == 'cancel' or (answer == 'save' and not self._save(tab)):
                 return False
-        index = self.notebook.page_num(tab.page)
-        successor = next((other for other in self.tabs if self.notebook.page_num(other.page) == index + 1), None)
-        gap = tab.header.get_allocated_width() + 8
         self.tabs.remove(tab)
         tab._destroy_markdown()
         tab.highlighter.destroy()
-        self.notebook.remove_page(self.notebook.page_num(tab.page))
+        self._remove_page(tab)
+        return True
+
+    def _remove_page(self, tab):
+        index = self.notebook.page_num(tab.page)
+        successor = next((other for other in self._all_tabs()
+                          if self.notebook.page_num(other.page) == index + 1), None)
+        gap = tab.header.get_allocated_width() + 8
+        self.notebook.remove_page(index)
         tab.page.destroy()
         self._update_tabs()
         if successor and successor.header.get_mapped():
@@ -758,7 +887,7 @@ class EditorPanel(Gtk.Box):
                            lambda progress: successor.header.set_margin_start(round(gap * (1 - progress))),
                            easing='reflow', key='tab-reflow',
                            on_done=lambda: successor.header.set_margin_start(0))
-        if not self.tabs:
+        if not self.notebook.get_n_pages():
             self.stack.set_visible_child_name('empty')
             self.search_bar.set_search_mode(False)
         self._update_status()
@@ -769,6 +898,9 @@ class EditorPanel(Gtk.Box):
         if not hasattr(self, 'status'):
             return
         tab = self._current()
+        if self.current_view_key() is not None:
+            self.status.set_text(' | | | ')
+            return
         cursor = tab.buffer.get_iter_at_mark(tab.buffer.get_insert()) if tab else None
         self.status.set_text(f'Ln {cursor.get_line() + 1 if cursor else 1}, Col '
                              f'{cursor.get_line_offset() + 1 if cursor else 1}  |  UTF-8  |  '
@@ -807,6 +939,8 @@ class EditorPanel(Gtk.Box):
             buffer.end_user_action()
 
     def _key_press(self, _view: Gtk.TextView, event: Gdk.EventKey, tab: _EditorTab) -> bool:
+        if self._tab_shortcut(event):
+            return True
         key = event.keyval
         ctrl = bool(event.state & Gdk.ModifierType.CONTROL_MASK)
         shift = bool(event.state & Gdk.ModifierType.SHIFT_MASK)
@@ -817,15 +951,10 @@ class EditorPanel(Gtk.Box):
                 if tab.md_mode == 'preview':
                     return True
                 tab.undo(shift)
-            elif key in (Gdk.KEY_w, Gdk.KEY_W):
-                self._close_tab(tab)
             elif key in (Gdk.KEY_f, Gdk.KEY_F) and not shift:
                 tab.set_markdown_mode('source')
                 self.search_bar.set_search_mode(True)
                 self.search_entry.grab_focus()
-            elif key in (Gdk.KEY_Tab, Gdk.KEY_ISO_Left_Tab, Gdk.KEY_Page_Down, Gdk.KEY_Page_Up):
-                backwards = shift or key in (Gdk.KEY_ISO_Left_Tab, Gdk.KEY_Page_Up)
-                self.notebook.set_current_page((self.notebook.get_current_page() + (-1 if backwards else 1)) % len(self.tabs))
             elif key == Gdk.KEY_slash:
                 if tab.md_mode == 'preview':
                     return True
