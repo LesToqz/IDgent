@@ -140,8 +140,9 @@ class WindowLayoutTests(unittest.TestCase):
         self.assertFalse(self.window.terminal_bottom.stacked)
         self.assertEqual(self.window.terminal_right._body.get_orientation(), Gtk.Orientation.VERTICAL)
         self.assertEqual(self.window.terminal_bottom._body.get_orientation(), Gtk.Orientation.HORIZONTAL)
-        self.assertEqual(self.window.get_child().get_children(), [self.window.sidebar])
-        self.assertEqual(self.window.sidebar.get_position(), 260)
+        self.assertIs(self.window.get_child(), self.window.overlay)
+        self.assertEqual(self.window.overlay.get_child().get_children(), [self.window.sidebar])
+        self.assertEqual(self.window.sidebar.get_position(), 300)
 
     def settle_layout(self) -> None:
         deadline = time.monotonic() + .2

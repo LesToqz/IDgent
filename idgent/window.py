@@ -232,8 +232,10 @@ class MainWindow(Gtk.ApplicationWindow):
     def open_quick_switcher(self) -> None:
         """Show the file switcher (recent files first on an empty query)."""
         if self._switcher is None:
-            self._switcher = QuickSwitcher(self._project_files, root=self.root,
-                                           recent_provider=self._switcher_recent)
+            # Every file already opens in its own tab: no "open in new tab" variant.
+            self._switcher = QuickSwitcher(
+                self._project_files, root=self.root, recent_provider=self._switcher_recent,
+                instructions=(("↑↓", "to navigate"), ("↵", "to open"), ("esc", "to dismiss")))
             self._switcher.connect("chosen",
                                    lambda _, item, _mods: self.editor.open_file(item.data))
         self._switcher.root = self.root
