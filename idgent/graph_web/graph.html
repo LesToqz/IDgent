@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Graph</title>
+<link rel="stylesheet" href="graph.css">
+</head>
+<body>
+<div id="view">
+  <canvas id="graph" tabindex="0" aria-label="Graph of linked files"></canvas>
+  <div id="status" class="status" role="status">Building graph…</div>
+  <div id="notice" class="notice" hidden></div>
+  <div id="controls" class="gc is-close"></div>
+  <div id="menu" class="menu" role="menu" hidden></div>
+  <div id="popup" class="swatches" hidden></div>
+  <div id="tip" class="tip" role="tooltip" hidden></div>
+</div>
+<script src="graph_core.js"></script>
+<script src="graph.js"></script>
+</body>
+</html>
