@@ -18,6 +18,7 @@ class Link:
     block: str | None = None
     line: int = 1
     start: int = 0
+    syntax: str = 'wiki'
 
 
 @dataclass(frozen=True)
@@ -39,7 +40,7 @@ def parse_frontmatter(text):
     opening = re.match(r'\A\ufeff?---[^\S\n]*\r?\n', text)
     if not opening:
         return {}, 0
-    closing = re.search(r'(?m)^(?:---|\.\.\.)\s*$', text[opening.end():])
+    closing = re.search(r'(?m)^(?:---|\.\.\.)[^\S\r\n]*\r?$', text[opening.end():])
     if not closing:
         return {}, 0
     end = opening.end() + closing.end()
@@ -118,7 +119,8 @@ def extract_links(text):
         target, heading, block = _target(raw)
         if target:
             result.append(Link(target, kind, alias, heading, block,
-                               text.count('\n', 0, match.start()) + 1, match.start()))
+                               text.count('\n', 0, match.start()) + 1, match.start(),
+                               'wiki' if match[2] is not None else 'md'))
     return result
 
 
@@ -168,7 +170,7 @@ def extract_code_links(path, text):
     elif ext in {'.css', '.scss', '.sass'}:
         patterns = [r'''@import\s+["']([^"']+)["']|url\(\s*["']?([^\s)'";]+)''']
     elif ext in {'.html', '.htm'}:
-        patterns = [r'''\b(?:src|href)\s*=\s*["']([^"']+)["']''']
+        patterns = [r'''\b(?:src|href)\s*=\s*(?:["']([^"']+)["']|([^\s>]+))''']
     for pattern in patterns:
         for match in re.finditer(pattern, text, re.I):
             spec = next(g for g in match.groups() if g is not None)

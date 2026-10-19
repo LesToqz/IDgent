@@ -28,6 +28,7 @@ SEMANTICS = {
     'duplicate_order': ('same_folder', 'shortest', 'lexicographic'),
     'alias_fallback': True,                 # provisional: filenames before aliases
     'attachments_require_reference': True,
+    'hide_missing_attachments_with_attachments': True, # provisional: infer from suffix
     'query_primary_kinds': ('note', 'code'), # provisional: code behaves like notes
     'tags_from_kinds': ('note',),
     'tag_prefix_boundary': '/',
@@ -143,6 +144,7 @@ def match_query(node_or_file, query):
         fieldname, sep, value = token.partition(':')
         if not sep or fieldname.lower() not in {'path', 'file', 'tag', 'content'}:
             fieldname, value = '', token
+        fieldname = fieldname.lower()
         value = value.strip('"')
         if fieldname == 'tag':
             wanted = value.lstrip('#').casefold()
@@ -199,6 +201,7 @@ class GraphIndex:
         absolute = os.path.join(self.root, rel)
         if os.path.islink(absolute) or os.path.realpath(absolute) != absolute:
             return None
+        binary = False
         if rel in self._overrides:
             text = self._overrides[rel]
         else:
@@ -212,18 +215,15 @@ class GraphIndex:
             if len(data) > MAX_FILE_SIZE:
                 return None
             try:
-                text = data.decode('utf-8') if b'\0' not in data else ''
+                binary = b'\0' in data
+                text = data.decode('utf-8') if not binary else ''
             except UnicodeError:
-                text = ''
+                binary, text = True, ''
         ext = pp.splitext(rel)[1].lower()
         kind = 'note' if ext in SEMANTICS['note_extensions'] else 'code' if ext in SEMANTICS['code_extensions'] else 'attachment'
         # Binary files remain resolvable attachments, but never become text sources.
-        if not text and kind != 'attachment':
-            try:
-                if os.path.getsize(absolute):
-                    return None
-            except OSError:
-                pass
+        if binary and kind != 'attachment':
+            return None
         props = parse_frontmatter(text)[0] if kind == 'note' else {}
         aliases = props.get('aliases', props.get('alias', []))
         if isinstance(aliases, str):
@@ -328,7 +328,7 @@ class GraphIndex:
             bases = {'source': folder, 'root': ''}
             return next((found for b in SEMANTICS['markdown_path_order'] if (found := self._exact(pp.join(bases[b], target.lstrip('/'))))), None)
         if '/' in target:
-            candidates = [target] if pp.splitext(target)[1] else [target + '.md']
+            candidates = [target] if pp.splitext(target)[1] else [target + SEMANTICS['note_extensions'][0]]
             bases = {'source': folder, 'root': ''}
             return next((found for b in SEMANTICS['wiki_path_order'] for c in candidates if (found := self._exact(pp.join(bases[b], c)))), None)
         candidates = set()
@@ -369,7 +369,8 @@ class GraphIndex:
                 continue
             for ref in item.refs:
                 code = item.kind == 'code'
-                target = self.resolve(path, ref.spec if code else ref.target, ref.kind)
+                target = self.resolve(path, ref.spec if code else ref.target,
+                                      ref.kind if code or ref.syntax == 'wiki' else 'md')
                 if len(self._last_candidates) > 1:
                     ambiguous.append({'source': path, 'target': ref.target, 'candidates': list(self._last_candidates), 'resolved': target})
                 if target:
@@ -380,6 +381,12 @@ class GraphIndex:
                 elif code or options.existing_only:
                     continue
                 else:
+                    suffix = pp.splitext(ref.target)[1].lower()
+                    if (SEMANTICS['hide_missing_attachments_with_attachments']
+                            and not options.show_attachments and suffix
+                            and suffix not in SEMANTICS['note_extensions']
+                            and suffix not in SEMANTICS['code_extensions']):
+                        continue
                     target = SEMANTICS['unresolved_prefix'] + ref.target
                     nodes.setdefault(target, Node(target, ref.target, 'unresolved'))
                 edge(path, target, 'import' if code else 'embed' if ref.kind == 'embed' else 'link', not target.startswith(SEMANTICS['unresolved_prefix']))
