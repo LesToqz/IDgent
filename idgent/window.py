@@ -254,14 +254,17 @@ class MainWindow(Gtk.ApplicationWindow):
     def _current_file_changed(self, _editor: EditorPanel, path: str) -> None:
         self.explorer.set_current_file(path or None)
         self.explorer.refresh_git()
+        for tab in self.editor.tabs:
+            if not getattr(tab, '_explorer_git_connected', False):
+                tab._explorer_git_connected = True
+                tab.buffer.connect('modified-changed', lambda buffer:
+                                   self.explorer.refresh_git() if not buffer.get_modified() else None)
         for view in self._graph_views():
             view.set_active_file(path or None)
         for tab in self.editor.tabs:
             if not getattr(tab, '_graph_connected', False):
                 tab._graph_connected = True
                 self._graph_tabs[tab.page] = tab
-                tab.buffer.connect('modified-changed', lambda buffer:
-                                   self.explorer.refresh_git() if not buffer.get_modified() else None)
                 tab.buffer.connect('changed', lambda _buffer, tab=tab: self._graph_text_changed(tab))
                 tab.buffer.connect('modified-changed', lambda buffer, tab=tab:
                                    self._graph_saved(tab) if not buffer.get_modified() else None)

@@ -2,6 +2,7 @@
 import os
 from pathlib import Path
 import subprocess
+import time
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -140,6 +141,37 @@ class GitStatusTests(RepoTest):
         self.write('.gitignore', '*.ignored\n')
         path = self.write('file.ignored')
         self.assertNotIn(path, self.snapshot().files)
+
+    def test_partial_porcelain_record_is_discarded(self):
+        result = parse_porcelain(b'?? complete\0?? unfinished', str(self.root), str(self.root))
+        self.assertEqual(result.files, {str(self.root / 'complete'): Status('new', 'U')})
+
+    def test_real_subprocess_timeout_and_output_bound(self):
+        with tempfile.TemporaryDirectory() as binaries:
+            executable = Path(binaries) / 'git'
+            executable.write_text('#!/usr/bin/python3\nimport time\ntime.sleep(60)\n')
+            executable.chmod(0o755)
+            real_popen = subprocess.Popen
+            processes = []
+
+            def popen(*args, **kwargs):
+                process = real_popen(*args, **kwargs)
+                processes.append(process)
+                return process
+
+            with patch.dict(os.environ, PATH=binaries), \
+                    patch('idgent.gitstatus.TIMEOUT', .1), \
+                    patch('idgent.gitstatus.subprocess.Popen', side_effect=popen):
+                started = time.monotonic()
+                self.assertEqual(self.snapshot().files, {})
+                self.assertLess(time.monotonic() - started, 2)
+                self.assertIsNotNone(processes[0].poll())
+            executable.write_text('#!/usr/bin/python3\nimport sys\nsys.stdout.buffer.write(b"?? file\\0" * 10000)\n')
+            with patch.dict(os.environ, PATH=binaries), patch('idgent.gitstatus.MAX_OUTPUT', 127):
+                from idgent.gitstatus import _run
+                output, truncated = _run(str(self.root), ['status'], time.monotonic() + 2)
+                self.assertTrue(truncated)
+                self.assertEqual(len(output), 127)
 
     def test_commands_use_readonly_environment_and_list_args(self):
         real_popen = subprocess.Popen

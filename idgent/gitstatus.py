@@ -44,7 +44,7 @@ def _run(root, args, deadline, record_limit=None):
                     raise subprocess.TimeoutExpired(process.args, TIMEOUT)
                 if not selector.select(remaining):
                     raise subprocess.TimeoutExpired(process.args, TIMEOUT)
-                chunk = os.read(process.stdout.fileno(), 65536)
+                chunk = os.read(process.stdout.fileno(), min(65536, MAX_OUTPUT - len(output)))
                 if not chunk:
                     break
                 output.extend(chunk)
@@ -67,7 +67,8 @@ def _run(root, args, deadline, record_limit=None):
 def parse_porcelain(data: bytes, repo: str, root: str, max_entries=MAX_ENTRIES) -> Snapshot:
     """Parse v1 -z (rename destination first), including unloaded descendants."""
     result = Snapshot()
-    records = iter(data.split(b'\0'))
+    # A byte cap may end halfway through a filename; never invent that row.
+    records = iter(data.split(b'\0')[:-1])
     count = 0
     for record in records:
         if not record:
@@ -103,7 +104,7 @@ def parse_porcelain(data: bytes, repo: str, root: str, max_entries=MAX_ENTRIES) 
                 result.files[path] = status
             _aggregate(result, path, root, status.kind)
         # A rename also modifies its old parent, including moves out of root.
-        if source and os.path.commonpath((root, source)) == root:
+        if source and 'R' in code and os.path.commonpath((root, source)) == root:
             _aggregate(result, source, root, 'modified')
     return result
 

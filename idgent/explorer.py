@@ -105,7 +105,7 @@ class ExplorerPanel(Gtk.Box):
         self.set_root(root)
 
     def _git_cell_data(self, column, cell, model, row, data=None):
-        icon, name, path = model[row][:]
+        icon, _name, path = model[row][:]
         statuses = self._git_snapshot.folders if icon == "folder" else self._git_snapshot.files
         status = statuses.get(path) if self._git_enabled else None
         if cell is self._badge_cell:
@@ -218,6 +218,7 @@ class ExplorerPanel(Gtk.Box):
         """Resize file names and reserve enough height for their Pango metrics."""
         self.font_size = size
         self._text_cell.set_property("size-points", size)
+        self._badge_cell.set_property("size-points", size)
         description = self.tree.get_pango_context().get_font_description().copy()
         description.set_size(size * Pango.SCALE)
         metrics = self.tree.get_pango_context().get_metrics(description, None)
