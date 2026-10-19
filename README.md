@@ -116,6 +116,43 @@ touch pinch and hover page-preview popovers are not implemented. Search supports
 the index's query subset (text, quoted terms, AND/OR, negation, regex and
 path/file/content/tag fields), rather than every Reference app search operator.
 
+## Git graph
+
+Git graph draws the repository's history as a horizontal timeline. Open it from
+either dock's **+ → Git graph** chooser, **View → Git graph**, **Ctrl+Alt+H**,
+or **Git graph: Open git graph** in the command palette. The menu, shortcut and
+palette focus an existing Git graph, or open one below the editor (on the right
+if the bottom dock's three panes are occupied). Each dock permits one Git graph
+alongside Graph view and terminals. The shortcut also works from a terminal.
+
+The default branch has a main line, with coloured branch lanes and labels,
+merge callouts, a HEAD pointer, tag and remote chips, and a dashed tail showing
+the number of uncommitted changes. Deleted branch names are inferred from merge
+messages when possible. Hover a commit dot for its hash, message and time;
+click it to open a read-only commit tab at the right end of the editor tabs.
+Opening the same commit again selects its tab. Parent chips open more commit
+tabs; file names open the working-tree file when it still exists. The active
+commit tab is selected in every Git graph, and tabs can outlive their graph pane.
+
+Drag to pan, scroll to zoom (horizontal scrolling pans), and use the toolbar's
+**Fit**, **HEAD**, **Refresh**, **Tags** and **Remote** controls. Arrow keys move
+between commits and lanes, **Home/End** go to the oldest commit/HEAD, **Enter**
+opens the focused commit, and **Esc** dismisses its tooltip. The palette also
+provides **Git graph: Refresh**, **Git graph: Jump to HEAD**, and
+**Git graph: Close commit tabs**. Commit tabs have file collapse/expand, unified
+and split diff controls, syntax colours, and expandable hidden context.
+
+Repository monitors refresh history after Git changes; returning focus to the
+window also refreshes it. Refresh preserves open commit tabs. Open Folder closes
+the old repository's commit tabs and updates the graph. Both pages follow the
+current theme, accent, fonts and Reduce motion setting; hidden graphs pause.
+
+History is limited to 1,500 commits. All Git operations are read-only and local:
+there is no network access, fetch, checkout, staging or commit creation. A plain
+folder or repository without commits shows a friendly empty state. Install
+**gir1.2-webkit2-4.1** for the optional pages (the same dependency as Graph view);
+without it the pane shows an installation hint.
+
 ## Search in Files
 
 The search box sits at the top of the explorer, directly under the EXPLORER header.
