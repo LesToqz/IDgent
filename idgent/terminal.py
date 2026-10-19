@@ -5,6 +5,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 import os
 import signal
+import termios
 
 import gi
 
@@ -106,6 +107,8 @@ class TerminalPanel(Gtk.Box):
         self.graph_factory: Callable[[], Gtk.Widget] | None = None
         self.stacked = stacked
         self._destroyed = False
+        # MainWindow supplies the intended first extent before moving its divider.
+        self._initial_dock_extent: tuple[bool, int] | None = None
         self._panes: list[_Pane] = []
         self._closing: list[_Pane] = []
         self._active: _Pane | None = None
@@ -317,16 +320,161 @@ class TerminalPanel(Gtk.Box):
         terminal.connect("focus-in-event", self._focus_changed, pane, True)
         terminal.connect("focus-out-event", self._focus_changed, pane, False)
         self._insert_pane(pane)
-        env = dict(os.environ, TERM="xterm-256color", COLORTERM="truecolor")
-        terminal.spawn_async(
-            Vte.PtyFlags.DEFAULT, safe_cwd(self._cwd), [shell, "-i"],
-            [f"{key}={value}" for key, value in env.items()],
-            # Keywords avoid the hidden child_setup_data positional argument.
-            GLib.SpawnFlags.DEFAULT, child_setup=None, timeout=-1,
-            cancellable=pane.cancellable, callback=self._spawned, user_data=pane,
-        )
+        self._defer_spawn(pane, shell)
         GLib.idle_add(self._focus_idle, pane)
         return True
+
+    def _defer_spawn(self, pane: _Pane, shell: str) -> None:
+        """Start on the mapped grid after startup allocations have settled.
+
+        The 20-column size request is a layout minimum, not a safe initial PTY
+        size: UTF-8 readline can retain that wrapped prompt after SIGWINCH.
+        Allow a few frames for dock positioning and the WM's initial maximize.
+        An unattached panel starts on the next idle; a hidden/stalled window
+        still starts within a second. No shell input or output repairs are used.
+        """
+        terminal = pane.terminal
+        cwd = safe_cwd(self._cwd)
+        env = dict(os.environ, TERM="xterm-256color", COLORTERM="truecolor")
+        timers = {}
+        handlers = []
+        buffered = []
+        started = False
+        geometry = None
+        changed_at = 0
+        painted = 0
+        tick = None
+        paint_clock = None
+        paint_handler = None
+
+        def cancel_timer(name):
+            source = timers.pop(name, None)
+            if source is not None:
+                GLib.source_remove(source)
+
+        def stop_frames():
+            nonlocal tick, paint_handler
+            if tick is not None:
+                terminal.remove_tick_callback(tick)
+                tick = None
+            if paint_handler is not None:
+                if paint_clock.handler_is_connected(paint_handler):
+                    paint_clock.disconnect(paint_handler)
+                paint_handler = None
+
+        def cleanup(*_args):
+            stop_frames()
+            for name in list(timers):
+                cancel_timer(name)
+            for handler in handlers:
+                if terminal.handler_is_connected(handler):
+                    terminal.disconnect(handler)
+            handlers.clear()
+            buffered.clear()
+
+        # Cancellation also covers close-before-spawn and panel destruction.
+        cancelled = pane.cancellable.connect(cleanup)
+
+        def finished(terminal, pid, error, pane):
+            pending = "".join(buffered).encode("utf-8")
+            cleanup()
+            self._spawned(terminal, pid, error, pane)
+            if not pending or pid <= 0 or error is not None or pane.closed or self._destroyed:
+                pane.cancellable.disconnect(cancelled)
+                return
+            replay_deadline = GLib.get_monotonic_time() + 1000000
+
+            def replay():
+                # spawn_async completes before bash initializes readline. Input
+                # sent while the slave still has ECHO is echoed twice (once by
+                # the PTY, once by readline), ahead of the first prompt. Wait
+                # for raw input; canonical shells get a bounded fallback.
+                pty = terminal.get_pty()
+                if pty is not None and GLib.get_monotonic_time() < replay_deadline:
+                    try:
+                        flags = termios.tcgetattr(pty.get_fd())[3]
+                    except termios.error:
+                        flags = 0
+                    if flags & (termios.ECHO | termios.ICANON):
+                        return GLib.SOURCE_CONTINUE
+                timers.pop("replay", None)
+                pane.cancellable.disconnect(cancelled)
+                if not pane.closed and not self._destroyed:
+                    terminal.feed_child(pending)
+                return GLib.SOURCE_REMOVE
+
+            timers["replay"] = GLib.timeout_add(10, replay)
+
+        def spawn():
+            nonlocal started
+            if started or pane.closed or self._destroyed:
+                return GLib.SOURCE_REMOVE
+            started = True
+            stop_frames()
+            for name in list(timers):
+                cancel_timer(name)
+            terminal.spawn_async(
+                Vte.PtyFlags.DEFAULT, cwd, [shell, "-i"],
+                [f"{key}={value}" for key, value in env.items()],
+                # Keywords avoid the hidden child_setup_data positional argument.
+                GLib.SpawnFlags.DEFAULT, child_setup=None, timeout=-1,
+                cancellable=pane.cancellable, callback=finished, user_data=pane,
+            )
+            return GLib.SOURCE_REMOVE
+
+        def after_paint(_clock):
+            nonlocal painted
+            if not terminal.get_mapped():
+                return
+            expected = self._initial_dock_extent
+            if expected is not None:
+                right, extent = expected
+                actual = self.get_allocated_width() if right else self.get_allocated_height()
+                if actual != extent:
+                    return
+                self._initial_dock_extent = None
+            painted += 1
+            # Timers alone can fire before GTK processes a queued dock resize
+            # on a busy first frame. Require completed layout/paint frames too.
+            if painted >= 2 and GLib.get_monotonic_time() - changed_at >= 32000:
+                spawn()
+
+        def frame(_terminal, clock):
+            nonlocal paint_clock, paint_handler
+            if paint_handler is None:
+                paint_clock = clock
+                paint_handler = clock.connect("after-paint", after_paint)
+            return GLib.SOURCE_CONTINUE
+
+        def allocated(*_args):
+            nonlocal geometry, changed_at, painted
+            if started or not terminal.get_mapped():
+                return
+            grid = terminal.get_column_count(), terminal.get_row_count()
+            if grid != geometry:
+                geometry = grid
+                changed_at = GLib.get_monotonic_time()
+                painted = 0
+
+        def unattached():
+            timers.pop("idle", None)
+            if not isinstance(self.get_toplevel(), Gtk.Window):
+                spawn()
+            return GLib.SOURCE_REMOVE
+
+        def committed(terminal, text, _length):
+            # VTE emits commit for keyboard/IM input even without a PTY. Once
+            # attached, VTE delivers it itself, including during async spawn.
+            if terminal.get_pty() is None:
+                buffered.append(text)
+
+        handlers.extend((terminal.connect("size-allocate", allocated),
+                         terminal.connect("map", allocated),
+                         terminal.connect("commit", committed)))
+        tick = terminal.add_tick_callback(frame)
+        timers["fallback"] = GLib.timeout_add(1000, spawn)
+        timers["idle"] = GLib.idle_add(unattached)
+        allocated()
 
     def add_graph(self, view: Gtk.Widget | None = None) -> bool:
         """Add one graph to this dock, or focus its existing graph without a toast."""
