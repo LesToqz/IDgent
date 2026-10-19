@@ -22,7 +22,10 @@ def sizes_from_ratios(ratios, extent, minimum=0):
     if not count:
         return []
     extent = max(0, int(extent))
-    floor = min(max(0, minimum), extent / count)
+    if extent <= count * minimum:
+        whole, extra = divmod(extent, count)
+        return [whole + (i < extra) for i in range(count)]
+    floor = max(0, minimum)
     weights = [max(0, float(r)) if math.isfinite(r) else 0 for r in ratios]
     pending, result, remaining = list(range(count)), [0.0] * count, float(extent)
     while pending:
@@ -97,6 +100,8 @@ class SplitHandle(Gtk.EventBox):
                         Gdk.EventMask.POINTER_MOTION_MASK | Gdk.EventMask.ENTER_NOTIFY_MASK |
                         Gdk.EventMask.LEAVE_NOTIFY_MASK)
         self.connect("realize", self._realized)
+        self.connect("enter-notify-event", self._hover, True)
+        self.connect("leave-notify-event", self._hover, False)
         self.connect("button-press-event", self._press)
         self.connect("motion-notify-event", self._motion)
         self.connect("button-release-event", self._release)
@@ -109,6 +114,14 @@ class SplitHandle(Gtk.EventBox):
     def _realized(self, *_args):
         self.get_window().set_cursor(Gdk.Cursor.new_from_name(
             self.get_display(), "row-resize" if self.owner.vertical else "col-resize"))
+
+    def _hover(self, _widget, _event, entered):
+        # EventBox does not set PRELIGHT like Gtk.Button does.
+        if entered:
+            self.set_state_flags(Gtk.StateFlags.PRELIGHT, False)
+        else:
+            self.unset_state_flags(Gtk.StateFlags.PRELIGHT)
+        return False
 
     def _coordinate(self, event):
         return event.y_root if self.owner.vertical else event.x_root

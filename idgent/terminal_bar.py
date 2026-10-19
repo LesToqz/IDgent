@@ -355,6 +355,7 @@ def build_css(ui: dict[str, str]) -> str:
 .idgent-terminal {{ background: {ui['panel_bg']}; color: {ui['foreground']}; }}
 .idgent-terminal-sep {{ background: {ui['border']}; min-width: 1px; min-height: 1px; border: 0; }}
 .idgent-pane-handle {{ background: {ui['panel_bg']}; padding: 0; border: 0; }}
+.idgent-pane-handle, .idgent-pane-handle .idgent-terminal-sep {{ transition: none; }}
 .idgent-pane-handle:hover .idgent-terminal-sep,
 .idgent-pane-handle:active .idgent-terminal-sep,
 .idgent-pane-handle:focus .idgent-terminal-sep {{ background: {ui['accent']}; }}
