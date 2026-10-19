@@ -1,4 +1,15 @@
-"""Small, failure-tolerant JSON settings store, resolved at call time."""
+"""Small, failure-tolerant JSON settings store, resolved at call time.
+
+Graph defaults, bounds and steps follow docs/reference_app-graph-params.json, section
+settings (spec section J). IDgent deviations: showCode defaults to True for source
+files; reduceMotion defaults to False for the host's accessibility override;
+localDepth/localIncoming/localOutgoing retain the brief's host names alongside
+Reference app's localJumps/localBacklinks/localForelinks, with identical defaults and
+bounds. These are independent settings, not synchronized aliases. Color groups
+use #rrggbb strings instead of Reference app's {a: 1, rgb: int}, and are capped at 12
+as required by the host bridge. Unknown keys are dropped. Numeric steps describe
+the controls; persisted numbers are clamped, with integer controls rounded.
+"""
 from __future__ import annotations
 
 import json
@@ -215,12 +226,22 @@ GRAPH_DEFAULTS = {
     'colorGroups': [], 'collapse-filter': True, 'collapse-display': True,
     'collapse-forces': True, 'collapse-color-groups': True, 'scale': 1,
     'localDepth': 1, 'localIncoming': True, 'localOutgoing': True,
+    'localJumps': 1, 'localBacklinks': True, 'localForelinks': True,
+    'localInterlinks': False, 'close': False, 'reduceMotion': False,
 }
 GRAPH_LIMITS = {
     'textFadeMultiplier': (-3, 3), 'nodeSizeMultiplier': (0.1, 5),
     'lineSizeMultiplier': (0.1, 5), 'centerStrength': (0, 1),
     'repelStrength': (0, 20), 'linkStrength': (0, 1),
-    'linkDistance': (30, 500), 'scale': (0.01, 10), 'localDepth': (1, 5),
+    'linkDistance': (30, 500), 'scale': (1 / 128, 8),
+    'localDepth': (1, 5), 'localJumps': (1, 5),
+}
+# None means no slider step is specified (persisted zoom).
+GRAPH_STEPS = {
+    'textFadeMultiplier': 0.1, 'nodeSizeMultiplier': 'any',
+    'lineSizeMultiplier': 'any', 'centerStrength': 'any',
+    'repelStrength': 'any', 'linkStrength': 'any', 'linkDistance': 1,
+    'scale': None, 'localDepth': 1, 'localJumps': 1,
 }
 DEFAULTS['graph'] = GRAPH_DEFAULTS
 
@@ -239,7 +260,7 @@ def normalize_graph(value: object) -> dict:
                 raw = default
             low, high = GRAPH_LIMITS[key]
             result[key] = max(low, min(high, raw))
-            if key == 'localDepth':
+            if GRAPH_STEPS[key] == 1:
                 result[key] = round(result[key])
         elif key == 'colorGroups':
             groups = []

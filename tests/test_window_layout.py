@@ -301,13 +301,14 @@ class WindowLayoutTests(unittest.TestCase):
     def test_each_dock_limit_and_split_toast(self):
         self.window.toggle_terminal_right()
         for panel in (self.window.terminal_bottom, self.window.terminal_right):
-            panel.add_button.clicked()
-            panel.add_button.clicked()
+            # The dock + opens a chooser; choose Terminal to create a pane.
+            panel.add_button.choose("terminal")
+            panel.add_button.choose("terminal")
             self.assertEqual(panel.terminal_count(), 3)
-            panel.add_button.clicked()
+            panel.add_button.choose("terminal")
             self.assertEqual(panel.terminal_count(), 3)
             self.assertTrue(panel.toast.get_visible())
-            self.assertEqual(panel.toast.get_text(), 'Cannot add terminal (limit 3)')
+            self.assertEqual(panel.toast.get_text(), 'Cannot add (limit 3)')
             panel.toast.hide()
             panel.focus_terminal()
             self.window.split_terminal()
