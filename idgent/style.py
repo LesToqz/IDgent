@@ -1,4 +1,6 @@
 """Theme-driven GTK CSS, with one shared provider for all application widgets."""
+import dataclasses
+
 import gi
 
 gi.require_version('Gtk', '3.0')
@@ -8,7 +10,9 @@ from gi.repository import Gdk, GLib, Gtk
 from idgent.explorer import build_css as build_explorer_css
 from idgent.editor import build_css as build_editor_css
 from idgent.terminal_bar import build_css as build_terminal_bar_css
-from idgent.themes import Theme, get_theme
+from idgent.overlay import build_css as build_overlay_css
+from idgent.palette import build_css as build_palette_css
+from idgent.themes import Theme, _contrast, _legible, _mix_color, get_theme
 from idgent.titlebar import build_titlebar_css
 from idgent.settings_dialog import build_css as build_settings_css
 from idgent.search import build_css as build_search_css
@@ -205,7 +209,51 @@ tooltip, tooltip.background {{ background: alpha(#000000, 0.9); color: #fafafa;
 tooltip label {{ color: #fafafa; }}
 dialog .dialog-action-area, messagedialog .dialog-action-area {{ padding: 8px; }}
 .idgent-resize-gate {{ background: {ui['panel_bg']}; }}
-''' + build_titlebar_css(ui) + build_settings_css(ui) + build_search_css(ui)
+''' + (build_titlebar_css(ui) + build_settings_css(ui) + build_search_css(ui)
+       # Prompts and notices override base entry/row/focus rules: keep them last.
+       + build_palette_css(ui) + build_overlay_css(ui))
+
+
+def _font_family(name: str | None) -> str:
+    """A CSS-safe quoted family, or '' for unset/unusable names."""
+    if not isinstance(name, str):
+        return ''
+    name = ''.join(c for c in name.strip() if c.isprintable() and c not in '"\\;{}')
+    return f'"{name}"' if name else ''
+
+
+def with_accent(theme: Theme, accent: str | None) -> Theme:
+    """``theme`` with a user accent: accent roles derived contrast-safely.
+
+    Roles that equalled the theme's own accent (status bar, active scrollbar
+    in some themes) follow the new colour too. ``None`` returns ``theme``.
+    """
+    if not accent:
+        return theme
+    accent = accent.lower()
+    old = theme.ui['accent']
+    ui = {key: accent if value == old else value for key, value in theme.ui.items()}
+    accent_fg = ('#ffffff' if _contrast('#ffffff', accent) >= _contrast('#111111', accent)
+                 else '#111111')
+    if theme.ui.get('status_bg') == old:
+        ui['status_fg'] = accent_fg
+    ui.update(accent=accent, accent_fg=accent_fg,
+              accent_text=_legible(accent, ui['bg'], 3),
+              accent_hover=_mix_color(accent, ui['foreground'], .2))
+    return dataclasses.replace(theme, ui=ui)
+
+
+def build_overrides(ui_font: str | None = None, editor_font: str | None = None) -> str:
+    """Interface/editor font-family rules appended after the theme rules."""
+    css = ''
+    family = _font_family(ui_font)
+    if family:
+        # Every node: explicit families (editor/terminal monospace) are more specific.
+        css += f'* {{ font-family: {family}; }}\n'
+    family = _font_family(editor_font)
+    if family:
+        css += f'.idgent-editor textview, .idgent-editor textview text {{ font-family: {family}; }}\n'
+    return css
 
 
 # Compatibility for existing consumers and strict CSS parser tests.
@@ -254,9 +302,16 @@ def _apply(theme, css):
     _current = theme
 
 
-def apply_theme(theme: Theme) -> None:
-    """Switch the shared CSS provider; editor syntax/chrome and VTE use their APIs."""
-    _apply(theme, build_css(theme))
+def apply_theme(theme: Theme, accent: str | None = None, ui_font: str | None = None,
+                editor_font: str | None = None) -> None:
+    """Switch the shared CSS provider; editor syntax/chrome and VTE use their APIs.
+
+    ``accent`` (``#rrggbb``) replaces the theme accent, ``ui_font`` the
+    interface font family and ``editor_font`` the editor family; unset
+    values (None/'') keep the theme defaults.
+    """
+    themed = with_accent(theme, accent)
+    _apply(themed, build_css(themed) + build_overrides(ui_font, editor_font))
 
 
 def apply_style(theme: Theme | None = None) -> None:
