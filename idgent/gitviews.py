@@ -230,6 +230,10 @@ class _WebHost(Gtk.Box):
             raise ValueError(f'Unknown {self._api} command: {cmd}')
         script = f'window.{self._api}.{cmd}(' + ','.join(
             json.dumps(a, ensure_ascii=True, allow_nan=False) for a in args) + ');'
+        # Contract C is a static page and does not require pause/resume hooks.
+        # Call them when provided without treating their absence as a page error.
+        if self._share_context and cmd in ('pause', 'resume'):
+            script = f'if (typeof window.{self._api}.{cmd} === "function") {{ {script} }}'
         if self._ready:
             self._evaluate(script)
         else:

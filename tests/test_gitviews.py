@@ -363,3 +363,12 @@ class HostTest(unittest.TestCase):
             self.assertTrue(poll(lambda: not view._context_running and not view._worker_running))
         self.assertEqual(self.count('provideContext'), 0)
         self.assertEqual(self.count('setCommit'), 2)
+
+    def test_commit_lifecycle_hooks_are_optional_in_contract_c(self):
+        view = self.make(CommitView)
+        self.ready()
+        self.js('delete IDCommit.pause; delete IDCommit.resume; null')
+        self.windows[-1].hide()
+        self.windows[-1].show_all()
+        self.assertEqual(self.js('1+1'), 2)
+        self.assertEqual(self.errors, [])
