@@ -14,7 +14,7 @@ from gi.repository import Gdk, Gio, GLib, GObject, Gtk
 
 from idgent import settings as preferences
 from idgent.graphdata import GraphIndex, GraphOptions
-from idgent.themes import _legible, _mix_color, get_theme
+from idgent.themes import _legible, _luminance, _mix_color, get_theme
 
 
 # Importing the dock must work on installations without WebKit's typelib.
@@ -78,9 +78,11 @@ class GraphView(Gtk.Box):
         raw_settings = dict(raw_settings)
         for legacy, current in (('localJumps', 'localDepth'), ('localBacklinks', 'localIncoming'),
                                 ('localForelinks', 'localOutgoing')):
-            if legacy in raw_settings and current not in raw_settings:
+            if legacy in raw_settings and (current not in raw_settings or
+                    raw_settings[current] == preferences.GRAPH_DEFAULTS[current]):
                 raw_settings[current] = raw_settings[legacy]
         self._settings = preferences.normalize_graph(raw_settings)
+        self._sync_local_settings()
         self._index = index if index is not None else GraphIndex(self.root)
         self._local_path = None
         self._active_id = None
@@ -238,6 +240,12 @@ class GraphView(Gtk.Box):
                 for source, target in (('query', 'search'), ('groups', 'colorGroups')):
                     if source in changes:
                         changes[target] = changes.pop(source)
+            for legacy, current in (('localJumps', 'localDepth'), ('localBacklinks', 'localIncoming'),
+                                    ('localForelinks', 'localOutgoing')):
+                if current in changes:
+                    changes[legacy] = changes[current]
+                elif legacy in changes:
+                    changes[current] = changes[legacy]
             self._settings = preferences.normalize_graph({**self._settings, **changes})
             if kind == 'options':
                 local = changes.get('local', _NO_PAYLOAD)
@@ -255,6 +263,7 @@ class GraphView(Gtk.Box):
                 if self._options_timer is not None:
                     GLib.source_remove(self._options_timer)
                 self._options_timer = GLib.timeout_add(80, self._options_changed)
+            self._sync_local_settings()
             preferences.set_graph(self._settings)
             self.emit('settings-changed', dict(self._settings))
         elif kind in ('search', 'create', 'context'):
@@ -265,6 +274,11 @@ class GraphView(Gtk.Box):
         elif kind == 'error':
             self.emit('error', str(message.get('message', 'Graph error')))
 
+    def _sync_local_settings(self):
+        for legacy, current in (('localJumps', 'localDepth'), ('localBacklinks', 'localIncoming'),
+                                ('localForelinks', 'localOutgoing')):
+            self._settings[legacy] = self._settings[current]
+
     def _options_changed(self):
         self._options_timer = None
         self.rebuild()
@@ -274,6 +288,7 @@ class GraphView(Gtk.Box):
         if self._closed or not self.available:
             return
         colors = graph_colors(ui, accent)
+        colors.update(accent=accent, dark=_luminance(colors['background']) < .3)
         background = Gdk.RGBA()
         background.parse(colors['background'])
         self.webview.set_background_color(background)
@@ -315,6 +330,7 @@ class GraphView(Gtk.Box):
             return
         self._local_path = self._node_id(path)
         self._settings = preferences.normalize_graph({**self._settings, 'localDepth': depth})
+        self._sync_local_settings()
         self.post('setLocal', dict(enabled=self._local_path is not None))
         self.post('setLocal', dict(path=self._local_path, depth=self._settings['localDepth'],
                                  incoming=self._settings['localIncoming'],

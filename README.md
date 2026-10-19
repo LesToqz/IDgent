@@ -84,7 +84,8 @@ edits (after 400 ms), explorer operations and Open Folder update the graph live.
 shows the active file and its neighbors one link away. It follows editor tab
 changes; the panel adjusts depth and incoming/outgoing links. Open Graph view
 again to return to the global graph. The palette also provides
-**Graph view: Rebuild graph** and **Graph view: Reset camera**.
+**Graph view: Rebuild graph** and **Graph view: Reset camera**. Reset camera
+recentres at zoom 1 and restarts the layout.
 
 Install the optional WebKit2 dependency on Debian/Ubuntu:
 

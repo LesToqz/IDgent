@@ -16,7 +16,8 @@ import gi
 
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
-from gi.repository import Gdk, GLib, Gtk
+gi.require_version("Vte", "2.91")
+from gi.repository import Gdk, GLib, Gtk, Vte
 
 from idgent import fsops, motion, settings, style
 from idgent.graphdata import SEMANTICS
@@ -446,6 +447,9 @@ class MainWindow(Gtk.ApplicationWindow):
                 view.refresh_file(path)
             # Directory removals/renames need to remove old descendants as well.
             view.refresh_file(self.root)
+            for tab in self.editor.tabs:
+                if tab.buffer.get_modified() and not tab.deleted and self._graph_indexed(tab.path):
+                    view.set_text(tab.path, self.editor.buffer_text(tab.path))
 
     def _graph_tree_changed(self, *_args):
         if self._graph_views() and self._graph_refresh_timer is None:
@@ -748,9 +752,8 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def _terminal_focused(self) -> bool:
         focus = self.get_focus()
-        return focus is not None and any(
-            pane.terminal is not None and (focus is pane.terminal or focus.is_ancestor(pane.terminal))
-            for panel in (self.terminal_bottom, self.terminal_right) for pane in panel._panes)
+        # A closing VTE can retain focus after leaving the panel's live pane list.
+        return isinstance(focus, Vte.Terminal)
 
     def do_key_press_event(self, event: Gdk.EventKey) -> bool:
         focus = self.get_focus()

@@ -81,6 +81,9 @@ class GraphDataParityTests(unittest.TestCase):
             self.assertIsNone(nodes['#alpha'].group)
             self.assertIsNone(nodes['?Missing'].group)
             self.assertTrue(all(graph.nodes[e['s']].id in nodes for e in graph.to_json()['links']))
+            # The local centre always passes the search filter (spec B.2).
+            local = index.local('Beta.md', options=options)
+            self.assertIn('Beta.md', {n.id for n in local.nodes})
 
 
 class WindowGraphTests(unittest.TestCase):
@@ -105,7 +108,8 @@ class WindowGraphTests(unittest.TestCase):
         settings.set_graph({'close': True, 'scale': .5,
                             'colorGroups': [{'query': 'file:Orbit', 'color': {'a': 1, 'rgb': 16711680}}]})
         self.window = MainWindow(self.app, str(self.root))
-        self.window.set_default_size(1280, 800)
+        # GTK client-side titlebar/shadows add 10 x 50 to the content size.
+        self.window.set_default_size(1270, 750)
         self.window.show_all()
         self.addCleanup(self.destroy_window)
         self.page = None
@@ -115,8 +119,12 @@ class WindowGraphTests(unittest.TestCase):
         poll(lambda: not web_processes(), timeout=6)
 
     def test_graph_focus_shortcuts_and_hotkeys_without_webkit(self):
+        settings.set_graph({'localJumps': 3, 'localBacklinks': False, 'localForelinks': False})
         with patch('idgent.graphview._load_webkit', side_effect=ValueError('missing')):
             view = self.window.open_graph()
+        self.assertEqual(view._settings['localDepth'], 3)
+        self.assertFalse(view._settings['localIncoming'])
+        self.assertFalse(view._settings['localOutgoing'])
         child = Gtk.Entry()
         view.pack_start(child, False, False, 0)
         child.show()
@@ -144,15 +152,24 @@ class WindowGraphTests(unittest.TestCase):
         self.assertEqual(self.window.terminal_right.pane_count(), 1)
         self.assertEqual(self.window.terminal_right.terminal_count(), 0)
 
+    def test_closing_terminal_retains_shortcut_guard(self):
+        panel = self.window.terminal_bottom
+        self.window._show_terminal(panel)
+        terminal = panel._panes[0].terminal
+        terminal.grab_focus()
+        self.assertIs(self.window.get_focus(), terminal)
+        # Closing panes leave _panes before their fade and focus transfer finish.
+        with patch.object(panel, '_panes', []):
+            self.assertTrue(self.window._terminal_focused())
+
     def make_page(self, view):
         page = object.__new__(Page)
         page.Gtk, page.GLib = Gtk, GLib
         page.view, page.win = view.webview, self.window
-        self.page = page
         return page
 
     def menu(self, label):
-        bar = self.window.titlebar.get_children()  # Walk the real View menu.
+        # Walk the real View menu.
         def find(widget):
             if isinstance(widget, Gtk.MenuItem) and widget.get_label() == label:
                 return widget
@@ -194,7 +211,7 @@ class WindowGraphTests(unittest.TestCase):
             panel.add_button.choices.emit('row-activated', panel.add_button.choices.get_row_at_index(1))
             view = panel.graph_views()[0]
             self.assertTrue(poll(lambda: view._ready and view.last_data is not None, timeout=15))
-            page = self.make_page(view)
+            page = self.page = self.make_page(view)
             page.wait_for('IDGraph.stats().nodes >= 200 && IDGraph._debug.nodeAlpha("index/Space Index.md") > 0', 15)
         first_frame = time.monotonic() - start
         self.assertTrue(scans)
@@ -205,22 +222,27 @@ class WindowGraphTests(unittest.TestCase):
         self.assertEqual(panel.terminal_count(), 0)
         self.assertEqual(page.js('IDGraph._debug.settings().colorGroups[0].color'), {'a': 1, 'rgb': 16711680})
         self.assertTrue(page.js('IDGraph._debug.settings().close'))
+        page.wait_for('IDGraph._debug.nodeColor("concepts/Orbit.md") === "#ff0000"')
+        kinds = {n['kind'] for n in view.last_data['nodes']}
+        self.assertEqual(kinds, {'note', 'code', 'unresolved'})
         page.wait_for('Math.abs(IDGraph.stats().scale - .5) < .01')
         expected = graph_colors(self.window.theme.ui, self.window._values['accent'] or self.window.theme.ui['accent'])
         self.assertEqual(page.js('document.documentElement.style.getPropertyValue("--bg")').lower(), expected['background'])
         light = next(t for t in THEMES if not t.dark)
         self.window.set_theme(light.id, persist=False)
         page.wait_for('document.documentElement.style.getPropertyValue("--bg") === ' + json.dumps(light.ui['bg']))
+        self.assertEqual(page.js('document.documentElement.style.colorScheme'), 'light')
         accent = '#e5484d'
-        self.window._setting_changed(None, 'accent', accent)
+        self.change_setting('accent', accent)
+        page.wait_for('document.documentElement.style.getPropertyValue("--accent") === ' + json.dumps(accent))
         note = 'index/Space Index.md'
         self.window.editor.open_file(str(self.root / note))
         page.wait_for('IDGraph._debug.nodeColor(' + json.dumps(note) + ') === ' + json.dumps(accent))
-        self.window._setting_changed(None, 'reduce_motion', True)
+        self.change_setting('reduce_motion', True)
         page.wait_for('IDGraph._debug.settings().reduceMotion')
-        self.window._setting_changed(None, 'reduce_motion', False)
+        self.change_setting('reduce_motion', False)
         self.window.set_theme('dark-plus', persist=False)
-        self.window._setting_changed(None, 'accent', '')
+        self.change_setting('accent', None)
         page.pump(.4)
         # Freeze positions while dispatching the page's actual node click handlers.
         view.post('pause')
@@ -260,6 +282,18 @@ class WindowGraphTests(unittest.TestCase):
         self.assertEqual(view._settings['search'], 'file:Orbit')
         self.send({'type': 'options', 'options': {'query': '', 'groups': [], 'local': {'enabled': False}}})
         page.wait_for('IDGraph.stats().nodes >= 200')
+        self.send({'type': 'options', 'options': {'showTags': True, 'showAttachments': True,
+                   'showCode': False, 'hideUnresolved': True, 'showOrphans': False}})
+        page.wait_for('IDGraph._debug.ids().includes("#space")')
+        counts = view.last_data['stats']['counts']
+        self.assertGreater(counts['tag'], 0)
+        self.assertGreater(counts['attachment'], 0)
+        self.assertEqual(counts['code'], 0)
+        self.assertEqual(counts['unresolved'], 0)
+        self.assertEqual(view.last_data['stats']['orphans'], 0)
+        self.send({'type': 'options', 'options': {'showTags': False, 'showAttachments': False,
+                   'showCode': True, 'hideUnresolved': False, 'showOrphans': True}})
+        page.wait_for('IDGraph._debug.ids().includes("src/app.py") && !IDGraph._debug.ids().includes("#space")')
         global_count = page.js('IDGraph.stats().nodes')
         self.menu('Local graph')
         page.wait_for('IDGraph._debug.local().enabled && IDGraph.stats().nodes < ' + str(global_count))
@@ -294,7 +328,19 @@ class WindowGraphTests(unittest.TestCase):
         page.wait_for('!IDGraph.stats().paused')
         self.assertEqual(panel.terminal_count(), 0)
         view.grab_focus()
+        self.assertIs(self.window.get_focus(), view.webview)
         self.assertFalse(self.window._terminal_focused())
+        for key, state, method in (
+            (Gdk.KEY_p, Gdk.ModifierType.CONTROL_MASK, 'open_quick_switcher'),
+            (Gdk.KEY_o, Gdk.ModifierType.CONTROL_MASK, 'open_quick_switcher'),
+            (Gdk.KEY_P, Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.SHIFT_MASK, 'open_command_palette'),
+            (Gdk.KEY_comma, Gdk.ModifierType.CONTROL_MASK, 'open_settings'),
+        ):
+            event = Gdk.Event.new(Gdk.EventType.KEY_PRESS)
+            event.keyval, event.state = key, state
+            with patch.object(self.window, method) as callback:
+                self.assertTrue(self.window.do_key_press_event(event))
+                callback.assert_called_once()
         self.window.toggle_terminal_fullscreen()
         self.assertIs(self.window._fullscreen_panel, panel)
         self.window.toggle_terminal_fullscreen()
@@ -318,6 +364,10 @@ class WindowGraphTests(unittest.TestCase):
         self.assertTrue(poll(lambda: not (web_processes() & processes), timeout=10))
         self.assertIsNone(view.webview)
 
+    def change_setting(self, key, value):
+        self.assertTrue(settings.set_value(key, value))
+        self.window._setting_changed(None, key, settings.get_value(key))
+
     def send(self, message):
         self.page.js('webkit.messageHandlers.idgent.postMessage(' + json.dumps(message) + '); null')
         self.page.pump(.03)
@@ -326,8 +376,8 @@ class WindowGraphTests(unittest.TestCase):
         self.page.pump(.35)
         shots = ARTIFACTS / 'shots'
         shots.mkdir(parents=True, exist_ok=True)
-        window = self.window.get_window()
-        pixbuf = Gdk.pixbuf_get_from_window(window, 0, 0, self.window.get_allocated_width(), self.window.get_allocated_height())
+        window = Gdk.get_default_root_window()
+        pixbuf = Gdk.pixbuf_get_from_window(window, 0, 0, 1280, 800)
         self.assertIsNotNone(pixbuf)
         pixbuf.savev(str(shots / ('wiring-' + name + '.png')), 'png', [], [])
 
@@ -353,8 +403,15 @@ class WindowGraphTests(unittest.TestCase):
             return round((usage() - start_ticks) / ticks / (time.monotonic() - start) * 100, 3)
         view.post('setSettings', {'close': True})
         window.reset_graph_camera()
-        page.pump(1)
+        view.post('setSettings', {'scale': .25})
+        page.pump(.1)
+        running_start = page.js('IDGraph.stats()')
+        self.assertTrue(running_start['simRunning'])
+        # Measure display callbacks; stats.frames counts draw calls, which can
+        # include more than one draw per compositor frame after host updates.
+        frame_sample = page.measure_fps(.75)
         running = page.js('IDGraph.stats()')
+        running_fps = frame_sample['fps']
         self.shot('a-right-graph-only')
         # Wait for natural idle, not a host pause.
         page.wait_for('!IDGraph.stats().running', timeout=90)
@@ -365,9 +422,10 @@ class WindowGraphTests(unittest.TestCase):
                   * os.sysconf('SC_PAGE_SIZE') for pid in pids) / 1024 / 1024
         window.toggle_terminal_right()
         page.wait_for('IDGraph.stats().paused')
-        hidden_cpu = sample(5)
+        page.pump(3)
+        hidden_cpu = sample(8)
         window.toggle_terminal_right()
-        metrics = dict(first_frame_seconds=round(first_frame, 3), running_fps=running['fps'],
+        metrics = dict(first_frame_seconds=round(first_frame, 3), running_fps=round(running_fps, 2),
                        running_frame_ms=running['frameMs'], settled_fps_over_5s=round((after['frames'] - before['frames']) / 5, 3),
                        settled_stats=after, visible_cpu_percent=visible_cpu, hidden_cpu_percent=hidden_cpu,
                        web_process_rss_mib=round(rss, 2))
@@ -381,17 +439,29 @@ class WindowGraphTests(unittest.TestCase):
         bottom.add_graph()
         bottom.new_terminal()
         bottom.new_terminal()
+        bottom_page = self.make_page(bottom.graph_views()[0])
+        bottom_page.wait_for('window.IDGraph && IDGraph.stats().nodes >= 200 && IDGraph._debug.nodeAlpha("index/Space Index.md") > 0')
+        bottom.graph_views()[0].post('setSettings', {'scale': .12, 'close': True})
+        window._hide_terminal(panel)
         self.shot('c-bottom-graph-two-terminals')
         window._hide_terminal(bottom)
+        window._show_terminal(panel)
+        for extra in list(panel._panes):
+            if extra.kind == 'terminal':
+                panel._close_pane(extra)
+        page.pump(.3)
         light = next(t for t in THEMES if not t.dark)
         window.set_theme(light.id, persist=False)
+        view.post('setSettings', {'close': False})
         self.shot('d-light')
+        view.post('setSettings', {'close': True})
         window.set_theme('dark-plus', persist=False)
-        window._setting_changed(None, 'accent', '#e5484d')
+        self.change_setting('accent', '#e5484d')
         self.shot('e-accent')
         view.post('setSettings', {'close': False, 'collapse-filter': False})
         self.shot('f-controls')
         window.open_local_graph()
+        view.post('setSettings', {'close': True, 'scale': .3})
         page.wait_for('IDGraph._debug.local().enabled && IDGraph.stats().nodes < 100')
         self.shot('g-local')
         window.open_graph()
@@ -400,7 +470,7 @@ class WindowGraphTests(unittest.TestCase):
         self.shot('h-chooser')
         panel.add_button.popover.popdown()
         view.post('setSettings', {'close': True})
-        page.pump(.4)
+        page.wait_for('!IDGraph.stats().running', timeout=90)
         page.js('''(() => { const c=document.getElementById('graph'),r=c.getBoundingClientRect();
           const ids=IDGraph._debug.ids();
           const id=ids.find(id=>{const p=IDGraph._debug.screenPos(id);return p[0]>20&&p[0]<r.width-20&&p[1]>20&&p[1]<r.height-20});
