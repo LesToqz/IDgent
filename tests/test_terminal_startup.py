@@ -254,6 +254,17 @@ class TerminalStartupTest(unittest.TestCase):
         self.addCleanup(unattached.destroy)
         self.assertTrue(poll(lambda: unattached._panes[0].pid is not None, .8))
 
+    def test_stalled_initial_layout_still_starts(self):
+        dock = StartupWindow()
+        self.addCleanup(dock.close)
+        # Model a first layout that never confirms the requested dock extent.
+        # The mapped terminal must still start via the bounded fallback.
+        dock.window.terminal_bottom._initial_dock_extent = (False, 1000000)
+        self.assertTrue(poll(dock.ready, 10), dock.measurements())
+        terminal = dock.window.terminal_bottom._panes[0].terminal
+        self.assert_prompt(dock, terminal)
+        self.assert_wraps(dock, terminal)
+
     def test_close_before_spawn_cancels_startup(self):
         dock = StartupWindow()
         self.addCleanup(dock.close)

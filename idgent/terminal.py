@@ -107,7 +107,8 @@ class TerminalPanel(Gtk.Box):
         self.graph_factory: Callable[[], Gtk.Widget] | None = None
         self.stacked = stacked
         self._destroyed = False
-        self._initial_dock_extent = None
+        # MainWindow supplies the intended first extent before moving its divider.
+        self._initial_dock_extent: tuple[bool, int] | None = None
         self._panes: list[_Pane] = []
         self._closing: list[_Pane] = []
         self._active: _Pane | None = None
