@@ -213,6 +213,7 @@ class StyleTest(unittest.TestCase):
                         self.assert_color(sidebar, theme.ui['sidebar_bg'], background=True)
                         self.assert_color(view, theme.ui['editor_fg'])
                         self.assert_color(view, theme.ui['bg'], background=True)
+                        # updated by tabs-polish
                         self.assert_color(editor.status, theme.ui['muted'])
                         self.assert_color(editor.status, theme.ui['sidebar_bg'], background=True)
                         self.assert_color(bar, theme.ui['sidebar_bg'], background=True)
@@ -430,6 +431,7 @@ class StyleTest(unittest.TestCase):
             self.assertTrue(editor.get_realized())
             self.assertTrue(editor.status.get_style_context().has_class('idgent-status'))
             background = editor.status.get_style_context().get_background_color(Gtk.StateFlags.NORMAL)
+            # updated by tabs-polish
             self.assertAlmostEqual(background.red, 37 / 255, places=2)
             self.assertAlmostEqual(background.green, 37 / 255, places=2)
             self.assertAlmostEqual(background.blue, 38 / 255, places=2)
@@ -439,4 +441,5 @@ class StyleTest(unittest.TestCase):
             nodes = editor.notebook.get_style_context().to_string(Gtk.StyleContextPrintFlags.RECURSE)
             self.assertIn('header.top', nodes)
             self.assertIn('tabs:', nodes)
-            self.assertIn('tab:', nodes)
+            # updated by tabs-polish
+            self.assertRegex(nodes, r'\btab(?:\.[\w-]+)*:')
