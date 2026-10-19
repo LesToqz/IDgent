@@ -16,6 +16,7 @@ from gi.repository import Gdk, Gio, GLib, GObject, Gtk, Pango, Vte
 
 from idgent import motion
 from idgent.resizegate import ResizeGate
+from idgent.panesplit import PaneSplit
 from idgent.terminal_bar import AddButton, LimitToast, PaneHeader, cancel_fade, fade
 
 MAX_TERMINALS = 3
@@ -43,13 +44,12 @@ def safe_cwd(path: str) -> str:
 
 @dataclass(eq=False)
 class _Pane:
-    # page = [inner, divider]; inner = [header, content]; content = [terminal, scrollbar, gutter].
+    # page = [header, content]; content = [terminal, scrollbar, gutter].
     page: Gtk.Box
     terminal: Vte.Terminal | None
     cancellable: Gio.Cancellable
     header: PaneHeader
     content: Gtk.Box
-    divider: Gtk.Separator
     frame: Gtk.Widget
     kind: str = "terminal"
     view: Gtk.Widget | None = None
@@ -122,7 +122,8 @@ class TerminalPanel(Gtk.Box):
         self.set_hexpand(True)
         self.set_vexpand(True)
         orientation = Gtk.Orientation.VERTICAL if stacked else Gtk.Orientation.HORIZONTAL
-        self._body = Gtk.Box(orientation=orientation, spacing=0, homogeneous=True)
+        self._body = PaneSplit(orientation=orientation,
+                               minimum=self.HEADER_HEIGHT + 90 if stacked else 160)
         self.overlay = Gtk.Overlay()
         self.overlay.add(self._body)
         self.add_button = AddButton(MAX_TERMINALS)
@@ -225,7 +226,7 @@ class TerminalPanel(Gtk.Box):
             other.header.set_active(other is pane)
 
     def _update_layout(self) -> None:
-        """Renumber headers, move the "+" padding to the corner pane, fix dividers."""
+        """Renumber headers and move the "+" padding to the corner pane."""
         position = 0
         for pane in self._panes:
             if pane.kind == "terminal":
@@ -235,10 +236,7 @@ class TerminalPanel(Gtk.Box):
         corner = self._maximized or (shown[0] if self.stacked else shown[-1]) if shown else None
         for pane in self._panes + self._closing:
             pane.header.set_corner(pane is corner)
-            last = pane is shown[-1] if shown else True
-            visible = not last and self._maximized is None
-            pane.divider.set_no_show_all(not visible)
-            pane.divider.set_visible(visible)
+        self._body.sync_handles()
         self.add_button.set_full(self.is_full())
 
     def _pages(self) -> list[_Pane]:
@@ -299,20 +297,13 @@ class TerminalPanel(Gtk.Box):
         inner = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         inner.pack_start(header, False, False, 0)
         inner.pack_start(content, True, True, 0)
-        # Columns are divided by a vertical line, stacked rows by a horizontal one.
-        divider = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL if self.stacked
-                                else Gtk.Orientation.VERTICAL)
-        divider.get_style_context().add_class("idgent-terminal-sep")
-        page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL if self.stacked
-                       else Gtk.Orientation.HORIZONTAL)
-        page.pack_start(inner, True, True, 0)
-        page.pack_start(divider, False, False, 0)
+        page = inner
         frame = ResizeGate() if self.RESIZE_GATE else page
         if isinstance(frame, ResizeGate):
             frame.CHILD_MINIMUM = True
             frame.set_background(self._palette[1])
             frame.add(page)
-        pane = _Pane(page, terminal, Gio.Cancellable(), header, content, divider, frame,
+        pane = _Pane(page, terminal, Gio.Cancellable(), header, content, frame,
                      id=self._next_id)
         terminal.connect("child-exited", self._child_exited, pane)
         terminal.connect("key-press-event", self._key_press)
@@ -502,14 +493,8 @@ class TerminalPanel(Gtk.Box):
         inner = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         inner.pack_start(header, False, False, 0)
         inner.pack_start(content, True, True, 0)
-        divider = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL if self.stacked
-                                else Gtk.Orientation.VERTICAL)
-        divider.get_style_context().add_class("idgent-terminal-sep")
-        page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL if self.stacked
-                       else Gtk.Orientation.HORIZONTAL)
-        page.pack_start(inner, True, True, 0)
-        page.pack_start(divider, False, False, 0)
-        pane = _Pane(page, None, Gio.Cancellable(), header, content, divider, page,
+        page = inner
+        pane = _Pane(page, None, Gio.Cancellable(), header, content, page,
                      kind="graph", view=view, id=self._next_id)
         view.connect("focus-in-event", self._focus_changed, pane, True)
         view.connect("focus-out-event", self._focus_changed, pane, False)
@@ -536,8 +521,7 @@ class TerminalPanel(Gtk.Box):
         children = self._body.get_children()
         position = children.index(self._panes[index].frame) if index < len(self._panes) else len(children)
         self._panes.insert(index, pane)
-        self._body.pack_start(frame, True, True, 0)
-        self._body.reorder_child(frame, position)
+        self._body.insert(frame, position)
         self._set_active(pane)
         if animated:
             frame.set_opacity(0.0)

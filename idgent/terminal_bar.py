@@ -354,6 +354,10 @@ def build_css(ui: dict[str, str]) -> str:
     return f'''
 .idgent-terminal {{ background: {ui['panel_bg']}; color: {ui['foreground']}; }}
 .idgent-terminal-sep {{ background: {ui['border']}; min-width: 1px; min-height: 1px; border: 0; }}
+.idgent-pane-handle {{ background: {ui['panel_bg']}; padding: 0; border: 0; }}
+.idgent-pane-handle:hover .idgent-terminal-sep,
+.idgent-pane-handle:active .idgent-terminal-sep,
+.idgent-pane-handle:focus .idgent-terminal-sep {{ background: {ui['accent']}; }}
 .idgent-vte {{ padding: 8px; }}
 .idgent-terminal-header {{ background: {ui['sidebar_bg']}; color: {ui['muted']}; border: 0;
     border-bottom: 1px solid {ui['border']}; box-shadow: none; min-height: 29px; padding: 0 4px 0 0; }}

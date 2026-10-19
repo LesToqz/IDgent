@@ -246,6 +246,9 @@ bottom divider to the very top or the right divider to the far left to collapse
 the editor area. Hiding a dock preserves its shells; showing an empty dock
 starts a new shell.
 
+- Drag between panes to resize them left/right in the bottom dock or up/down in
+  the right dock; double-click a divider to restore equal sizes.
+
 Each terminal has its own header, labelled bash1…bash3 in order (or the selected
 shell's name), with fullscreen and delete icons. The **+** in the dock's top-right
 corner adds a terminal. Each dock independently allows three; adding a fourth

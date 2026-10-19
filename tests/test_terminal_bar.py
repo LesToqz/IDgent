@@ -813,21 +813,27 @@ class PanelBarMixin(PanelFixture):
         self.add()
         self.add()
         self.settle()
-        self.assertEqual([p.divider.get_visible() for p in self.panel._panes], [True, True, False])
+        handles = self.panel._body.handles
+        self.assertEqual(len(handles), 2)
+        self.assertTrue(all(h.get_visible() for h in handles))
         orientation = Gtk.Orientation.HORIZONTAL if self.stacked else Gtk.Orientation.VERTICAL
-        self.assertTrue(all(p.divider.get_orientation() == orientation for p in self.panel._panes))
-        divider = rect(self.panel._panes[0].divider, self.panel)
+        self.assertTrue(all(h.line.get_orientation() == orientation for h in handles))
+        divider = rect(handles[0], self.panel)
+        line = rect(handles[0].line, self.panel)
         if self.stacked:
-            self.assertEqual(divider[3], 1)
+            self.assertEqual(divider[3], 6)
+            self.assertEqual(line[3], 1)
             self.assertEqual(divider[2], self.panel.get_allocated_width())
         else:
-            self.assertEqual(divider[2], 1)
+            self.assertEqual(divider[2], 6)
+            self.assertEqual(line[2], 1)
             self.assertEqual(divider[3], self.panel.get_allocated_height())
         self.panel.toggle_maximize(self.panel._panes[1])
-        self.assertFalse(any(p.divider.get_visible() for p in self.panel._panes))
+        self.assertFalse(any(h.get_visible() for h in handles))
         self.panel.restore()
         self.panel._panes[2].header.delete_button.clicked()
-        self.assertEqual([p.divider.get_visible() for p in self.panel._panes], [True, False])
+        self.assertEqual(len(self.panel._body.handles), 1)
+        self.assertTrue(self.panel._body.handles[0].get_visible())
 
     def test_escape_is_not_intercepted(self):
         event = Gdk.Event.new(Gdk.EventType.KEY_PRESS)
