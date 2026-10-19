@@ -52,6 +52,64 @@ Go, Java, SQL, Markdown, Dockerfile and Makefile (depending on Pygments).
 Highlighting is skipped above 1.5 MB or for lines longer than 20,000 characters.
 The editor accepts regular UTF-8 text files up to 5 MiB.
 
+## Graph view
+
+Graph view draws the project's notes and source files as an interactive network.
+Open it from either dock's **+ → Graph view** chooser, **View → Graph view**,
+**Ctrl+Alt+G**, or the command palette's **Graph view: Open graph view** command.
+The menu/shortcut/palette reuse the graph in the right dock. Each dock supports
+one graph alongside terminals; pane focus, fullscreen and dock toggling also work
+with graph panes. Ctrl+P/Ctrl+O, Ctrl+Shift+P and Ctrl+, remain available while the
+graph has focus.
+
+The index understands wikilinks, aliases, heading/block link targets, embeds,
+relative Markdown links, inline/frontmatter tags, referenced attachments,
+unresolved targets and supported code imports. Heading/block targets connect to
+the containing file. Click a file node to open it in the editor, a tag to search
+files, or an unresolved node to create a note with a simple name in the project
+root. Context actions reveal files and copy absolute paths; both open actions
+currently open or focus a normal editor tab.
+
+The controls panel has **Filters / Groups / Display / Forces** sections. Filters
+remove non-matching nodes; **Existing files only** hides unresolved targets.
+Tags and attachments start hidden, orphans and source files start visible.
+Groups use the first matching non-empty query. Display adjusts labels, node/line
+sizes and arrows; Forces adjusts attraction, repulsion and link distance.
+Panel state, zoom, groups and graph preferences persist separately from the
+editor settings. The graph follows the current theme, accent and Reduce motion
+setting, and the active editor file is highlighted. Saved files, unsaved note/code
+edits (after 400 ms), explorer operations and Open Folder update the graph live.
+
+**View → Local graph**, **Ctrl+Shift+Alt+G**, or **Graph view: Open local graph**
+shows the active file and its neighbors one link away. It follows editor tab
+changes; the panel adjusts depth and incoming/outgoing links. Open Graph view
+again to return to the global graph. The palette also provides
+**Graph view: Rebuild graph** and **Graph view: Reset camera**.
+
+Install the optional WebKit2 dependency on Debian/Ubuntu:
+
+```sh
+sudo apt install gir1.2-webkit2-4.1
+```
+
+Without it, the pane shows an installation hint and the rest of IDgent works.
+Indexing runs in a worker thread; the Canvas2D simulation stops drawing when
+settled and pauses when hidden. Software rendering is the default; large graphs
+are capped at 3,000 nodes and the page reports truncation. Performance varies with
+project size, window dimensions and rendering drivers.
+
+For a test vault, use a disposable copy of a folder containing hubs, chains,
+rings, isolated pairs, orphan notes, nested tags, attachments, missing targets,
+ambiguous basenames, source imports and a few hundred linked notes. The integration
+tests copy the optional demo vault before editing it. Run them under Xvfb with
+`python3 -m unittest tests.test_graph_wiring`; set `IDGENT_GRAPH_QA=1` to capture
+screenshots and performance measurements in `.ceo/`.
+
+Current limitations: group drag-reorder, the local **Neighbor links** toggle,
+touch pinch and hover page-preview popovers are not implemented. Search supports
+the index's query subset (text, quoted terms, AND/OR, negation, regex and
+path/file/content/tag fields), rather than every Reference app search operator.
+
 ## Search in Files
 
 The search box sits at the top of the explorer, directly under the EXPLORER header.

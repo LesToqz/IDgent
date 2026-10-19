@@ -8,6 +8,7 @@ them; Ctrl+Shift+P (command palette) works everywhere.
 """
 
 import os
+import sys
 from pathlib import Path
 from typing import Callable
 
@@ -15,9 +16,11 @@ import gi
 
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
-from gi.repository import Gdk, Gtk
+from gi.repository import Gdk, GLib, Gtk
 
-from idgent import motion, settings, style
+from idgent import fsops, motion, settings, style
+from idgent.graphdata import SEMANTICS
+from idgent.graphview import GraphView
 from idgent.overlay import OverlayHost
 from idgent.palette import Command, CommandPalette, QuickSwitcher
 from idgent.search import SKIP_DIRS
@@ -55,6 +58,10 @@ class MainWindow(Gtk.ApplicationWindow):
         self._fullscreen_layout = None
         self.theme = theme if theme is not None else get_theme(settings.get_theme_id())
 
+        self._graph_tabs = {}
+        self._graph_timers = {}
+        self._graph_refresh_timer = None
+        self._graph_errors = set()
         self._settings_dialog = None
         self._font_sizes = settings.get_font_sizes()
         stored = settings.get_values()
@@ -78,6 +85,7 @@ class MainWindow(Gtk.ApplicationWindow):
         if not autostart:
             self.terminal_bottom.set_no_show_all(True)
         for panel in (self.terminal_bottom, self.terminal_right):
+            panel.graph_factory = self._make_graph_view
             panel.connect("last-closed", self._hide_terminal)
             panel.connect("maximize-toggled", self._terminal_maximize_toggled)
         for key in settings.NEW_KEYS:
@@ -92,6 +100,14 @@ class MainWindow(Gtk.ApplicationWindow):
         self.explorer.connect("search-escaped", self._search_escaped)
         self.editor.connect("current-file-changed", self._current_file_changed)
         self.explorer.set_text_provider(self.editor.buffer_text)
+        self.explorer.connect('path-renamed', self._graph_paths_changed)
+        self.explorer.connect('path-deleted', self._graph_paths_changed)
+        # Explorer create/refresh rebuilds its model without a path-created signal.
+        # Coalesce those notifications so one operation performs one index scan.
+        for signal in ('row-inserted', 'row-deleted'):
+            self.explorer.store.connect(signal, self._graph_tree_changed)
+        self.editor.notebook.connect('page-removed', self._graph_tab_closed)
+        self.connect('destroy', self._graph_cleanup)
 
         self.dock_bottom = Gtk.Paned(orientation=Gtk.Orientation.VERTICAL)
         self.dock_bottom.pack1(self.editor, resize=True, shrink=True)
@@ -168,6 +184,12 @@ class MainWindow(Gtk.ApplicationWindow):
              "<Control><Shift>F11")
         item(view_menu, "View", "Toggle Explorer Sidebar", self.toggle_explorer, "<Control>b")
         item(view_menu, "View", "Search in Files", self.search_in_files, "<Control><Shift>f")
+        item(view_menu, "Graph view", "Graph view", self.open_graph, "<Control><Alt>g")
+        self._commands[-1] = Command("Graph view: Open graph view", self.open_graph, ("Ctrl+Alt+G",))
+        item(view_menu, "Graph view", "Local graph", self.open_local_graph,
+             "<Control><Shift><Alt>g")
+        self._commands[-1] = Command("Graph view: Open local graph", self.open_local_graph,
+                                     ("Ctrl+Shift+Alt+G",))
         key, modifiers = Gtk.accelerator_parse("<Control>comma")
         accelerators.connect(key, modifiers, Gtk.AccelFlags.VISIBLE,
                              lambda *_: (self.open_settings(), True)[1])
@@ -181,6 +203,8 @@ class MainWindow(Gtk.ApplicationWindow):
         for label, callback, keys in (
             ("Settings: Open settings", self.open_settings, ("Ctrl+,",)),
             ("Settings: Show hotkeys", lambda: self.open_settings("hotkeys"), ("F1",)),
+            ("Graph view: Rebuild graph", self.rebuild_graph, ()),
+            ("Graph view: Reset camera", self.reset_graph_camera, ()),
             ("Theme: Next theme", self.next_theme, ("Ctrl+Alt+T",)),
             ("Editor: Toggle Markdown preview", self.toggle_markdown_view, ("Ctrl+Shift+V",)),
             ("Editor: Zoom in", lambda: self.editor.zoom(1), ("Ctrl+=",)),
@@ -227,6 +251,15 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def _current_file_changed(self, _editor: EditorPanel, path: str) -> None:
         self.explorer.set_current_file(path or None)
+        for view in self._graph_views():
+            view.set_active_file(path or None)
+        for tab in self.editor.tabs:
+            if not getattr(tab, '_graph_connected', False):
+                tab._graph_connected = True
+                self._graph_tabs[tab.page] = tab
+                tab.buffer.connect('changed', lambda _buffer, tab=tab: self._graph_text_changed(tab))
+                tab.buffer.connect('modified-changed', lambda buffer, tab=tab:
+                                   self._graph_saved(tab) if not buffer.get_modified() else None)
         if path:
             if path in self._recent_files:
                 self._recent_files.remove(path)
@@ -262,6 +295,174 @@ class MainWindow(Gtk.ApplicationWindow):
         mode = self.editor.markdown_mode()
         if mode is not None:
             self.editor.set_markdown_mode("preview" if mode == "source" else "source")
+
+    # Graph panes ---------------------------------------------------------------
+
+    def _graph_views(self):
+        return [view for panel in (self.terminal_bottom, self.terminal_right)
+                for view in panel.graph_views()]
+
+    def _make_graph_view(self):
+        view = GraphView(self.root, settings=settings.get_graph())
+        view.connect('open-file', self._graph_open_file)
+        view.connect('settings-changed', lambda _view, values: settings.set_graph(values))
+        view.connect('page-action', self._graph_action)
+        view.connect('error', self._graph_error)
+        view.set_theme(self.theme.ui, self._values['accent'] or self.theme.ui['accent'])
+        view.post('setSettings', {'reduceMotion': self._values['reduce_motion']})
+        view.set_active_file(self.editor.current_path())
+        # Include edits made before the graph was opened.
+        for tab in self.editor.tabs:
+            if tab.buffer.get_modified() and not tab.deleted and self._graph_indexed(tab.path):
+                view.set_text(tab.path, self.editor.buffer_text(tab.path))
+        return view
+
+    def _graph_theme(self):
+        for view in self._graph_views():
+            view.set_theme(self.theme.ui, self._values['accent'] or self.theme.ui['accent'])
+
+    def open_graph(self):
+        self._restore_terminal_fullscreen()
+        panel = self.terminal_right
+        panel.set_no_show_all(False)
+        panel.show_all()
+        panel.add_graph()
+        if not panel.has_graph():
+            return None
+        view = panel.graph_views()[0]
+        view.show_global()
+        view.grab_focus()
+        return view
+
+    def open_local_graph(self):
+        path = self.editor.current_path()
+        if not path:
+            self.notify('Open a file to show its local graph.')
+            return None
+        view = self.open_graph()
+        if view is not None:
+            view.show_local(path, 1)
+        return view
+
+    def rebuild_graph(self):
+        for view in self._graph_views():
+            view.refresh_file(self.root)
+
+    def reset_graph_camera(self):
+        for view in self._graph_views():
+            if view.last_data is not None:
+                # The page recentres a full replacement; clear first to reset positions.
+                view.post('setData', {'nodes': [], 'links': []})
+                view.post('setSettings', {'scale': 1})
+                view.post('setData', view.last_data)
+
+    def _graph_open_file(self, _view, path, line=1):
+        if not os.path.isfile(path):
+            self.notify('Cannot open graph target: ' + path)
+            return
+        self._restore_terminal_fullscreen()
+        self.editor.open_file_at(path, max(0, line - 1))
+        self.explorer.set_current_file(path)
+        self.editor.focus_current()
+
+    def _graph_action(self, view, message):
+        kind = message['type']
+        if kind == 'search' and isinstance(message.get('query'), str):
+            self.search_in_files()
+            self.explorer.focus_search(message['query'])
+        elif kind == 'create':
+            name = message.get('name')
+            if not isinstance(name, str) or not name.strip() or '/' in name or '\\' in name or '..' in name:
+                self.notify('Graph note names must be simple file names.')
+                return
+            name = name if name.lower().endswith('.md') else name + '.md'
+            try:
+                path = fsops.create_file(self.root, name)
+            except fsops.FsOpError as error:
+                self.notify(str(error))
+                return
+            self.explorer.refresh()
+            self._graph_paths_changed(None, path)
+            self._graph_open_file(view, path)
+        elif kind == 'context' and isinstance(message.get('path'), str):
+            path = os.path.abspath(os.path.join(self.root, message['path']))
+            if os.path.commonpath((self.root, path)) != self.root:
+                return
+            action = message.get('action')
+            if action == 'copy-path':
+                Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).set_text(path, -1)
+            elif action == 'reveal':
+                self._restore_terminal_fullscreen()
+                if not self.explorer.get_visible():
+                    self._toggle(self.explorer)
+                self.explorer.set_current_file(path)
+            elif action in ('open-new-tab', 'open-right'):
+                self._graph_open_file(view, path)
+
+    def _graph_error(self, _view, message):
+        if message in self._graph_errors:
+            return
+        print('Graph view: ' + message, file=sys.stderr)
+        if not self._graph_errors:
+            self.notify('Graph view encountered an error. See the application log.')
+        self._graph_errors.add(message)
+
+    @staticmethod
+    def _graph_indexed(path):
+        return path and Path(path).suffix.lower() in (
+            set(SEMANTICS['note_extensions']) | SEMANTICS['code_extensions'])
+
+    def _graph_text_changed(self, tab):
+        if tab in self._graph_timers:
+            GLib.source_remove(self._graph_timers.pop(tab))
+        if self._graph_views() and not tab.deleted and self._graph_indexed(tab.path):
+            self._graph_timers[tab] = GLib.timeout_add(400, self._graph_send_text, tab)
+
+    def _graph_send_text(self, tab):
+        self._graph_timers.pop(tab, None)
+        if tab in self.editor.tabs and not tab.deleted:
+            text = self.editor.buffer_text(tab.path)
+            for view in self._graph_views():
+                view.set_text(tab.path, text)
+        return GLib.SOURCE_REMOVE
+
+    def _graph_saved(self, tab):
+        if tab in self._graph_timers:
+            GLib.source_remove(self._graph_timers.pop(tab))
+        if tab.path and not tab.deleted:
+            self._graph_paths_changed(None, tab.path)
+
+    def _graph_tab_closed(self, _notebook, page, _number):
+        tab = self._graph_tabs.pop(page, None)
+        if tab is not None:
+            self._graph_saved(tab)
+
+    def _graph_paths_changed(self, _explorer, *paths):
+        for tab in self.editor.tabs:
+            if tab.deleted and tab in self._graph_timers:
+                GLib.source_remove(self._graph_timers.pop(tab))
+        for view in self._graph_views():
+            for path in paths:
+                view.refresh_file(path)
+            # Directory removals/renames need to remove old descendants as well.
+            view.refresh_file(self.root)
+
+    def _graph_tree_changed(self, *_args):
+        if self._graph_views() and self._graph_refresh_timer is None:
+            self._graph_refresh_timer = GLib.timeout_add(80, self._graph_tree_refresh)
+
+    def _graph_tree_refresh(self):
+        self._graph_refresh_timer = None
+        self.rebuild_graph()
+        return GLib.SOURCE_REMOVE
+
+    def _graph_cleanup(self, _window):
+        for source in self._graph_timers.values():
+            GLib.source_remove(source)
+        self._graph_timers.clear()
+        if self._graph_refresh_timer is not None:
+            GLib.source_remove(self._graph_refresh_timer)
+            self._graph_refresh_timer = None
 
     # Settings -------------------------------------------------------------------
 
@@ -313,12 +514,16 @@ class MainWindow(Gtk.ApplicationWindow):
         terminals = (self.terminal_bottom, self.terminal_right)
         if key in ("accent", "ui_font", "editor_font"):
             self._apply_style()
+            if key == "accent":
+                self._graph_theme()
             if key == "editor_font":
                 # Re-measure gutter width and tab stops for the new family.
                 for tab in self.editor.tabs:
                     tab.set_font_size(self.editor.font_size)
         elif key == "reduce_motion":
             motion.set_reduce_motion(value)
+            for view in self._graph_views():
+                view.post("setSettings", {"reduceMotion": value})
         elif key == "line_numbers":
             self.editor.set_line_numbers(value)
         elif key == "highlight_line":
@@ -363,6 +568,7 @@ class MainWindow(Gtk.ApplicationWindow):
         for panel in (self.terminal_bottom, self.terminal_right):
             panel.apply_palette(colors.foreground, colors.background, colors.ansi, colors.cursor)
         self.theme = theme
+        self._graph_theme()
         if self._settings_dialog is not None:
             self._settings_dialog.set_theme_id(theme.id)
         if persist and not settings.set_theme_id(theme.id):
@@ -454,7 +660,7 @@ class MainWindow(Gtk.ApplicationWindow):
     def _show_terminal(self, panel: TerminalPanel) -> None:
         panel.set_no_show_all(False)
         panel.show_all()
-        if panel.terminal_count() == 0:
+        if panel.pane_count() == 0:
             panel.new_terminal()
         panel.focus_terminal()
 
@@ -477,7 +683,7 @@ class MainWindow(Gtk.ApplicationWindow):
                  and focus.is_ancestor(self.terminal_right) else self.terminal_bottom)
         self._restore_terminal_fullscreen()
         # Opening an empty dock already creates its initial terminal.
-        empty = panel.terminal_count() == 0
+        empty = panel.pane_count() == 0
         self._show_terminal(panel)
         if not empty:
             panel.new_terminal()
@@ -521,6 +727,9 @@ class MainWindow(Gtk.ApplicationWindow):
         self.explorer.set_root(self.root)
         self.terminal_bottom.set_cwd(self.root)
         self.terminal_right.set_cwd(self.root)
+        for view in self._graph_views():
+            view.set_root(self.root)
+            view.set_active_file(self.editor.current_path())
         self._update_title()
 
     def open_folder(self) -> None:
@@ -539,14 +748,18 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def _terminal_focused(self) -> bool:
         focus = self.get_focus()
-        return focus is not None and any(focus.is_ancestor(panel) for panel in
-                                         (self.terminal_bottom, self.terminal_right))
+        return focus is not None and any(
+            pane.terminal is not None and (focus is pane.terminal or focus.is_ancestor(pane.terminal))
+            for panel in (self.terminal_bottom, self.terminal_right) for pane in panel._panes)
 
     def do_key_press_event(self, event: Gdk.EventKey) -> bool:
         focus = self.get_focus()
         modifiers = event.state & Gtk.accelerator_get_default_mod_mask()
         if modifiers == _CTRL_SHIFT and event.keyval in (Gdk.KEY_p, Gdk.KEY_P):
             self.open_command_palette()
+            return True
+        if modifiers == _CTRL and event.keyval == Gdk.KEY_comma:
+            self.open_settings()
             return True
         # Ctrl+P/Ctrl+O/F1 stay with a focused terminal (readline, vim, mc, htop).
         if not self._terminal_focused():
@@ -571,8 +784,7 @@ class MainWindow(Gtk.ApplicationWindow):
             return True
         if (modifiers == Gdk.ModifierType.CONTROL_MASK
                 and event.keyval == Gdk.KEY_s):
-            if focus is not None and any(focus.is_ancestor(panel) for panel in
-                                         (self.terminal_bottom, self.terminal_right)):
+            if self._terminal_focused():
                 # Preserve the terminal's XOFF binding, bypassing the Save accelerator.
                 return self.propagate_key_event(event)
             # A TextView's input method can consume this key without saving.

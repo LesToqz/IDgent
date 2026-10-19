@@ -266,6 +266,22 @@ class GraphSettingsTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             settings.get_value('graph')
 
+    def test_graph_group_color_forms_and_close_roundtrip(self):
+        groups = [{'query': 'tag:a', 'color': {'a': 1, 'rgb': 16711680}},
+                  {'query': 'path:b', 'color': '#ABCDEF'}]
+        self.assertTrue(settings.set_graph({'colorGroups': groups, 'close': True}))
+        expected = [{'query': 'tag:a', 'color': {'a': 1, 'rgb': 16711680}},
+                    {'query': 'path:b', 'color': '#abcdef'}]
+        self.assertEqual(settings.get_graph()['colorGroups'], expected)
+        self.assertTrue(settings.get_graph()['close'])
+        groups[0]['color']['rgb'] = 0
+        self.assertEqual(settings.get_graph()['colorGroups'], expected)
+        for color in ({'a': float('nan'), 'rgb': 1}, {'a': 1, 'rgb': True},
+                      {'a': -1, 'rgb': 1}, {'a': 1, 'rgb': 0x1000000},
+                      {'rgb': 1}, {'a': '1', 'rgb': 1}):
+            self.assertEqual(settings.normalize_graph({'colorGroups': [
+                {'query': 'x', 'color': color}]})['colorGroups'], [])
+
     def test_graph_survives_theme_and_font_save(self):
         self.assertTrue(settings.set_graph({'showTags': True, 'scale': 2}))
         graph = settings.get_graph()
