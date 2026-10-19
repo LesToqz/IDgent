@@ -131,6 +131,10 @@ class MainWindow(Gtk.ApplicationWindow):
 
         self.titlebar = TitleBar(self._build_menu())
         self.titlebar.connect("settings-requested", lambda _: self.open_settings())
+        self.titlebar.connect("dock-toggle-requested", lambda _: self.toggle_terminal_right())
+        self.terminal_right.connect("notify::visible", lambda panel, _:
+                                    self.titlebar.set_dock_active(panel.get_visible()))
+        self.titlebar.set_dock_active(self.terminal_right.get_visible())
         self.set_titlebar(self.titlebar)
         layout = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         layout.pack_start(self.sidebar, True, True, 0)
@@ -179,8 +183,6 @@ class MainWindow(Gtk.ApplicationWindow):
         item(view_menu, "View", "Command Palette…", self.open_command_palette,
              "<Control><Shift>p")
         item(view_menu, "View", "Terminal Below", self.toggle_terminal_bottom, "<Control>grave")
-        item(view_menu, "View", "Terminal on Right", self.toggle_terminal_right,
-             "<Control><Alt>grave")
         item(view_menu, "View", "Split Terminal", self.split_terminal, "<Control><Shift>5")
         item(view_menu, "View", "Toggle Terminal Fullscreen", self.toggle_terminal_fullscreen,
              "<Control><Shift>F11")
@@ -192,6 +194,9 @@ class MainWindow(Gtk.ApplicationWindow):
              "<Control><Shift><Alt>g")
         self._commands[-1] = Command("Graph view: Open local graph", self.open_local_graph,
                                      ("Ctrl+Shift+Alt+G",))
+        key, modifiers = Gtk.accelerator_parse("<Control><Alt>grave")
+        accelerators.connect(key, modifiers, Gtk.AccelFlags.VISIBLE,
+                             lambda *_: (self.toggle_terminal_right(), True)[1])
         key, modifiers = Gtk.accelerator_parse("<Control>comma")
         accelerators.connect(key, modifiers, Gtk.AccelFlags.VISIBLE,
                              lambda *_: (self.open_settings(), True)[1])
@@ -203,6 +208,7 @@ class MainWindow(Gtk.ApplicationWindow):
     def _add_commands(self) -> None:
         """Palette-only commands (after the menu actions, in this order)."""
         for label, callback, keys in (
+            ("View: Terminal on Right", self.toggle_terminal_right, ("Ctrl+Alt+`",)),
             ("Settings: Open settings", self.open_settings, ("Ctrl+,",)),
             ("Settings: Show hotkeys", lambda: self.open_settings("hotkeys"), ("F1",)),
             ("Graph view: Rebuild graph", self.rebuild_graph, ()),

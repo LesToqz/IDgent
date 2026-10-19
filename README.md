@@ -34,7 +34,7 @@ one accent colour, rounded tabs, instant hover/selection feedback and motion onl
 where something moves (sliding toggles, notices, terminal panes).
 
 One top bar contains File/View menus, the title **IDgent**, a settings cog and the
-window buttons. The explorer sidebar starts 300 px wide.
+compact window buttons; the right-dock toggle sits beside the cog (Ctrl+Alt+`). The explorer sidebar starts 300 px wide.
 The explorer on the left supports searching (see Search in Files), creating
 files/folders, renaming, deleting and refreshing. Renames retarget open files; deletions mark affected tabs deleted.
 File → Open Folder changes the explorer root and the directory for new shells;
