@@ -522,3 +522,89 @@ class TerminalPanelTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class GraphPaneTest(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.window = Gtk.Window()
+        self.window.set_default_size(800, 400)
+        self.panel = TerminalPanel(self.directory.name, autostart=False)
+        self.panel.ANIMATION_MS = 0
+        self.window.add(self.panel)
+        self.window.show_all()
+        self.addCleanup(self.window.destroy)
+
+    def test_graph_lifecycle_numbering_focus_and_terminal_settings(self):
+        self.assertTrue(self.panel.new_terminal())
+        terminal1 = self.panel._panes[0]
+        graph = Gtk.Entry()
+        self.assertTrue(self.panel.add_graph(graph))
+        graph_pane = self.panel._panes[1]
+        self.assertEqual(graph_pane.kind, 'graph')
+        self.assertIsNone(graph_pane.terminal)
+        self.assertIs(graph_pane.frame, graph_pane.page)
+        self.assertNotIsInstance(graph_pane.frame, ResizeGate)
+        self.assertTrue(self.panel.new_terminal())
+        terminal2 = self.panel._panes[2]
+        self.assertEqual(self.panel.header_labels(), ['bash1', 'Graph view', 'bash2'])
+        self.assertEqual((self.panel.pane_count(), self.panel.terminal_count(),
+                          self.panel.graph_count()), (3, 2, 1))
+        self.assertTrue(self.panel.has_graph())
+        self.assertEqual(self.panel.graph_views(), [graph])
+        self.assertTrue(self.panel.is_full())
+        self.panel.set_font_size(13)
+        self.panel.apply_palette('#ffffff', '#111111', ['#111111'] * 16)
+        self.panel.set_cursor_shape('ibeam')
+        self.panel.set_cursor_blink(False)
+        self.panel.set_scrollback(2000)
+        self.assertEqual(terminal1.terminal.get_font().to_string(), 'Monospace 13')
+        self.assertEqual(terminal2.terminal.get_scrollback_lines(), 2000)
+        graph_pane.header.label_button.clicked()
+        self.assertTrue(poll(lambda: self.window.get_focus() == graph))
+        graph_pane.header.fullscreen_button.clicked()
+        self.assertIs(self.panel._maximized, graph_pane)
+        self.assertFalse(terminal1.frame.get_visible())
+        self.panel.restore()
+        self.assertTrue(terminal1.frame.get_visible())
+        destroyed = []
+        graph.connect('destroy', lambda _v: destroyed.append(True))
+        graph_pane.header.delete_button.clicked()
+        self.assertEqual(destroyed, [True])
+        self.assertEqual(self.panel.header_labels(), ['bash1', 'bash2'])
+        self.assertFalse(self.panel.has_graph())
+
+    def test_chooser_factory_is_lazy_and_duplicate_graph_focuses_without_limit(self):
+        calls, limits = [], []
+        self.panel.graph_factory = lambda: calls.append(True) or Gtk.Entry()
+        self.panel.connect('limit-reached', lambda _p: limits.append(True))
+        self.panel.add_button.choose('graph')
+        graph = self.panel.graph_views()[0]
+        self.panel.add_button.choose('terminal')
+        self.panel.add_button.choose('terminal')
+        self.panel.add_button.choose('graph')
+        self.assertEqual(calls, [True])
+        self.assertEqual(limits, [])
+        self.assertFalse(self.panel.toast.get_visible())
+        self.assertTrue(poll(lambda: self.window.get_focus() == graph))
+        self.panel.add_button.choose('terminal')
+        self.assertEqual(limits, [True])
+        self.assertEqual(self.panel.toast.get_text(), 'Cannot add (limit 3)')
+        self.panel._close_pane(self.panel._panes[0])
+        self.panel.add_button.choose('terminal')
+        self.panel.add_button.choose('graph')
+        self.assertEqual(calls, [True])
+        self.assertEqual(limits, [True, True])
+
+    def test_last_graph_close_and_destroyed_reject(self):
+        events = []
+        self.panel.connect('last-closed', lambda _p: events.append(True))
+        self.assertTrue(self.panel.add_graph(Gtk.Entry()))
+        self.panel.close_current()
+        self.assertEqual(events, [True])
+        self.assertEqual(self.panel.pane_count(), 0)
+        self.panel.close_current()
+        self.assertEqual(events, [True])
+        self.panel.destroy()
+        self.assertFalse(self.panel.add_graph())

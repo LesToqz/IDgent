@@ -24,7 +24,7 @@ from idgent.terminal_bar import (GLYPH_OPACITY, AddButton, LimitToast, PaneHeade
                                  cancel_fade, fade)
 from idgent.themes import THEMES, _contrast, get_theme
 
-LIMIT_TEXT = "Cannot add terminal (limit 3)"
+LIMIT_TEXT = "Cannot add (limit 3)"
 
 
 def setUpModule() -> None:
@@ -167,7 +167,7 @@ class HeaderTest(unittest.TestCase):
         button = AddButton()
         context = button.get_style_context()
         self.assertEqual(button.icon_name, "list-add-symbolic")
-        self.assertEqual(button.get_tooltip_text(), "New terminal")
+        self.assertEqual(button.get_tooltip_text(), "New pane")
         self.assertEqual((button.get_halign(), button.get_valign()),
                          (Gtk.Align.END, Gtk.Align.START))
         button.set_full(True)
@@ -175,7 +175,7 @@ class HeaderTest(unittest.TestCase):
         self.assertEqual(button.get_tooltip_text(), LIMIT_TEXT)
         button.set_full(False)
         self.assertFalse(context.has_class("limit"))
-        self.assertEqual(button.get_tooltip_text(), "New terminal")
+        self.assertEqual(button.get_tooltip_text(), "New pane")
         button.destroy()
 
 
@@ -691,11 +691,11 @@ class PanelBarMixin(PanelFixture):
             self.assertEqual([p.header.get_style_context().has_class("corner")
                               for p in panel._panes].count(True), 1)
             if count == 2:
-                panel.add_button.clicked()
+                panel.add_button.choose("terminal")
                 self.track(panel._active)
                 self.assertEqual(panel.terminal_count(), 3)
                 self.settle()
-        panel.add_button.clicked()
+        panel.add_button.choose("terminal")
         self.assertEqual(panel.terminal_count(), 3)
 
     def test_corner_follows_pane_changes_and_maximize(self):
@@ -1032,3 +1032,51 @@ class StackedAnimationTest(AnimationMixin, unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PaneChooserTest(unittest.TestCase):
+    def setUp(self):
+        self.window = Gtk.Window()
+        self.button = AddButton()
+        self.window.add(self.button)
+        self.window.show_all()
+        self.addCleanup(self.window.destroy)
+        self.events = []
+        self.button.connect('choose', lambda _b, kind: self.events.append(kind))
+
+    def key(self, value):
+        event = Gdk.Event.new(Gdk.EventType.KEY_PRESS)
+        event.keyval = value
+        return self.button._chooser_key(self.button.popover, event)
+
+    def test_click_opens_without_choosing_and_keyboard_selects(self):
+        self.button.clicked()
+        self.assertTrue(self.button.popover.get_visible())
+        self.assertEqual(self.events, [])
+        self.assertEqual(self.button.choices.get_selected_row().kind, 'terminal')
+        for key, expected in ((Gdk.KEY_Down, 'graph'), (Gdk.KEY_Up, 'terminal'),
+                              (Gdk.KEY_End, 'graph'), (Gdk.KEY_Home, 'terminal')):
+            self.assertTrue(self.key(key))
+            self.assertEqual(self.button.choices.get_selected_row().kind, expected)
+        self.key(Gdk.KEY_End)
+        self.assertTrue(self.key(Gdk.KEY_Return))
+        self.assertEqual(self.events, ['graph'])
+        self.assertTrue(poll(lambda: not self.button.popover.get_visible()))
+        self.button.clicked()
+        self.assertEqual(self.button.choices.get_selected_row().kind, 'terminal')
+        self.key(Gdk.KEY_space)
+        self.assertEqual(self.events, ['graph', 'terminal'])
+
+    def test_mouse_activation_escape_and_reduced_motion(self):
+        with patch.object(motion, 'animations_enabled', return_value=False):
+            self.button.clicked()
+            self.assertFalse(self.button.popover.get_transitions_enabled())
+            self.button.choices.emit('row-activated', self.button.choices.get_row_at_index(1))
+            self.assertEqual(self.events, ['graph'])
+            self.assertFalse(self.button.popover.get_visible())
+            self.button.clicked()
+            self.assertTrue(self.key(Gdk.KEY_Escape))
+            self.assertFalse(self.button.popover.get_visible())
+            self.assertTrue(self.button.is_focus())
+        theme = Gtk.IconTheme.get_default()
+        self.assertTrue(theme.has_icon(self.button.graph_icon))

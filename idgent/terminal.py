@@ -1,6 +1,7 @@
 """VTE terminals with a header above each one, side by side or stacked."""
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 import os
 import signal
@@ -43,12 +44,14 @@ def safe_cwd(path: str) -> str:
 class _Pane:
     # page = [inner, divider]; inner = [header, content]; content = [terminal, scrollbar, gutter].
     page: Gtk.Box
-    terminal: Vte.Terminal
+    terminal: Vte.Terminal | None
     cancellable: Gio.Cancellable
     header: PaneHeader
     content: Gtk.Box
     divider: Gtk.Separator
     frame: Gtk.Widget
+    kind: str = "terminal"
+    view: Gtk.Widget | None = None
     pid: int | None = None
     closed: bool = False
     # Closing panes are already out of TerminalPanel._panes but still on screen.
@@ -100,6 +103,7 @@ class TerminalPanel(Gtk.Box):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.font_size = font_size
         self._cwd = cwd
+        self.graph_factory: Callable[[], Gtk.Widget] | None = None
         self.stacked = stacked
         self._destroyed = False
         self._panes: list[_Pane] = []
@@ -119,7 +123,7 @@ class TerminalPanel(Gtk.Box):
         self.overlay = Gtk.Overlay()
         self.overlay.add(self._body)
         self.add_button = AddButton(MAX_TERMINALS)
-        self.add_button.connect("clicked", lambda _b: self.new_terminal())
+        self.add_button.connect("choose", self._choose_pane)
         self.toast = LimitToast(MAX_TERMINALS)
         self.toast.set_margin_top(self.HEADER_HEIGHT + 6)
         self.toast.set_margin_end(10)
@@ -178,7 +182,25 @@ class TerminalPanel(Gtk.Box):
 
     def terminal_count(self) -> int:
         """Live terminals; panes playing their exit animation do not count."""
+        return sum(pane.kind == "terminal" for pane in self._panes)
+
+    def pane_count(self) -> int:
         return len(self._panes)
+
+    def graph_count(self) -> int:
+        return sum(pane.kind == "graph" for pane in self._panes)
+
+    def has_graph(self) -> bool:
+        return self.graph_count() > 0
+
+    def graph_views(self) -> list[Gtk.Widget]:
+        return [pane.view for pane in self._panes if pane.kind == "graph"]
+
+    def _choose_pane(self, _button, kind: str) -> None:
+        if kind == "terminal":
+            self.new_terminal()
+        elif kind == "graph":
+            self.add_graph()
 
     def is_full(self) -> bool:
         return len(self._panes) >= MAX_TERMINALS
@@ -201,7 +223,10 @@ class TerminalPanel(Gtk.Box):
 
     def _update_layout(self) -> None:
         """Renumber headers, move the "+" padding to the corner pane, fix dividers."""
-        for position, pane in enumerate(self._panes, 1):
+        position = 0
+        for pane in self._panes:
+            if pane.kind == "terminal":
+                position += 1
             pane.header.set_number(position)
         shown = [pane for pane in self._pages() if pane.frame.get_visible()]
         corner = self._maximized or (shown[0] if self.stacked else shown[-1]) if shown else None
@@ -286,31 +311,12 @@ class TerminalPanel(Gtk.Box):
             frame.add(page)
         pane = _Pane(page, terminal, Gio.Cancellable(), header, content, divider, frame,
                      id=self._next_id)
-        self._next_id += 1
-        header.connect("focus-requested", lambda _h: self._header_focus(pane))
-        header.connect("fullscreen-requested", lambda _h: self.toggle_maximize(pane))
-        header.connect("delete-requested", lambda _h: self._close_pane(pane))
-        animated = self._animated()
-        active = self._current_pane()
-        index = self._panes.index(active) + 1 if active else len(self._panes)
-        children = self._body.get_children()
-        position = children.index(self._panes[index].frame) if index < len(self._panes) else len(children)
-        self._panes.insert(index, pane)
-        self._body.pack_start(frame, True, True, 0)
-        self._body.reorder_child(frame, position)
         terminal.connect("child-exited", self._child_exited, pane)
         terminal.connect("key-press-event", self._key_press)
         terminal.connect("button-press-event", self._button_press)
         terminal.connect("focus-in-event", self._focus_changed, pane, True)
         terminal.connect("focus-out-event", self._focus_changed, pane, False)
-        self._set_active(pane)
-        if animated:
-            frame.set_opacity(0.0)
-        frame.show_all()
-        self._update_layout()
-        self._commit_layout()
-        if animated:
-            fade(frame, 0.0, 1.0, self.ANIMATION_MS)
+        self._insert_pane(pane)
         env = dict(os.environ, TERM="xterm-256color", COLORTERM="truecolor")
         terminal.spawn_async(
             Vte.PtyFlags.DEFAULT, safe_cwd(self._cwd), [shell, "-i"],
@@ -322,11 +328,84 @@ class TerminalPanel(Gtk.Box):
         GLib.idle_add(self._focus_idle, pane)
         return True
 
+    def add_graph(self, view: Gtk.Widget | None = None) -> bool:
+        """Add one graph to this dock, or focus its existing graph without a toast."""
+        if self._destroyed:
+            return False
+        existing = next((p for p in self._panes if p.kind == "graph"), None)
+        if existing is not None:
+            self._header_focus(existing)
+            return False
+        if self.is_full():
+            self.toast.popup()
+            self.emit("limit-reached")
+            return False
+        if view is None:
+            if self.graph_factory is not None:
+                view = self.graph_factory()
+            else:
+                from idgent.graphview import GraphView
+                view = GraphView(self._cwd)
+        if self._maximized is not None:
+            self.restore()
+        header = PaneHeader(kind="graph")
+        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        content.pack_start(view, True, True, 0)
+        inner = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        inner.pack_start(header, False, False, 0)
+        inner.pack_start(content, True, True, 0)
+        divider = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL if self.stacked
+                                else Gtk.Orientation.VERTICAL)
+        divider.get_style_context().add_class("idgent-terminal-sep")
+        page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL if self.stacked
+                       else Gtk.Orientation.HORIZONTAL)
+        page.pack_start(inner, True, True, 0)
+        page.pack_start(divider, False, False, 0)
+        pane = _Pane(page, None, Gio.Cancellable(), header, content, divider, page,
+                     kind="graph", view=view, id=self._next_id)
+        view.connect("focus-in-event", self._focus_changed, pane, True)
+        view.connect("focus-out-event", self._focus_changed, pane, False)
+        # Focus inside composite views (e.g. WebView in GraphView) belongs to this pane.
+        content.connect("set-focus-child", self._graph_focus_child, pane)
+        self._insert_pane(pane)
+        GLib.idle_add(self._focus_idle, pane)
+        return True
+
+    def _graph_focus_child(self, _content, child, pane):
+        pane.header.set_focused(child is not None)
+        if child is not None and not pane.closed:
+            self._set_active(pane)
+
+    def _insert_pane(self, pane: _Pane) -> None:
+        self._next_id += 1
+        header, frame = pane.header, pane.frame
+        header.connect("focus-requested", lambda _h: self._header_focus(pane))
+        header.connect("fullscreen-requested", lambda _h: self.toggle_maximize(pane))
+        header.connect("delete-requested", lambda _h: self._close_pane(pane))
+        animated = self._animated()
+        active = self._current_pane()
+        index = self._panes.index(active) + 1 if active else len(self._panes)
+        children = self._body.get_children()
+        position = children.index(self._panes[index].frame) if index < len(self._panes) else len(children)
+        self._panes.insert(index, pane)
+        self._body.pack_start(frame, True, True, 0)
+        self._body.reorder_child(frame, position)
+        self._set_active(pane)
+        if animated:
+            frame.set_opacity(0.0)
+        frame.show_all()
+        self._update_layout()
+        self._commit_layout()
+        if animated:
+            fade(frame, 0.0, 1.0, self.ANIMATION_MS)
+
     def set_font_size(self, size: int) -> None:
         """Set the base font for existing and future panes, retaining zoom."""
         self.font_size = size
         for pane in self._panes + self._closing:
             terminal = pane.terminal
+            if terminal is None:
+                continue
             # Font metrics change the PTY grid even at the same pixel allocation.
             # Use the gate's non-reflow policy for this discrete layout change too.
             rewrap = terminal.get_property("rewrap-on-resize")
@@ -346,7 +425,8 @@ class TerminalPanel(Gtk.Box):
         """Use these colours for every terminal, existing and future."""
         self._palette = (foreground, background, list(ansi), cursor)
         for pane in self._panes + self._closing:
-            self._apply_colors(pane.terminal)
+            if pane.terminal is not None:
+                self._apply_colors(pane.terminal)
             if isinstance(pane.frame, ResizeGate):
                 pane.frame.set_background(background)
 
@@ -356,20 +436,23 @@ class TerminalPanel(Gtk.Box):
             raise ValueError(f"unknown cursor shape: {shape!r}")
         self._cursor_shape = shape
         for pane in self._panes + self._closing:
-            pane.terminal.set_cursor_shape(CURSOR_SHAPES[shape])
+            if pane.terminal is not None:
+                pane.terminal.set_cursor_shape(CURSOR_SHAPES[shape])
 
     def set_cursor_blink(self, blink: bool) -> None:
         """Make the cursor of existing and future panes blink, or keep it steady."""
         self._cursor_blink = bool(blink)
         for pane in self._panes + self._closing:
-            self._apply_blink(pane.terminal)
+            if pane.terminal is not None:
+                self._apply_blink(pane.terminal)
 
     def set_scrollback(self, lines: int) -> None:
         """Keep `lines` of history (clamped to SCROLLBACK_RANGE) in existing and future panes."""
         low, high = SCROLLBACK_RANGE
         self._scrollback = max(low, min(high, int(lines)))
         for pane in self._panes + self._closing:
-            pane.terminal.set_scrollback_lines(self._scrollback)
+            if pane.terminal is not None:
+                pane.terminal.set_scrollback_lines(self._scrollback)
 
     def _apply_blink(self, terminal: Vte.Terminal) -> None:
         terminal.set_cursor_blink_mode(Vte.CursorBlinkMode.ON if self._cursor_blink
@@ -420,7 +503,9 @@ class TerminalPanel(Gtk.Box):
         # get_focus also works before the toplevel receives focus-in events.
         toplevel = self.get_toplevel()
         focus = toplevel.get_focus() if isinstance(toplevel, Gtk.Window) else None
-        return next((pane for pane in self._panes if pane.terminal is focus),
+        return next((pane for pane in self._panes
+                     if focus is not None and (focus is (pane.terminal or pane.view)
+                         or focus.is_ancestor(pane.content))),
                     self._active if self._active in self._panes else None)
 
     def _focus_changed(self, terminal, _event, pane, focused):
@@ -439,11 +524,13 @@ class TerminalPanel(Gtk.Box):
             return
         if pane is self._maximized:
             self.restore()
-        refocus = pane.terminal.is_focus()
+        refocus = self._current_pane() is pane
         self._set_active(self._current_pane())
         pane.closed = True
         pane.cancellable.cancel()
         _hangup(pane)
+        if pane.view is not None and hasattr(pane.view, "shutdown"):
+            pane.view.shutdown()
         index = self._panes.index(pane)
         self._panes.remove(pane)
         if self._active is pane:
@@ -532,11 +619,11 @@ class TerminalPanel(Gtk.Box):
 
     def focus_terminal(self) -> None:
         if not self._destroyed and self._active in self._panes:
-            self._active.terminal.grab_focus()
+            (self._active.terminal or self._active.view).grab_focus()
 
     def _focus_idle(self, pane: _Pane | None = None) -> bool:
         if pane is not None:
-            if pane not in self._panes:
+            if pane not in self._panes or pane is not self._active:
                 return GLib.SOURCE_REMOVE
             self._set_active(pane)
         self.focus_terminal()
@@ -609,6 +696,8 @@ class TerminalPanel(Gtk.Box):
             pane.closed = True
             pane.cancellable.cancel()
             _hangup(pane)
+            if pane.view is not None and hasattr(pane.view, "shutdown"):
+                pane.view.shutdown()
             if pane.timer is not None:
                 GLib.source_remove(pane.timer)
                 pane.timer = None
