@@ -373,7 +373,7 @@ class HostTest(unittest.TestCase):
         self.assertEqual(self.js('1+1'), 2)
         self.assertEqual(self.errors, [])
 
-    def test_set_root_clears_selection_monitors_and_rejects_old_collection(self):
+    def test_set_root_clears_selection_monitors_and_data(self):
         view = self.make()
         self.ready(view)
         old_monitors = list(view._monitors.values())
@@ -390,7 +390,30 @@ class HostTest(unittest.TestCase):
         plain.mkdir()
         view.set_root(str(plain))
         self.assertTrue(poll(lambda: view._state[0] == 'not-a-repo'))
+        self.assertEqual(view._state[1], 'Open a folder containing a Git repository.')
         self.assertIsNone(view.last_data)
+        self.assertEqual(self.errors, [])
+
+    def test_set_root_discards_collection_from_previous_repo(self):
+        view = self.make()
+        self.ready(view)
+        other = build_linear(self.root / 'other', 4)
+        original = gitviews.gitlog.collect_graph
+        entered, release = threading.Event(), threading.Event()
+        def collect(root):
+            if root == str(self.repo.path):
+                entered.set()
+                release.wait(3)
+            return original(root)
+        with patch.object(gitviews.gitlog, 'collect_graph', side_effect=collect):
+            view.refresh()
+            self.assertTrue(entered.wait(2))
+            view.set_root(str(other.path))
+            release.set()
+            self.assertTrue(poll(lambda: view.last_data is not None and not view._worker_running))
+        self.assertEqual(view.last_data['repo']['root'], str(other.path))
+        self.assertEqual(len(view.last_data['commits']), 4)
+        self.assertEqual(self.js("calls.filter(c=>c[0]==='setData').at(-1)[1].repo.root"), str(other.path))
         self.assertEqual(self.errors, [])
 
     def test_commit_font_size_uses_live_editor_size(self):

@@ -401,6 +401,15 @@ class GitGraphView(_WebHost):
     def set_theme(self, ui: dict, accent: str):
         self._apply_theme(git_colors(ui, accent))
 
+    def _set_state(self, kind, message=''):
+        if message == kind:
+            message = {
+                'empty': 'Make your first commit to start the timeline.',
+                'not-a-repo': 'Open a folder containing a Git repository.',
+                'git-missing': 'Install Git to explore repository history.',
+            }.get(kind, message)
+        super()._set_state(kind, message)
+
     def set_root(self, root: str):
         """Forget the previous repository, invalidating any in-flight collection."""
         if self._closed:

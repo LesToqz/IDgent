@@ -239,10 +239,10 @@ class MainWindow(Gtk.ApplicationWindow):
             ("Git graph: Close commit tabs", self.close_commit_tabs, ()),
             ("Theme: Next theme", self.next_theme, ("Ctrl+Alt+T",)),
             ("Editor: Toggle Markdown preview", self.toggle_markdown_view, ("Ctrl+Shift+V",)),
-            ("Editor: Zoom in", lambda: self.editor.zoom(1), ("Ctrl+=",)),
-            ("Editor: Zoom out", lambda: self.editor.zoom(-1), ("Ctrl+-",)),
+            ("Editor: Zoom in", lambda: self._editor_zoom(1), ("Ctrl+=",)),
+            ("Editor: Zoom out", lambda: self._editor_zoom(-1), ("Ctrl+-",)),
             ("Editor: Reset zoom",
-             lambda: self.editor.set_font_size(self.editor.default_font_size), ("Ctrl+0",)),
+             self._editor_zoom, ("Ctrl+0",)),
         ):
             self._commands.append(Command(label, callback, keys))
 
@@ -511,6 +511,19 @@ class MainWindow(Gtk.ApplicationWindow):
         selected = self._selected_commit()
         for view in self._gitgraph_views():
             view.select(selected)
+        self._git_font_size()
+
+    def _git_font_size(self):
+        for view in self._commit_views.values():
+            if (view._theme or {}).get('size') != self.editor.font_size:
+                view.set_font_size(self.editor.font_size)
+
+    def _editor_zoom(self, step=None):
+        if step is None:
+            self.editor.set_font_size(self.editor.default_font_size)
+        else:
+            self.editor.zoom(step)
+        self._git_font_size()
 
     def _commit_tab_closed(self, _editor, key):
         self._commit_views.pop(key, None)
@@ -1027,7 +1040,9 @@ class MainWindow(Gtk.ApplicationWindow):
             # Let the focused editor handle its commands before menu accelerators.
             if self.propagate_key_event(event):
                 return True
-        return Gtk.ApplicationWindow.do_key_press_event(self, event)
+        handled = Gtk.ApplicationWindow.do_key_press_event(self, event)
+        self._git_font_size()
+        return handled
 
     def _ask_quit(self) -> int:
         dialog = Gtk.MessageDialog(transient_for=self, modal=True,
