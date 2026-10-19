@@ -197,10 +197,6 @@ class PolishTest(unittest.TestCase):
                 return found
 
 
-if __name__ == '__main__':
-    unittest.main()
-
-
 class TabsPolishTest(unittest.TestCase):
     """WP-6: allocated geometry, actual rendered pixels and editing behaviours."""
     def setUp(self):
@@ -297,6 +293,7 @@ class TabsPolishTest(unittest.TestCase):
     def test_tab_widths_shrink_ellipsis_and_reorder_middle_close(self):
         tabs = [self.open(f'long-name-{n}-' + 'file' * 12 + '.py') for n in range(8)]
         for tab in tabs:
+            self.assertTrue(self.panel.notebook.get_tab_reorderable(tab.page))
             self.assertGreaterEqual(tab.header.get_allocated_width() + 8, 120)
             self.assertLessEqual(tab.header.get_allocated_width() + 8, 320)
         self.panel.notebook.reorder_child(tabs[-1].page, 0)
@@ -349,6 +346,8 @@ class TabsPolishTest(unittest.TestCase):
         font = label.get_style_context().get_property('font', Gtk.StateFlags.NORMAL)
         self.assertAlmostEqual(font.get_size() / 1024 * Gdk.Screen.get_default().get_resolution() / 72, 12)
         self.assertEqual(label.get_style_context().get_color(Gtk.StateFlags.NORMAL).to_string(), 'rgb(102,102,102)')
+        active = next(label for label in labels if label.get_style_context().has_class('active'))
+        self.assertEqual(active.get_style_context().get_color(Gtk.StateFlags.NORMAL).to_string(), 'rgb(179,179,179)')
         self.assertTrue(tab.buffer.get_iter_at_line(2).has_tag(tab.chrome.line_tag))
         self.panel.set_line_numbers(False)
         self.panel.set_highlight_line(False)
@@ -439,6 +438,40 @@ class TabsPolishTest(unittest.TestCase):
         self.settle()
         self.assertEqual(new.md_preview_view.get_left_margin(), 32)
 
+    def test_readable_width_positions_rendered_paragraphs_on_toggle_and_resize(self):
+        text = 'body ' * 200 + '\n\n> quoted text\n\n```\n' + 'code ' * 100 + '\n```'
+        tab = self.open('width.md', text)
+        self.panel.set_markdown_mode('preview')
+        self.panel.set_md_readable_width(True)
+        self.settle()
+        view, buffer = tab.md_preview_view, tab.md_renderer.buffer
+
+        def assert_positions():
+            margin = view.get_left_margin()
+            rendered = editor._text(buffer)
+            for word, inset in (('body', 0), ('quoted', 22), ('code', 16)):
+                at = buffer.get_iter_at_offset(rendered.index(word))
+                self.assertEqual(view.get_iter_location(at).x, margin + inset)
+            # Check actual glyph positions, not just the TextView properties:
+            # paragraph TextTags take precedence over view-level margins.
+            at = buffer.get_start_iter()
+            while not at.is_end():
+                rect = view.get_iter_location(at)
+                self.assertLessEqual(rect.x + rect.width, view.get_allocated_width() - margin)
+                at.forward_char()
+
+        assert_positions()
+        self.window.resize(1200, 600)
+        self.settle()
+        assert_positions()
+        self.panel.set_font_size(18)
+        self.settle()
+        assert_positions()
+        self.panel.set_md_readable_width(False)
+        self.settle()
+        self.assertEqual(view.get_left_margin(), 32)
+        assert_positions()
+
     def test_markdown_icon_pixels_follow_active_mode_and_theme(self):
         from idgent import style
         from idgent.themes import get_theme
@@ -484,3 +517,7 @@ class TabsPolishTest(unittest.TestCase):
             with self.subTest(theme=theme.id):
                 provider = Gtk.CssProvider()
                 provider.load_from_data(editor.build_css(theme.ui).encode())
+
+
+if __name__ == '__main__':
+    unittest.main()
