@@ -186,7 +186,10 @@ class ResizeGate(Gtk.Bin):
             for terminal in reflowing:
                 terminal.set_property("rewrap-on-resize", True)
         changed = [t for t, grid in zip(terminals, grids)
-                   if (t.get_column_count(), t.get_row_count()) != grid and t.get_mapped()]
+                   if (t.get_column_count(), t.get_row_count()) != grid and t.get_mapped()
+                   and t.get_pty() is not None]
+        # An empty terminal has no program to answer SIGWINCH. In particular,
+        # do not pace startup allocations before its deferred shell is born.
         if changed:
             self._wait_for(changed)
 

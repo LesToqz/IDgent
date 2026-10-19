@@ -606,6 +606,9 @@ class MainWindow(Gtk.ApplicationWindow):
                 if right else min(max(round(extent * .3), 150), available - 150))
         # A show-time size is confirmed by the first allocation at the same extent.
         self._size_pending[panel] = ("shown", extent) if shown else False
+        # The initial allocation may precede this queued divider move by a
+        # frame. New shells must wait until the panel receives this extent.
+        panel._initial_dock_extent = (right, max(0, size))
         dock.set_position(max(0, available - max(0, size)))
 
     def _restore_terminal_fullscreen(self) -> None:

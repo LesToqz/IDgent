@@ -13,10 +13,11 @@ from unittest.mock import patch
 import gi
 
 gi.require_version("Gtk", "3.0")
+gi.require_version("Gdk", "3.0")
 gi.require_version("Vte", "2.91")
-from gi.repository import Gio, GLib, Gtk, Vte
+from gi.repository import Gdk, Gio, GLib, Gtk, Vte
 
-from idgent import style
+from idgent import settings, style
 from idgent.terminal import TerminalPanel
 from idgent.window import MainWindow
 from tests.test_resizegate import poll, spin, setUpModule  # noqa: F401
@@ -38,8 +39,12 @@ def utf8_locale():
 
 
 class StartupWindow:
-    def __init__(self, maximized=False, before_show=0):
+    def __init__(self, maximized=False, before_show=0, autostart=True, right=False):
         self.directory = tempfile.TemporaryDirectory(prefix="idgent-startup-")
+        self.environment = patch.dict(os.environ, {
+            "XDG_CONFIG_HOME": str(Path(self.directory.name) / "config")})
+        self.environment.start()
+        settings.set_value("terminal_autostart", autostart)
         self.spawns = []
         self.started = time.monotonic()
         self.locale = utf8_locale()
@@ -56,6 +61,9 @@ class StartupWindow:
         if before_show:
             spin(before_show)
         self.window.show_all()
+        self.shown_at = time.monotonic()
+        if right:
+            self.window.toggle_terminal_right()
         if maximized:
             # Xvfb has no WM. Deliver the large allocation a maximizing WM
             # would send just after map, on the next main-loop turn.
@@ -82,7 +90,9 @@ class StartupWindow:
         args[3] = [f"{key}={value}" for key, value in environment.items()]
         self.spawns.append(dict(terminal=terminal, log=log,
                                 grid=(terminal.get_column_count(), terminal.get_row_count()),
-                                at=time.monotonic() - self.started))
+                                at=time.monotonic() - self.started,
+                                shown_delay=time.monotonic() - self.shown_at
+                                if hasattr(self, "shown_at") else None))
         return self.original_spawn(terminal, *args, **kwargs)
 
     def ready(self):
@@ -93,6 +103,7 @@ class StartupWindow:
 
     def measurements(self):
         return [dict(grid=s["grid"], at=round(s["at"], 3),
+                     shown_delay=s["shown_delay"],
                      sizes=s["log"].read_text().splitlines() if s["log"].exists() else [],
                      cursor=tuple(s["terminal"].get_cursor_position()),
                      final=(s["terminal"].get_column_count(), s["terminal"].get_row_count()),
@@ -102,6 +113,7 @@ class StartupWindow:
         self.window.destroy()
         self.spawn_patch.stop()
         spin(100)
+        self.environment.stop()
         self.directory.cleanup()
 
 
@@ -114,9 +126,17 @@ class TerminalStartupTest(unittest.TestCase):
         return dock
 
     def assert_prompt(self, dock, terminal):
-        self.assertEqual(tuple(terminal.get_cursor_position()), (len(PROMPT), 0),
+        spawn = next(s for s in dock.spawns if s["terminal"] is terminal)
+        self.assertEqual(spawn["grid"], (terminal.get_column_count(), terminal.get_row_count()),
                          dock.measurements())
-        self.assertEqual(DockWindow.text(terminal).strip(), PROMPT.strip(), dock.measurements())
+        self.assertEqual(spawn["log"].read_text().splitlines(),
+                         [f"{terminal.get_row_count()} {terminal.get_column_count()}"],
+                         dock.measurements())
+        columns = terminal.get_column_count()
+        self.assertEqual(tuple(terminal.get_cursor_position()),
+                         (len(PROMPT) % columns, len(PROMPT) // columns), dock.measurements())
+        self.assertEqual(DockWindow.text(terminal).replace("\n", "").strip(),
+                         PROMPT.strip(), dock.measurements())
         ok, rows, columns = terminal.get_pty().get_size()
         self.assertTrue(ok)
         self.assertEqual((columns, rows), (terminal.get_column_count(), terminal.get_row_count()))
@@ -152,3 +172,95 @@ class TerminalStartupTest(unittest.TestCase):
         terminal = dock.window.terminal_bottom._panes[0].terminal
         self.assert_prompt(dock, terminal)
         self.assert_wraps(dock, terminal)
+
+    def check_right_dock(self, maximized):
+        dock = self.open(maximized=maximized, right=True)
+        for panel in (dock.window.terminal_bottom, dock.window.terminal_right):
+            terminal = panel._panes[0].terminal
+            self.assert_prompt(dock, terminal)
+            self.assert_wraps(dock, terminal)
+
+    def test_right_dock_default(self):
+        self.check_right_dock(False)
+
+    def test_right_dock_maximized(self):
+        self.check_right_dock(True)
+
+    def test_later_add_and_split_in_both_docks(self):
+        dock = self.open(maximized=True, right=True)
+        for panel in (dock.window.terminal_bottom, dock.window.terminal_right):
+            # Add and Split Terminal both use new_terminal(). Exercise actual
+            # enter animations and the complete three-pane layout.
+            for _ in range(2):
+                self.assertTrue(panel.new_terminal())
+                pane = panel._panes[-1]
+                self.assertTrue(poll(lambda: pane.pid and PROMPT.strip() in
+                                     DockWindow.text(pane.terminal).replace("\n", ""), 10))
+                self.assert_prompt(dock, pane.terminal)
+            for pane in panel._panes:
+                self.assert_wraps(dock, pane.terminal)
+
+    def test_first_terminal_opened_from_hidden_without_autostart(self):
+        dock = StartupWindow(autostart=False)
+        self.addCleanup(dock.close)
+        self.assertEqual(dock.spawns, [])
+        self.assertEqual(dock.window.terminal_bottom.terminal_count(), 0)
+        for panel, toggle in ((dock.window.terminal_bottom, dock.window.toggle_terminal_bottom),
+                              (dock.window.terminal_right, dock.window.toggle_terminal_right)):
+            toggle()
+            pane = panel._panes[0]
+            self.assertTrue(poll(lambda: pane.pid and PROMPT.strip() in DockWindow.text(pane.terminal), 10))
+            self.assert_prompt(dock, pane.terminal)
+            self.assert_wraps(dock, pane.terminal)
+            panel.close_current()
+            self.assertTrue(poll(lambda: not panel.get_visible(), 10))
+            toggle()
+            pane = panel._panes[0]
+            self.assertTrue(poll(lambda: pane.pid and PROMPT.strip() in DockWindow.text(pane.terminal), 10))
+            self.assert_prompt(dock, pane.terminal)
+            self.assert_wraps(dock, pane.terminal)
+
+    def test_early_keyboard_input_is_preserved(self):
+        dock = StartupWindow()
+        self.addCleanup(dock.close)
+        terminal = dock.window.terminal_bottom._panes[0].terminal
+        self.assertIsNone(terminal.get_pty())
+        self.assertTrue(terminal.get_mapped())
+        # A real VTE key event emits commit before a PTY exists.
+        event = Gdk.Event.new(Gdk.EventType.KEY_PRESS)
+        event.window = terminal.get_window()
+        event.send_event = True
+        event.keyval = Gdk.KEY_a
+        event.hardware_keycode = 38
+        event.state = 0
+        terminal.event(event)
+        self.assertTrue(poll(lambda: dock.ready() and
+                             tuple(terminal.get_cursor_position()) == (len(PROMPT) + 1, 0), 10),
+                        dock.measurements())
+        self.assertEqual(DockWindow.text(terminal).strip(), PROMPT + "a")
+
+    def test_unmapped_fallback_and_unattached_panel(self):
+        window = Gtk.Window()
+        self.addCleanup(window.destroy)
+        panel = TerminalPanel("/tmp")
+        window.add(panel)
+        pane = panel._panes[0]
+        self.assertIsNone(pane.pid)
+        started = time.monotonic()
+        self.assertTrue(poll(lambda: pane.pid is not None, 5))
+        self.assertLess(time.monotonic() - started, 3)
+        self.assertFalse(panel.get_mapped())
+        unattached = TerminalPanel("/tmp")
+        self.addCleanup(unattached.destroy)
+        self.assertTrue(poll(lambda: unattached._panes[0].pid is not None, .8))
+
+    def test_close_before_spawn_cancels_startup(self):
+        dock = StartupWindow()
+        self.addCleanup(dock.close)
+        panel = dock.window.terminal_bottom
+        pane = panel._panes[0]
+        self.assertIsNone(pane.pid)
+        panel.close_current()
+        self.assertTrue(pane.cancellable.is_cancelled())
+        spin(1100)
+        self.assertEqual(dock.spawns, [])
