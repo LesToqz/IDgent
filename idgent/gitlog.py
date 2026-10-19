@@ -191,7 +191,7 @@ def collect_graph(root, limit=1500):
         result['head']['hash'] = sha.strip().decode('ascii')
         limit = max(1, min(int(limit), 10000))
         data, _ = _run(root, ['log', '--topo-order', '-n', str(limit), '--branches', '--remotes', '--tags',
-                              'HEAD', '-z', '--format=' + LOG_FORMAT, '--'], deadline)
+                              'HEAD', '-z', '--encoding=UTF-8', '--format=' + LOG_FORMAT, '--'], deadline)
         result['commits'] = parse_log(data)
         for commit in result['commits']:
             commit['refs'] = refs.get(commit['hash'], [])

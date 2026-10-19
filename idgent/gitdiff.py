@@ -12,7 +12,9 @@ from .gitlog import GitError, MAX_OUTPUT, TIMEOUT, _run, clean, read_refs, timez
 _METADATA = '%x00'.join(('%H', '%h', '%P', '%s', '%b', '%an', '%ae', '%at', '%ai',
                             '%cn', '%ce', '%ct', '%ci'))
 _DIFF_OPTIONS = ['-r', '--no-commit-id', '--root', '-M', '-C', '--find-copies-harder',
-                 '--no-color', '--no-ext-diff', '--no-textconv', '--ignore-submodules=none']
+                 '--no-color', '--no-ext-diff', '--no-textconv', '--ignore-submodules=none',
+                 '--submodule=short', '--src-prefix=a/', '--dst-prefix=b/', '--no-relative',
+                 '--inter-hunk-context=0']
 _HUNK = re.compile(rb'^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(?: ?(.*))?$')
 _STATUS = dict(A='added', M='modified', D='deleted', R='renamed', C='copied', T='typechange')
 
@@ -121,6 +123,9 @@ def parse_patch(data, max_lines=3000):
     """Parse a single file patch; preserve tabs/CR and explicit no-newline markers."""
     hunks, hunk, old, new, line_count, clipped = [], None, 0, 0, 0, False
     for row in data.split(b'\n'):
+        if row.startswith(b'diff --git '):
+            hunk = None
+            continue
         match = _HUNK.match(row)
         if match:
             old, new = int(match[1]), int(match[3])
@@ -174,7 +179,7 @@ def commit_detail(root, rev, *, max_files=300, max_lines_per_file=3000, max_byte
     try:
         _check_repo(root, deadline)
         sha = _resolve(root, rev, deadline)
-        data, _ = _run(root, ['show', '--no-patch', '--format=' + _METADATA, sha, '--'], deadline)
+        data, _ = _run(root, ['show', '--no-patch', '--encoding=UTF-8', '--format=' + _METADATA, sha, '--'], deadline)
         fields = data.rstrip(b'\n').split(b'\0')
         (sha_b, short, parents, subject, body, an, ae, at, ai, cn, ce, ct, ci) = fields
         parents = parents.decode('ascii').split()
@@ -201,15 +206,22 @@ def commit_detail(root, rev, *, max_files=300, max_lines_per_file=3000, max_byte
         patch, clipped = _run(root, ['diff-tree', *_DIFF_OPTIONS, '-p', '-U3', '-z', *revisions, '--'],
                               deadline, cap=max_bytes, partial=True)
         sections = re.split(rb'(?m)^diff --git ', patch)[1:]
-        for index, file in enumerate(result['files']):
-            incomplete = index >= len(sections) or (clipped and index == len(sections) - 1)
+        index = 0
+        for file in result['files']:
+            # Git emits a deletion AND an addition patch for one raw T record.
+            # Treat both as one file; otherwise every following patch shifts a slot.
+            width = 2 if file['status'] == 'typechange' else 1
+            end = index + width
+            incomplete = end > len(sections) or (clipped and end >= len(sections))
             if incomplete and not file['binary']:
                 file['too_large'] = True
-            elif index < len(sections) and not file['binary']:
-                file['hunks'], file['too_large'], cut = parse_patch(sections[index], max_lines_per_file)
+            elif not file['binary']:
+                content = b''.join(b'diff --git ' + section for section in sections[index:end])
+                file['hunks'], file['too_large'], cut = parse_patch(content, max_lines_per_file)
                 result['truncated'] |= cut
             result['truncated'] |= file['too_large']
             highlight_hunks(file)
+            index = end
         result['truncated'] |= clipped
         return result
     except GitError as exc:
@@ -232,7 +244,7 @@ def file_context(root, rev, path, start, end):
         entries = tree.split(b'\0')[:-1]
         match = next((row.split(b'\t', 1)[0].split() for row in entries
                       if row.split(b'\t', 1)[1] == path.encode('utf-8')), None)
-        if not match or match[1] != b'blob' or match[0] == b'120000':
+        if not match or match[1] != b'blob':
             raise GitError('missing-path')
         # Resolve via tree object ID, so colon syntax, symlinks and pathspecs cannot escape.
         blob, _ = _run(root, ['cat-file', 'blob', match[2].decode('ascii')], deadline, cap=8 * 1024 * 1024)
