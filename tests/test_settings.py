@@ -219,3 +219,134 @@ class SettingsWindowKeysTest(unittest.TestCase):
         self.assertEqual(settings.get_values(), settings.DEFAULTS)
         self.assertTrue(settings.set_value('terminal_blink', False))
         self.assertEqual(json.loads(self.path.read_text()), {'terminal_blink': False})
+
+
+class GraphSettingsTest(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        env = patch.dict(os.environ, XDG_CONFIG_HOME=directory.name)
+        env.start()
+        self.addCleanup(env.stop)
+
+    def test_defaults_are_independent_and_not_user_tuned(self):
+        graph = settings.get_graph()
+        self.assertEqual(graph['textFadeMultiplier'], 0)
+        self.assertFalse(graph['showTags'])
+        self.assertEqual(graph['scale'], 1)
+        self.assertTrue(graph['showCode'])
+        graph['colorGroups'].append({'query': 'x', 'color': '#ffffff'})
+        self.assertEqual(settings.get_graph()['colorGroups'], [])
+        self.assertEqual(settings.normalize_graph(None), settings.GRAPH_DEFAULTS)
+
+    def test_graph_validation_and_persistence(self):
+        raw = dict(search=12, showTags='true', showCode=False, showOrphans=False,
+                   localDepth=99, scale=-1, centerStrength=float('nan'),
+                   repelStrength=100, linkStrength=True, linkDistance=-4,
+                   unknown=3, colorGroups=[{'query': 'tag:a', 'color': '#ABCDEF', 'junk': 1},
+                                          {'query': 'bad', 'color': 'red'}, None])
+        settings.save({'keep': 7})
+        self.assertTrue(settings.set_graph(raw))
+        result = settings.get_graph()
+        self.assertEqual(result['search'], '')
+        self.assertFalse(result['showTags'])
+        self.assertFalse(result['showCode'])
+        self.assertFalse(result['showOrphans'])
+        self.assertEqual(result['localDepth'], settings.GRAPH_LIMITS['localDepth'][1])
+        self.assertEqual(result['repelStrength'], 20)
+        self.assertEqual(result['linkDistance'], 30)
+        self.assertEqual(result['scale'], 1 / 128)
+        self.assertEqual(result['linkStrength'], 1)
+        self.assertEqual(result['centerStrength'], settings.GRAPH_DEFAULTS['centerStrength'])
+        self.assertEqual(result['colorGroups'], [{'query': 'tag:a', 'color': '#abcdef'}])
+        self.assertNotIn('unknown', settings.load()['graph'])
+        self.assertEqual(settings.load()['keep'], 7)
+        self.assertNotIn('graph', settings.DEFAULTS)
+        self.assertNotIn('graph', settings.get_values())
+        with self.assertRaises(ValueError):
+            settings.get_value('graph')
+
+    def test_graph_survives_theme_and_font_save(self):
+        self.assertTrue(settings.set_graph({'showTags': True, 'scale': 2}))
+        graph = settings.get_graph()
+        self.assertTrue(settings.set_theme_id('nord'))
+        self.assertTrue(settings.set_font_size('editor_font_size', 16))
+        self.assertTrue(settings.set_values(settings.get_values()))
+        self.assertEqual(settings.get_graph(), graph)
+        self.assertEqual(json.loads(settings.settings_path().read_text())['graph'], graph)
+
+    def test_other_settings_survive_graph_save(self):
+        other = {'theme': 'nord', 'editor_font_size': 16, 'auto_pair': False,
+                 'future': {'enabled': True}}
+        self.assertTrue(settings.save(other))
+        self.assertTrue(settings.set_graph({'showTags': True}))
+        data = json.loads(settings.settings_path().read_text())
+        self.assertEqual({key: data[key] for key in other}, other)
+
+    def test_corrupted_graph_is_normalized_on_load_and_save(self):
+        path = settings.settings_path()
+        path.parent.mkdir(parents=True)
+        for corrupt in (None, 'broken', [], 42):
+            with self.subTest(corrupt=corrupt):
+                path.write_text(json.dumps({'graph': corrupt, 'theme': 'nord'}))
+                self.assertEqual(settings.load()['graph'], settings.GRAPH_DEFAULTS)
+                self.assertEqual(settings.get_graph(), settings.GRAPH_DEFAULTS)
+                self.assertTrue(settings.set_font_size('editor_font_size', 16))
+                self.assertEqual(json.loads(path.read_text())['graph'], settings.GRAPH_DEFAULTS)
+        path.write_text(json.dumps({'graph': {'showTags': True, 'unknown': 3,
+                                             'scale': -10}}))
+        graph = settings.load()['graph']
+        self.assertTrue(graph['showTags'])
+        self.assertNotIn('unknown', graph)
+        self.assertEqual(graph['scale'], settings.GRAPH_LIMITS['scale'][0])
+
+    def test_every_numeric_bound_and_invalid_value(self):
+        for key, (low, high) in settings.GRAPH_LIMITS.items():
+            for raw, expected in ((-10**100, low), (10**100, high),
+                                  (float('inf'), settings.GRAPH_DEFAULTS[key]),
+                                  ('2', settings.GRAPH_DEFAULTS[key]),
+                                  (True, settings.GRAPH_DEFAULTS[key])):
+                with self.subTest(key=key, raw=raw):
+                    self.assertEqual(settings.normalize_graph({key: raw})[key], expected)
+        groups = [{'query': str(n), 'color': '#123456'} for n in range(20)]
+        self.assertEqual(len(settings.normalize_graph({'colorGroups': groups})['colorGroups']), 12)
+        self.assertEqual(settings.normalize_graph({'colorGroups': {}})['colorGroups'], [])
+
+    def test_graph_parameters_match_authoritative_reference(self):
+        reference = json.loads((Path(__file__).resolve().parents[1] / 'docs' /
+                                'reference_app-graph-params.json').read_text())['settings']
+        for key, parameter in reference.items():
+            with self.subTest(key=key):
+                self.assertEqual(settings.GRAPH_DEFAULTS[key], parameter['default'])
+                if 'min' in parameter:
+                    self.assertEqual(settings.GRAPH_LIMITS[key],
+                                     (parameter['min'], parameter['max']))
+                    self.assertEqual(settings.GRAPH_STEPS[key], parameter.get('step'))
+        for host, reference_app in (('localDepth', 'localJumps'),
+                               ('localIncoming', 'localBacklinks'),
+                               ('localOutgoing', 'localForelinks')):
+            self.assertEqual(settings.GRAPH_DEFAULTS[host], reference[reference_app]['default'])
+        self.assertEqual(settings.GRAPH_LIMITS['localDepth'], (1, 5))
+        self.assertEqual(settings.GRAPH_STEPS['localDepth'], 1)
+        self.assertTrue(settings.GRAPH_DEFAULTS['showCode'])
+        self.assertFalse(settings.GRAPH_DEFAULTS['reduceMotion'])
+
+    def test_graph_integer_controls_and_continuous_values(self):
+        result = settings.normalize_graph({'localJumps': 2.6, 'localDepth': 3.2,
+                                           'linkDistance': 250.7,
+                                           'textFadeMultiplier': -1.85,
+                                           'nodeSizeMultiplier': 1.2345})
+        self.assertEqual(result['localJumps'], 3)
+        self.assertEqual(result['localDepth'], 3)
+        self.assertEqual(result['linkDistance'], 251)
+        self.assertEqual(result['textFadeMultiplier'], -1.85)
+        self.assertEqual(result['nodeSizeMultiplier'], 1.2345)
+
+    def test_graph_panel_local_and_motion_flags_persist(self):
+        flags = {'close': True, 'localInterlinks': True, 'localBacklinks': False,
+                 'localForelinks': False, 'reduceMotion': True}
+        self.assertTrue(settings.set_graph(flags))
+        for key, value in flags.items():
+            self.assertIs(settings.get_graph()[key], value)
+            self.assertIs(settings.normalize_graph({key: 'invalid'})[key],
+                          settings.GRAPH_DEFAULTS[key])

@@ -1,9 +1,21 @@
-"""Small, failure-tolerant JSON settings store, resolved at call time."""
+"""Small, failure-tolerant JSON settings store, resolved at call time.
+
+Graph defaults, bounds and steps follow docs/reference_app-graph-params.json, section
+settings (spec section J). IDgent deviations: showCode defaults to True for source
+files; reduceMotion defaults to False for the host's accessibility override;
+localDepth/localIncoming/localOutgoing retain the brief's host names alongside
+Reference app's localJumps/localBacklinks/localForelinks, with identical defaults and
+bounds. These are independent settings, not synchronized aliases. Color groups
+use #rrggbb strings instead of Reference app's {a: 1, rgb: int}, and are capped at 12
+as required by the host bridge. Unknown keys are dropped. Numeric steps describe
+the controls; persisted numbers are clamped, with integer controls rounded.
+"""
 from __future__ import annotations
 
 import json
 import math
 import os
+import re
 from pathlib import Path
 import tempfile
 
@@ -19,7 +31,11 @@ def load() -> dict:
     """Read settings; missing, unreadable and malformed files behave as empty."""
     try:
         data = json.loads(_path().read_text(encoding='utf-8'))
-        return data if isinstance(data, dict) else {}
+        if not isinstance(data, dict):
+            return {}
+        if 'graph' in data:
+            data['graph'] = normalize_graph(data['graph'])
+        return data
     except (OSError, ValueError, UnicodeError):
         return {}
 
@@ -35,6 +51,8 @@ def save(data: dict) -> bool:
         target = _path()
         merged = load()
         merged.update(data)
+        if 'graph' in merged:
+            merged['graph'] = normalize_graph(merged['graph'])
         payload = json.dumps(merged, indent=2, ensure_ascii=False) + '\n'
         target.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=target.parent,
@@ -183,7 +201,7 @@ def get_value(key: str) -> object:
 
 
 def get_values() -> dict:
-    """Every known key, validated, from one read of the file."""
+    """Settings dialog keys, validated, excluding the separate graph namespace."""
     data = load()
     return {key: normalize(key, data.get(key)) for key in DEFAULTS}
 
@@ -200,3 +218,71 @@ def set_values(values: dict) -> bool:
 
 def reset_value(key: str) -> bool:
     return set_value(key, DEFAULTS[key])
+
+
+# Reference app's initial graph preferences; user-tuned graph.json values are not defaults.
+GRAPH_DEFAULTS = {
+    'search': '', 'showTags': False, 'showAttachments': False,
+    'hideUnresolved': False, 'showOrphans': True, 'showCode': True,
+    'showArrow': False, 'textFadeMultiplier': 0, 'nodeSizeMultiplier': 1,
+    'lineSizeMultiplier': 1, 'centerStrength': 0.518713248970312,
+    'repelStrength': 10, 'linkStrength': 1, 'linkDistance': 250,
+    'colorGroups': [], 'collapse-filter': True, 'collapse-display': True,
+    'collapse-forces': True, 'collapse-color-groups': True, 'scale': 1,
+    'localDepth': 1, 'localIncoming': True, 'localOutgoing': True,
+    'localJumps': 1, 'localBacklinks': True, 'localForelinks': True,
+    'localInterlinks': False, 'close': False, 'reduceMotion': False,
+}
+GRAPH_LIMITS = {
+    'textFadeMultiplier': (-3, 3), 'nodeSizeMultiplier': (0.1, 5),
+    'lineSizeMultiplier': (0.1, 5), 'centerStrength': (0, 1),
+    'repelStrength': (0, 20), 'linkStrength': (0, 1),
+    'linkDistance': (30, 500), 'scale': (1 / 128, 8),
+    'localDepth': (1, 5), 'localJumps': (1, 5),
+}
+# None means no slider step is specified (persisted zoom).
+GRAPH_STEPS = {
+    'textFadeMultiplier': 0.1, 'nodeSizeMultiplier': 'any',
+    'lineSizeMultiplier': 'any', 'centerStrength': 'any',
+    'repelStrength': 'any', 'linkStrength': 'any', 'linkDistance': 1,
+    'scale': None, 'localDepth': 1, 'localJumps': 1,
+}
+
+
+def normalize_graph(value: object) -> dict:
+    """Return independent, JSON-safe graph preferences, dropping unknown keys."""
+    value = value if isinstance(value, dict) else {}
+    result = {}
+    for key, default in GRAPH_DEFAULTS.items():
+        raw = value.get(key, default)
+        if isinstance(default, bool):
+            result[key] = raw if isinstance(raw, bool) else default
+        elif key in GRAPH_LIMITS:
+            if (isinstance(raw, bool) or not isinstance(raw, (int, float))
+                    or isinstance(raw, float) and not math.isfinite(raw)):
+                raw = default
+            low, high = GRAPH_LIMITS[key]
+            result[key] = max(low, min(high, raw))
+            if GRAPH_STEPS[key] == 1:
+                result[key] = round(result[key])
+        elif key == 'colorGroups':
+            groups = []
+            for group in raw if isinstance(raw, list) else []:
+                if (isinstance(group, dict) and isinstance(group.get('query'), str)
+                        and isinstance(group.get('color'), str)
+                        and re.fullmatch(r'#[0-9a-fA-F]{6}', group['color'])):
+                    groups.append({'query': group['query'], 'color': group['color'].lower()})
+                if len(groups) == 12:
+                    break
+            result[key] = groups
+        else:
+            result[key] = raw if isinstance(raw, str) else default
+    return result
+
+
+def get_graph() -> dict:
+    return normalize_graph(load().get('graph'))
+
+
+def set_graph(value: dict) -> bool:
+    return save({'graph': normalize_graph(value)})

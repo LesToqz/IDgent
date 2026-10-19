@@ -4,6 +4,7 @@ from __future__ import annotations
 import gi
 
 gi.require_version("Gtk", "3.0")
+gi.require_version("Gdk", "3.0")
 from gi.repository import Gdk, GLib, GObject, Gtk, Pango
 
 from idgent import motion
@@ -129,9 +130,10 @@ class PaneHeader(Gtk.Box):
         "delete-requested": (GObject.SignalFlags.RUN_LAST, None, ()),
     }
 
-    def __init__(self, shell_name: str = "bash"):
+    def __init__(self, shell_name: str = "bash", *, kind: str = "terminal"):
         super().__init__(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
         self.shell_name = shell_name
+        self.kind = kind
         self.get_style_context().add_class("idgent-terminal-header")
         self.set_hexpand(True)
         self.label = Gtk.Label(xalign=0)
@@ -146,6 +148,8 @@ class PaneHeader(Gtk.Box):
         self.fullscreen_button = _IconButton("view-fullscreen-symbolic", "□", "Fullscreen")
         self.fullscreen_button.connect("clicked", lambda _b: self.emit("fullscreen-requested"))
         self.delete_button = _IconButton("edit-delete-symbolic", "✕", "Kill terminal")
+        if kind == "graph":
+            self.delete_button.set_tooltip_text("Close graph view")
         self.delete_button.get_style_context().add_class("idgent-terminal-delete")
         self.delete_button.connect("clicked", lambda _b: self.emit("delete-requested"))
         self.pack_start(self.label_button, False, True, 0)
@@ -161,7 +165,7 @@ class PaneHeader(Gtk.Box):
 
     def set_number(self, position: int) -> None:
         """Label the header `<shell><position>` (1-based)."""
-        self.label.set_text(f"{self.shell_name}{position}")
+        self.label.set_text("Graph view" if self.kind == "graph" else f"{self.shell_name}{position}")
 
     def set_active(self, active: bool) -> None:
         """The dock's current pane: its label switches to the normal text colour."""
@@ -192,23 +196,86 @@ class PaneHeader(Gtk.Box):
 
 
 class AddButton(_IconButton):
-    """The dock's "+" button; marked `limit` when no more terminals fit."""
+    """Dock pane chooser, including keyboard navigation and a visible full state."""
+
+    __gsignals__ = {
+        "choose": (GObject.SignalFlags.RUN_LAST, None, (str,)),
+    }
 
     def __init__(self, limit: int = 3):
-        super().__init__("list-add-symbolic", "+", "New terminal")
+        super().__init__("list-add-symbolic", "+", "New pane")
         self._limit = limit
         self.get_style_context().add_class("idgent-terminal-add")
         self.set_halign(Gtk.Align.END)
         self.set_valign(Gtk.Align.START)
+        self.popover = Gtk.Popover.new(self)
+        self.popover.set_position(Gtk.PositionType.BOTTOM)
+        self.popover.get_style_context().add_class("idgent-pane-chooser")
+        self.choices = Gtk.ListBox()
+        self.choices.set_selection_mode(Gtk.SelectionMode.SINGLE)
+        self.choices.set_activate_on_single_click(True)
+        theme = Gtk.IconTheme.get_default()
+        self.graph_icon = next((name for name in (
+            "network-workgroup-symbolic", "network-server-symbolic",
+            "emblem-shared-symbolic") if theme is not None and theme.has_icon(name)),
+            "emblem-shared-symbolic")
+        for kind, label, icon in (("terminal", "Terminal", "utilities-terminal-symbolic"),
+                                   ("graph", "Graph view", self.graph_icon)):
+            row = Gtk.ListBoxRow()
+            row.kind = kind
+            box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+            box.pack_start(Gtk.Image.new_from_icon_name(icon, Gtk.IconSize.MENU), False, False, 0)
+            box.pack_start(Gtk.Label(label=label, xalign=0), True, True, 0)
+            row.add(box)
+            self.choices.add(row)
+        self.popover.add(self.choices)
+        self.choices.connect("row-activated", lambda _box, row: self.choose(row.kind))
+        self.popover.connect("key-press-event", self._chooser_key)
+        self.connect("clicked", self._open)
+        self.connect("destroy", lambda _b: self.popover.destroy())
+
+    def _open(self, _button=None) -> None:
+        self.popover.set_transitions_enabled(motion.animations_enabled())
+        self.popover.show_all()
+        row = self.choices.get_row_at_index(0)
+        self.choices.select_row(row)
+        self.popover.popup()
+        row.grab_focus()
+
+    def choose(self, kind: str) -> None:
+        if kind not in ("terminal", "graph"):
+            return
+        self.popover.popdown()
+        self.emit("choose", kind)
+
+    def _chooser_key(self, _widget, event) -> bool:
+        key = event.keyval
+        rows = self.choices.get_children()
+        selected = self.choices.get_selected_row()
+        index = selected.get_index() if selected is not None else 0
+        if key == Gdk.KEY_Escape:
+            self.popover.popdown()
+            self.grab_focus()
+            return True
+        if key in (Gdk.KEY_Return, Gdk.KEY_KP_Enter, Gdk.KEY_space):
+            self.choose(rows[index].kind)
+            return True
+        if key in (Gdk.KEY_Up, Gdk.KEY_Down, Gdk.KEY_Home, Gdk.KEY_End):
+            index = (0 if key == Gdk.KEY_Home else len(rows) - 1 if key == Gdk.KEY_End
+                     else max(0, min(len(rows) - 1, index + (1 if key == Gdk.KEY_Down else -1))))
+            self.choices.select_row(rows[index])
+            rows[index].grab_focus()
+            return True
+        return False
 
     def set_full(self, full: bool) -> None:
         context = self.get_style_context()
         if full:
             context.add_class("limit")
-            self.set_tooltip_text(f"Cannot add terminal (limit {self._limit})")
+            self.set_tooltip_text(f"Cannot add (limit {self._limit})")
         else:
             context.remove_class("limit")
-            self.set_tooltip_text("New terminal")
+            self.set_tooltip_text("New pane")
 
 
 class LimitToast(Gtk.Label):
@@ -225,7 +292,7 @@ class LimitToast(Gtk.Label):
     SLIDE_PX = 8
 
     def __init__(self, limit: int = 3):
-        super().__init__(label=f"Cannot add terminal (limit {limit})")
+        super().__init__(label=f"Cannot add (limit {limit})")
         self._timer: int | None = None
         self._destroyed = False
         self._leaving = False
@@ -278,6 +345,10 @@ class LimitToast(Gtk.Label):
 
 def build_css(ui: dict[str, str]) -> str:
     """Terminal dock rules: sidebar-tab-strip headers, clickable icons and a notice toast."""
+    from idgent.style import TOKENS
+
+    radius = TOKENS["radius"]
+    spacing = TOKENS["spacing"]
     hover = f"alpha({ui['overlay']}, 0.067)"
     notice_fg = _legible(ui['warning'], _NOTICE_BG, 4.5)
     return f'''
@@ -307,6 +378,14 @@ def build_css(ui: dict[str, str]) -> str:
 .idgent-terminal-add:hover {{ background: {ui['hover']}; color: {ui['hover_fg']}; box-shadow: none; }}
 .idgent-terminal-add.limit {{ color: {ui['limit_tint']}; }}
 .idgent-terminal-add.limit:hover {{ color: {ui['warning']}; }}
+.idgent-pane-chooser {{ background: {ui['sidebar_bg']}; color: {ui['foreground']};
+    border: 1px solid {ui['border_hover']}; border-radius: {radius['menu']}px;
+    padding: {spacing['size-4-1']}px; }}
+.idgent-pane-chooser list {{ background: transparent; padding: 0; }}
+.idgent-pane-chooser row {{ min-height: 28px; padding: 0 8px; border: 0;
+    border-radius: {radius['menu-item']}px; color: {ui['foreground']}; }}
+.idgent-pane-chooser row:hover {{ background: {hover}; }}
+.idgent-pane-chooser row:selected {{ background: {ui['hover']}; color: {ui['hover_fg']}; }}
 .idgent-terminal-toast {{ background: alpha(#000000, 0.9); color: {notice_fg}; font-size: 13px;
     font-feature-settings: "tnum"; border: 0; border-radius: 8px; padding: 8px 12px;
     box-shadow: 0 1px 2px alpha(#000000, 0.121), 0 3.4px 6.7px alpha(#000000, 0.179); }}
