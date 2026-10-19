@@ -277,6 +277,8 @@ class GraphPageTests(unittest.TestCase):
         p.wait_for('IDGraph.stats().frames > 5', 5)
         p.pump(0.5)
         p.snapshot('01-demo300-dark-settling')
+        p.wait_for('IDGraph.stats().motion < 0.5', 10)
+        self.perf['visual_settle_300_s'] = round(time.monotonic() - t0, 2)
         p.settle(25)
         self.perf['settle_300_s'] = round(time.monotonic() - t0, 2)
         st = p.stats()
@@ -337,6 +339,10 @@ class GraphPageTests(unittest.TestCase):
         p.call('setTheme', {})
         p.pump(0.6)
         p.snapshot('04-demo300-dark-panel-open')
+        p.js("document.querySelector('.gc-panel').scrollTop = 10000")
+        p.pump(0.2)
+        p.snapshot('04b-panel-forces')
+        p.js("document.querySelector('.gc-panel').scrollTop = 0")
         p.call('setSettings', {'repelStrength': 12, 'nodeSizeMultiplier': 2, 'showTags': True,
                                'colorGroups': [{'query': 'path:notes', 'color': {'a': 1, 'rgb': 0xff0000}}]})
         st = p.js('IDGraph._debug.settings()')
@@ -386,9 +392,9 @@ class GraphPageTests(unittest.TestCase):
         for k in range(1, 6):
             p.pointer('pointermove', x + 12 * k, y)
             p.pump(0.016)
-        p.pointer('pointerup', x + 60, y, buttons=0)
         pan1 = p.stats()['pan']
         self.assertAlmostEqual(pan1[0] - pan0[0], 60, delta=1)
+        p.pointer('pointerup', x + 60, y, buttons=0)
         p.pump(0.8)
         pan2 = p.stats()['pan']
         self.assertGreater(pan2[0] - pan1[0], 5, 'inertial glide after a flick')
@@ -438,6 +444,10 @@ class GraphPageTests(unittest.TestCase):
             p.pointer('pointerdown', x, y)
             p.pointer('pointerup', x, y, buttons=0)
         p.pump(0.05)
+        p.call('setSettings', {'showArrow': True, 'scale': 2})
+        p.pump(1.0)
+        p.snapshot('13-arrows-zoomed')
+        p.call('setSettings', {'showArrow': False, 'scale': 1})
         self.assertEqual(p.of_type('search'), [{'type': 'search', 'query': 'tag:#topic'}])
         self.assertEqual(p.of_type('create'), [{'type': 'create', 'name': 'Missing'}])
 

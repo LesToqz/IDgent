@@ -49,7 +49,7 @@
   const keys = new Set();
   const pointer = { x: -1e9, y: -1e9, inside: false };
   let press = null;                 // active pointer gesture
-  const perf = { fps: 0, frameMs: 0, interval: 0, frames: 0, lastFrameTs: 0 };
+  const perf = { fps: 0, frameMs: 0, interval: 0, frames: 0, lastFrameTs: 0, slow: 0 };
   let timelapseState = null;
 
   // ------------------------------------------------------------ helpers
@@ -128,6 +128,10 @@
     if (same) for (let i = 0; i < nm.n; i++) if (ids[i] !== nm.nodes[i].id) { same = false; break; }
     if (same) for (let k = 0; k < nm.pairs.length; k++) if (nm.pairs[k][0] !== model.pairs[k][0] || nm.pairs[k][1] !== model.pairs[k][1]) { same = false; break; }
     const pos = G.placeNodes(nm, existing, random);
+    // A complete replacement (nothing survives) recentres like a fresh view.
+    if (hasData && oldN && !nm.nodes.some((n) => oldIndex.has(String(n.id)))) {
+      cam.px = W / 2; cam.py = H / 2; cam.vx = cam.vy = 0; cam.track = -1;
+    }
     // ghosts of removed nodes fade out
     const newIds = new Set(nm.nodes.map((n) => n.id));
     if (!reduce()) {
@@ -283,7 +287,8 @@
     const moving = cam.moving || !!press;
     if (moving) lastMoveTs = ts;
     if (lowQuality && ts - lastMoveTs > 300 && !sim.running) { lowQuality = false; resize(); }
-    else if (!lowQuality && perf.interval > 28 && moving) { lowQuality = true; resize(); }
+    else if (!lowQuality && perf.interval > 28 && moving && ++perf.slow > 20) { lowQuality = true; resize(); }
+    if (perf.interval <= 28) perf.slow = 0;
 
     draw(dt, lowQuality && moving);
     perf.frameMs = perf.frameMs ? perf.frameMs * 0.9 + (performance.now() - t0) * 0.1 : performance.now() - t0;
@@ -533,8 +538,7 @@
       ctx.beginPath(); ctx.arc(sx[i], sy[i], sr[i] + 0.5, 0, 6.2832); ctx.stroke();
     }
 
-    // labels (cached bitmaps)
-    if (hideLabels) return;
+    // labels (cached bitmaps); in low-quality motion only the highlighted label stays
     const ta = G.textAlpha(s, disp.fade);
     const textA = pal.text.a;
     ctx.imageSmoothingEnabled = true;
@@ -554,7 +558,7 @@
       ctx.globalAlpha = alpha;
       ctx.drawImage(bm.canvas, sx[i] - w / 2, ly - 2 * k, w, h);
     };
-    if (ta > 0.001) for (let i = 0; i < N; i++) if (i !== highlight) drawLabel(i);
+    if (ta > 0.001 && !hideLabels) for (let i = 0; i < N; i++) if (i !== highlight) drawLabel(i);
     if (highlight >= 0 && highlight < N) drawLabel(highlight);
     ctx.globalAlpha = 1;
   }
@@ -906,7 +910,7 @@
 
     panel.appendChild(section('collapse-filter', 'Filters', (b) => {
       const box = el('div', 'search');
-      searchInput = el('input', '', { type: 'search', placeholder: 'Search files...', spellcheck: 'false', 'aria-label': 'Search files' });
+      searchInput = el('input', '', { type: 'text', placeholder: 'Search files...', spellcheck: 'false', 'aria-label': 'Search files' });
       searchClear = iconBtn('x', 'Clear search', () => { searchInput.value = ''; onSearch(true); searchInput.focus(); });
       searchClear.classList.add('clear');
       searchInput.addEventListener('input', safe(() => onSearch(false)));
@@ -1202,10 +1206,17 @@
   IDGraph.stats = safe(() => ({
     fps: Math.round(perf.fps * 10) / 10, frameMs: Math.round(perf.frameMs * 100) / 100,
     tickMs: Math.round(sim.tickMs * 100) / 100, nodes: N, links: lines.length,
-    alpha: sim.alpha, scale: cam.s, targetScale: cam.ts, paused, running: !!raf,
+    alpha: sim.alpha, scale: cam.s, motion: motion(), targetScale: cam.ts, paused, running: !!raf,
     simRunning: N > 0 && (sim.running || drag >= 0), frames: perf.frames, dpr, lowQuality,
     pan: [cam.px, cam.py], hover: hover >= 0 ? ids[hover] : null, width: W, height: H,
   }));
+
+  /** Mean on-screen node speed in px per tick (visual settle metric). */
+  function motion() {
+    if (!N) return 0;
+    let m = 0; for (let i = 0; i < N; i++) m += Math.hypot(sim.vx[i], sim.vy[i]);
+    return Math.round(m / N * cam.s * 1000) / 1000;
+  }
 
   IDGraph.demo = safe((n, seed) => {
     random = G.rng(seed == null ? 1 : seed);
