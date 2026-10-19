@@ -8,9 +8,12 @@ from gi.repository import GObject, Gtk
 from idgent import motion
 from idgent.themes import get_theme
 
-# A 39 px strip plus a 1 px divider; window controls are 44 px wide.
+# A 39 px strip plus a 1 px divider; window controls are 52 px wide.
 HEADER_HEIGHT = 40
-WINDOW_BUTTON_WIDTH = 44
+WINDOW_BUTTON_WIDTH = 52
+# The symbolic assets have padding around the mark: a 36 px image renders
+# an 18 px glyph. Load at that size instead of scaling a 16 px raster.
+WINDOW_ICON_SIZE = 36
 # Resting cog glyph opacity; hovering fades it to 1 over 140 ms.
 GLYPH_OPACITY = 0.85
 
@@ -19,7 +22,7 @@ def build_titlebar_css(ui: dict[str, str]) -> str:
     """Build the titlebar rules from the same roles as the application theme.
 
     Reference app-style chrome: a 39 px strip plus a 1 px divider on the secondary
-    background, 44 px flat window controls, and clickable-icon hovers (radius 4,
+    background, 52 px flat window controls, and clickable-icon hovers (radius 4,
     translucent overlay) for the menus and the settings cog. Hovers are instant;
     only the cog glyph opacity fades (driven by ``motion``, see ``TitleBar``).
     ``margin: 0`` cancels the theme's -1 px solid-CSD margin that would eat the
@@ -54,7 +57,7 @@ headerbar.idgent-titlebar:backdrop {{ color: {ui['muted']}; }}
 .idgent-titlebar button.titlebutton {{
     border-radius: 0; min-width: {WINDOW_BUTTON_WIDTH}px; min-height: {HEADER_HEIGHT - 1}px; padding: 0;
 }}
-.idgent-titlebar button.titlebutton image {{ -gtk-icon-transform: scale(0.75); }}
+.idgent-titlebar button.titlebutton image {{ -gtk-icon-transform: none; }}
 .idgent-titlebar button.idgent-settings-button {{
     border-radius: 4px; -gtk-outline-radius: 4px; min-width: 16px; min-height: 16px; padding: 6px;
 }}
@@ -79,7 +82,7 @@ class TitleBar(Gtk.HeaderBar):
     def __init__(self, menu_bar: Gtk.MenuBar) -> None:
         super().__init__()
         self.get_style_context().add_class("idgent-titlebar")
-        # Window controls form one contiguous 3 x 44 px block; margins space the rest.
+        # Window controls form one contiguous 3 x 52 px block; margins space the rest.
         self.props.spacing = 0
         self.set_show_close_button(True)
         self.set_decoration_layout(":minimize,maximize,close")
@@ -112,6 +115,21 @@ class TitleBar(Gtk.HeaderBar):
         self.settings_button.get_accessible().set_name("Settings")
         self.settings_button.connect("clicked", lambda _: self.emit("settings-requested"))
         self.pack_end(self.settings_button)
+
+    def do_size_allocate(self, allocation) -> None:
+        # GTK owns these children and rebuilds them when window state changes.
+        # Set the native image size before allocation, including restore icons,
+        # without changing the settings cog or depending on GTK's private boxes.
+        def size_controls(widget):
+            if isinstance(widget, Gtk.Button) and widget.get_style_context().has_class("titlebutton"):
+                image = widget.get_child()
+                if isinstance(image, Gtk.Image) and image.get_pixel_size() != WINDOW_ICON_SIZE:
+                    image.set_pixel_size(WINDOW_ICON_SIZE)
+            elif isinstance(widget, Gtk.Container):
+                widget.forall(size_controls)
+
+        self.forall(size_controls)
+        Gtk.HeaderBar.do_size_allocate(self, allocation)
 
     def _set_settings_glyph(self, hover: float) -> None:
         self.settings_button.get_child().set_opacity(GLYPH_OPACITY + (1 - GLYPH_OPACITY) * hover)

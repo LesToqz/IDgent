@@ -17,7 +17,7 @@ from gi.repository import Gdk, Gio, Gtk
 
 from idgent import motion
 from idgent.titlebar import (GLYPH_OPACITY, HEADER_HEIGHT, TITLEBAR_CSS, WINDOW_BUTTON_WIDTH,
-                             TitleBar, build_titlebar_css)
+                             WINDOW_ICON_SIZE, TitleBar, build_titlebar_css)
 from idgent.themes import THEMES, get_theme
 from idgent.window import MainWindow
 from tests.test_integration import alive, poll
@@ -276,7 +276,7 @@ class TitleBarTests(unittest.TestCase):
                 finally:
                     bar.unset_state_flags(Gtk.StateFlags.BACKDROP)
 
-    def test_window_buttons_are_flat_44px_with_12px_glyphs_and_overlay_hover(self):
+    def test_window_buttons_are_flat_52px_with_18px_glyphs_and_overlay_hover(self):
         bar = self.window.titlebar
         self.use_theme('idgent-dark')
         ui = get_theme('idgent-dark').ui
@@ -290,9 +290,17 @@ class TitleBarTests(unittest.TestCase):
             self.assertTrue(glyph, button.get_style_context().list_classes())
             columns = [column for column, _, _ in glyph]
             rows = [row for _, row, _ in glyph]
-            self.assertLessEqual(max(columns) - min(columns) + 1, 12)
-            self.assertLessEqual(max(rows) - min(rows) + 1, 12)
-        # One contiguous 132 px block flush with the right edge.
+            self.assertGreaterEqual(max(columns) - min(columns) + 1, 18)
+            self.assertLessEqual(max(columns) - min(columns) + 1, 20)
+            self.assertLessEqual(max(rows) - min(rows) + 1, 20)
+            self.assertAlmostEqual((min(columns) + max(columns) + 1) / 2,
+                                   WINDOW_BUTTON_WIDTH / 2, delta=1)
+            # Minimize is a baseline; the square and X are vertically centred.
+            if button is not buttons[0]:
+                self.assertGreaterEqual(max(rows) - min(rows) + 1, 18)
+                self.assertAlmostEqual((min(rows) + max(rows) + 1) / 2,
+                                       (HEADER_HEIGHT - 1) / 2, delta=1)
+        # One contiguous 156 px block flush with the right edge.
         self.assertEqual([x for x, _ in positions],
                          [positions[0][0] + WINDOW_BUTTON_WIDTH * i for i in range(3)])
         self.assertEqual(positions[2][0] + WINDOW_BUTTON_WIDTH, bar.get_allocated_width())
@@ -304,6 +312,90 @@ class TitleBarTests(unittest.TestCase):
         foreground = Gdk.RGBA()
         foreground.parse(ui['foreground'])
         self.assertTrue(minimize.get_style_context().get_color(Gtk.StateFlags.PRELIGHT).equal(foreground))
+        minimize.set_state_flags(Gtk.StateFlags.ACTIVE, False)
+        try:
+            self.assert_pixel(minimize, 2, 2, blend(ui['sidebar_bg'], ui['overlay'], 0.12))
+        finally:
+            minimize.unset_state_flags(Gtk.StateFlags.ACTIVE)
+
+    def test_native_window_glyphs_stay_large_after_theme_and_decoration_changes(self):
+        bar = self.window.titlebar
+        self.assertEqual(WINDOW_BUTTON_WIDTH, 52)
+        self.assertGreaterEqual(WINDOW_ICON_SIZE, 18)
+        for theme in THEMES:
+            with self.subTest(theme=theme.id):
+                self.use_theme(theme.id)
+                # GTK recreates its private decoration children on layout changes.
+                bar.set_decoration_layout(':close')
+                bar.set_decoration_layout(':minimize,maximize,close')
+                buttons = [find_class(bar, name) for name in ('minimize', 'maximize', 'close')]
+                self.assertTrue(poll(lambda: all(
+                    button.get_child().get_pixel_size() == WINDOW_ICON_SIZE for button in buttons)))
+                for button in buttons:
+                    image = button.get_child()
+                    self.assertGreaterEqual(image.get_allocated_width(), WINDOW_ICON_SIZE)
+                    self.assertGreaterEqual(image.get_allocated_height(), WINDOW_ICON_SIZE)
+                    self.assertEqual((button.get_allocated_width(), button.get_allocated_height()),
+                                     (WINDOW_BUTTON_WIDTH, HEADER_HEIGHT - 1))
+                self.assertEqual(bar.get_allocated_height(), HEADER_HEIGHT)
+                self.assertEqual((bar.settings_button.get_allocated_width(),
+                                  bar.settings_button.get_allocated_height()), (28, 28))
+                self.assertEqual(bar.settings_button.get_child().get_pixel_size(), -1)
+
+    def test_window_glyph_pixels_in_dark_and_light_including_restore(self):
+        bar = self.window.titlebar
+        for theme_id in ('idgent-dark', 'idgent-light'):
+            with self.subTest(theme=theme_id):
+                self.use_theme(theme_id)
+                ui = get_theme(theme_id).ui
+                self.assert_pixel(bar, 400, 2, rgb(ui['sidebar_bg']))
+                for name in ('minimize', 'maximize', 'close'):
+                    button = find_class(bar, name)
+                    glyph = self.glyph_pixels(button, rgb(ui['sidebar_bg']))
+                    self.assertTrue(glyph)
+                    width = max(x for x, _, _ in glyph) - min(x for x, _, _ in glyph) + 1
+                    self.assertGreaterEqual(width, 18)
+                    self.assertLessEqual(width, 20)
+                # No window manager runs in xvfb: exercise GTK's restore asset
+                # directly, using the same image widget and native pixel size.
+                maximize = find_class(bar, 'maximize')
+                previous = self.glyph_pixels(maximize, rgb(ui['sidebar_bg']))
+                maximize.get_child().set_from_icon_name('window-restore-symbolic', Gtk.IconSize.MENU)
+
+                def restore_drawn():
+                    glyph = self.glyph_pixels(maximize, rgb(ui['sidebar_bg']))
+                    return glyph != previous and glyph
+
+                self.assertTrue(poll(restore_drawn))
+                glyph = self.glyph_pixels(maximize, rgb(ui['sidebar_bg']))
+                for coordinates in ([x for x, _, _ in glyph], [y for _, y, _ in glyph]):
+                    self.assertGreaterEqual(max(coordinates) - min(coordinates) + 1, 18)
+                    self.assertLessEqual(max(coordinates) - min(coordinates) + 1, 20)
+                self.assertEqual(maximize.get_child().get_pixel_size(), WINDOW_ICON_SIZE)
+                maximize.get_child().set_from_icon_name('window-maximize-symbolic', Gtk.IconSize.MENU)
+
+    def test_window_controls_fit_at_minimum_window_width(self):
+        bar = self.window.titlebar
+        minimum = self.window.get_preferred_width().minimum_width
+        self.window.resize(minimum, 400)
+        self.assertTrue(poll(lambda: bar.get_allocated_width() == minimum))
+        buttons = [find_class(bar, name) for name in ('minimize', 'maximize', 'close')]
+        for index, button in enumerate(buttons):
+            self.assertEqual(button.translate_coordinates(bar, 0, 0),
+                             (minimum - (3 - index) * WINDOW_BUTTON_WIDTH, 0))
+            self.assertEqual((button.get_allocated_width(), button.get_allocated_height()),
+                             (WINDOW_BUTTON_WIDTH, HEADER_HEIGHT - 1))
+        gear = bar.settings_button
+        gear_x, gear_y = gear.translate_coordinates(bar, 0, 0)
+        self.assertEqual((gear.get_allocated_width(), gear.get_allocated_height()), (28, 28))
+        self.assertAlmostEqual(gear_y + 14, (HEADER_HEIGHT - 1) / 2, delta=1)
+        self.assertEqual(gear_x + 28 + gear.get_margin_end(),
+                         buttons[0].translate_coordinates(bar, 0, 0)[0])
+        menu_x, _ = bar.menu_bar.translate_coordinates(bar, 0, 0)
+        title_x, _ = bar.title_label.translate_coordinates(bar, 0, 0)
+        self.assertLessEqual(menu_x + bar.menu_bar.get_allocated_width(), title_x)
+        self.assertLessEqual(title_x + bar.title_label.get_allocated_width(), gear_x)
+        self.assertEqual(bar.get_allocated_height(), HEADER_HEIGHT)
 
     def test_close_hover_is_danger_with_white_glyph(self):
         bar = self.window.titlebar
