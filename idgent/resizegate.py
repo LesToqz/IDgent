@@ -1,4 +1,4 @@
-"""A clipped GTK container which debounces allocation of its single child.
+"""A clipped GTK container which paces allocation of its single child.
 
 Wrap the complete terminal page so terminal and scrollbar keep their committed
 geometry together.
@@ -13,22 +13,28 @@ from gi.repository import Gdk, GLib, Gtk
 
 
 class ResizeGate(Gtk.Bin):
-    """Hold child geometry until our width and height have settled.
+    """Follow our size live, but let a terminal's program answer each resize.
 
-    ``SETTLE_MS`` can be overridden on an instance. ``commit()`` applies the
-    latest allocation immediately; it never changes terminal contents or sends
-    input to a child process. The private Gdk window clips even windowed children
-    while the gate is smaller than their last committed allocation.
+    Every new allocation is committed to the child at once, unless a VTE
+    descendant changed its grid in the previous commit and its program has not
+    redrawn yet: a shell's SIGWINCH redraw is computed for one width, and VTE
+    would otherwise interpret it at the next one (overwritten prompts, erased
+    history lines). Such a commit waits for the terminal's next contents change,
+    or ``PACE_MS`` for a program which does not redraw. Meanwhile the private
+    Gdk window clips the child, or our background fills the extra space.
 
-    VTE descendants temporarily use non-reflow allocation to avoid a second
-    readline redraw bug even with one SIGWINCH. This preserves history bytes but
+    ``commit()`` applies the latest allocation immediately; it never changes
+    terminal contents or sends input to a child process.
+
+    VTE descendants use non-reflow allocation: readline redraws its prompt
+    relative to the old grid after a SIGWINCH, which overwrites or duplicates
+    the prompt when VTE has also reflowed it. This preserves history bytes but
     leaves old lines at their original wrapping. ``REFLOW_VTE = True`` opts out.
     """
 
-    SETTLE_MS = 120
+    PACE_MS = 50
     # Application layouts can retain the wrapped page's original size requests.
     CHILD_MINIMUM = False
-    # A single large reflow can also confuse readline's cursor bookkeeping.
     # Suppress VTE reflow for the committed allocation, then restore the caller's
     # setting. Set True on an instance to retain normal reflow instead.
     REFLOW_VTE = False
@@ -40,6 +46,9 @@ class ResizeGate(Gtk.Bin):
         self._committed = None
         self._allocated = False
         self._timer = None
+        # Terminals whose program has not yet answered our last grid change.
+        self._answers = []
+        self._release = None
         self._destroyed = False
         self._background_provider = None
         # Let GTK paint CSS in C, so this works without python3-gi-cairo. This
@@ -114,6 +123,7 @@ class ResizeGate(Gtk.Bin):
 
     def do_unrealize(self):
         self._cancel_timer()
+        self._stop_waiting()
         Gtk.Bin.do_unrealize(self)
 
     def do_size_allocate(self, allocation):
@@ -129,19 +139,14 @@ class ResizeGate(Gtk.Bin):
         background.width, background.height = safe.width, safe.height
         self._background.size_allocate(background)
         target = safe.width, safe.height
-        changed = target != self._target
         self._target = target
         first = not self._allocated
         self._allocated = True
-        if first or self._committed is None:
+        if first or self._committed is None or (target != self._committed and not self._answers):
             self.commit()
-        elif changed:
-            self._cancel_timer()
-            if target != self._committed and not self._destroyed:
-                self._timer = GLib.timeout_add(max(1, int(self.SETTLE_MS)), self._settled)
-            self._allocate_child()
         else:
-            # Honour a child's queue_resize()/show() without bypassing the gate.
+            # Hold the committed geometry until the terminal has answered, or
+            # honour a child's queue_resize()/show() without bypassing the gate.
             self._allocate_child()
 
     def _allocate_child(self):
@@ -158,24 +163,67 @@ class ResizeGate(Gtk.Bin):
         allocation.height = max(self._committed[1], child.get_preferred_height()[0],
                                 child.get_margin_top() + child.get_margin_bottom() + 1)
         terminals = []
+
+        def collect(widget):
+            # Property access avoids importing VTE into this GTK container
+            # and the Python deprecation warning on its equivalent methods.
+            if widget.find_property("rewrap-on-resize") is not None:
+                terminals.append(widget)
+            if isinstance(widget, Gtk.Container):
+                for descendant in widget.get_children():
+                    collect(descendant)
+        collect(child)
+        grids = [(t.get_column_count(), t.get_row_count()) for t in terminals]
+        reflowing = []
         if not self.REFLOW_VTE:
-            def suspend_reflow(widget):
-                # Property access avoids importing VTE into this GTK container
-                # and the Python deprecation warning on its equivalent methods.
-                if widget.find_property("rewrap-on-resize") is not None:
-                    previous = widget.get_property("rewrap-on-resize")
-                    if previous:
-                        terminals.append(widget)
-                        widget.set_property("rewrap-on-resize", False)
-                if isinstance(widget, Gtk.Container):
-                    for descendant in widget.get_children():
-                        suspend_reflow(descendant)
-            suspend_reflow(child)
+            for terminal in terminals:
+                if terminal.get_property("rewrap-on-resize"):
+                    reflowing.append(terminal)
+                    terminal.set_property("rewrap-on-resize", False)
         try:
             child.size_allocate(allocation)
         finally:
-            for terminal in terminals:
+            for terminal in reflowing:
                 terminal.set_property("rewrap-on-resize", True)
+        changed = [t for t, grid in zip(terminals, grids)
+                   if (t.get_column_count(), t.get_row_count()) != grid and t.get_mapped()]
+        if changed:
+            self._wait_for(changed)
+
+    def _wait_for(self, terminals):
+        """Hold further commits until each terminal's program has redrawn."""
+        self._stop_waiting()
+        for terminal in terminals:
+            handler = terminal.connect("contents-changed", self._answered)
+            self._answers.append((terminal, handler))
+        self._release = GLib.timeout_add(max(1, int(self.PACE_MS)), self._released)
+
+    def _stop_waiting(self):
+        for terminal, handler in self._answers:
+            if terminal.handler_is_connected(handler):
+                terminal.disconnect(handler)
+        self._answers = []
+        if self._release is not None:
+            GLib.source_remove(self._release)
+            self._release = None
+
+    def _answered(self, terminal):
+        for index, (other, handler) in enumerate(self._answers):
+            if other is terminal:
+                terminal.disconnect(handler)
+                del self._answers[index]
+                break
+        if not self._answers:
+            self._stop_waiting()
+            # VTE emits this while it parses child output; resize it afterwards,
+            # still before the next frame is painted.
+            self._timer = self._timer or GLib.idle_add(self._settled, priority=GLib.PRIORITY_HIGH_IDLE)
+
+    def _released(self):
+        self._release = None
+        self._stop_waiting()
+        self._settled()
+        return GLib.SOURCE_REMOVE
 
     def _cancel_timer(self):
         if self._timer is not None:
@@ -184,7 +232,8 @@ class ResizeGate(Gtk.Bin):
 
     def _settled(self):
         self._timer = None
-        self.commit()
+        if not self._answers and self._target is not None and self._target != self._committed:
+            self.commit()
         return GLib.SOURCE_REMOVE
 
     def commit(self):
@@ -201,12 +250,14 @@ class ResizeGate(Gtk.Bin):
 
     def _child_changed(self, _gate, _child):
         self._cancel_timer()
+        self._stop_waiting()
         self._committed = None
         self.queue_resize()
 
     def _on_destroy(self, _widget):
         self._destroyed = True
         self._cancel_timer()
+        self._stop_waiting()
 
     def set_background(self, rgba_string):
         """Set this gate's padding colour, accepting any Gdk.RGBA string."""
