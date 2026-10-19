@@ -38,25 +38,25 @@ class RepoTest(unittest.TestCase):
 class GitStatusTests(RepoTest):
     def test_untracked_staged_and_unchanged(self):
         new = self.write('new.txt')
-        self.assertEqual(self.snapshot().files, {new: Status('new', 'U')})
+        self.assertEqual(self.snapshot().files, {new: Status('new')})
         self.git('add', 'new.txt')
-        self.assertEqual(self.snapshot().files, {new: Status('new', 'A')})
+        self.assertEqual(self.snapshot().files, {new: Status('new')})
         self.assertEqual(self.snapshot().folders[str(self.root)], Status('new'))
 
     def test_modified_staged_and_modified_again(self):
         path = self.write('clean.txt', 'changed\n')
-        self.assertEqual(self.snapshot().files[path], Status('modified', 'M'))
+        self.assertEqual(self.snapshot().files[path], Status('modified'))
         self.git('add', 'clean.txt')
-        self.assertEqual(self.snapshot().files[path], Status('modified', 'M'))
+        self.assertEqual(self.snapshot().files[path], Status('modified'))
         self.write('clean.txt', 'changed again\n')
-        self.assertEqual(self.snapshot().files[path], Status('modified', 'M'))
+        self.assertEqual(self.snapshot().files[path], Status('modified'))
         self.assertIn(b'MM clean.txt', self.git('status', '--porcelain=v1').stdout)
 
     def test_added_then_modified_is_modified(self):
         path = self.write('new.txt')
         self.git('add', 'new.txt')
         self.write('new.txt', 'edited after staging')
-        self.assertEqual(self.snapshot().files[path], Status('modified', 'M'))
+        self.assertEqual(self.snapshot().files[path], Status('modified'))
 
     def test_rename_destination_and_old_folder(self):
         self.write('old/file name.txt')
@@ -65,7 +65,7 @@ class GitStatusTests(RepoTest):
         (self.root / 'new').mkdir()
         self.git('mv', 'old/file name.txt', 'new/rénamed file.txt')
         snapshot = self.snapshot()
-        self.assertEqual(snapshot.files[str(self.root / 'new/rénamed file.txt')], Status('modified', 'R'))
+        self.assertEqual(snapshot.files[str(self.root / 'new/rénamed file.txt')], Status('modified'))
         self.assertNotIn(str(self.root / 'old/file name.txt'), snapshot.files)
         self.assertEqual(snapshot.folders[str(self.root / 'old')], Status('modified'))
         self.assertEqual(snapshot.folders[str(self.root / 'new')], Status('modified'))
@@ -80,7 +80,7 @@ class GitStatusTests(RepoTest):
     def test_unicode_spaces_newlines_and_nested_aggregate(self):
         path = self.write('outer/inner/你好 spaced\nname.txt')
         snapshot = self.snapshot()
-        self.assertEqual(snapshot.files[path], Status('new', 'U'))
+        self.assertEqual(snapshot.files[path], Status('new'))
         for folder in ('', 'outer', 'outer/inner'):
             self.assertEqual(snapshot.folders[str(self.root / folder)], Status('new'))
         self.write('clean.txt', 'modified')
@@ -90,7 +90,7 @@ class GitStatusTests(RepoTest):
         path = self.write('sub/nested/a.txt')
         self.write('outside.txt')
         snapshot = self.snapshot(self.root / 'sub')
-        self.assertEqual(snapshot.files, {path: Status('new', 'U')})
+        self.assertEqual(snapshot.files, {path: Status('new')})
         self.assertEqual(set(snapshot.folders), {str(self.root / 'sub'), str(self.root / 'sub/nested')})
 
     def test_real_merge_conflict_overrides_modified_and_new(self):
@@ -103,18 +103,18 @@ class GitStatusTests(RepoTest):
         self.assertNotEqual(self.git('merge', 'other', check=False).returncode, 0)
         self.write('untracked.txt')
         snapshot = self.snapshot()
-        self.assertEqual(snapshot.files[str(self.root / 'clean.txt')], Status('conflict', '!'))
+        self.assertEqual(snapshot.files[str(self.root / 'clean.txt')], Status('conflict'))
         self.assertEqual(snapshot.folders[str(self.root)], Status('conflict'))
 
     def test_all_conflict_codes_typechange_copy_and_unstaged_rename(self):
         for code in ('UU', 'AA', 'DD', 'AU', 'UA', 'DU', 'UD'):
             with self.subTest(code=code):
                 result = parse_porcelain((code + ' f\0').encode(), str(self.root), str(self.root))
-                self.assertEqual(result.files[str(self.root / 'f')], Status('conflict', '!'))
-        for code, badge in ((' T', 'M'), ('T ', 'M'), (' C', 'M'), (' R', 'R')):
+                self.assertEqual(result.files[str(self.root / 'f')], Status('conflict'))
+        for code in (' T', 'T ', ' C', ' R'):
             data = (code + ' f\0' + ('old\0' if code.strip() in ('C', 'R') else '')).encode()
             result = parse_porcelain(data, str(self.root), str(self.root))
-            self.assertEqual(result.files[str(self.root / 'f')], Status('modified', badge))
+            self.assertEqual(result.files[str(self.root / 'f')], Status('modified'))
 
     def test_no_repository_missing_binary_and_timeout(self):
         with tempfile.TemporaryDirectory() as outside:
@@ -144,7 +144,7 @@ class GitStatusTests(RepoTest):
 
     def test_partial_porcelain_record_is_discarded(self):
         result = parse_porcelain(b'?? complete\0?? unfinished', str(self.root), str(self.root))
-        self.assertEqual(result.files, {str(self.root / 'complete'): Status('new', 'U')})
+        self.assertEqual(result.files, {str(self.root / 'complete'): Status('new')})
 
     def test_real_subprocess_timeout_and_output_bound(self):
         with tempfile.TemporaryDirectory() as binaries:

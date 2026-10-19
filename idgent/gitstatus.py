@@ -16,7 +16,6 @@ _CONFLICTS = {'UU', 'AA', 'DD', 'AU', 'UA', 'DU', 'UD'}
 @dataclass(frozen=True)
 class Status:
     kind: str
-    badge: str = ''
 
 
 @dataclass
@@ -85,17 +84,17 @@ def parse_porcelain(data: bytes, repo: str, root: str, max_entries=MAX_ENTRIES) 
         if 'R' in code or 'C' in code:
             source = os.path.abspath(os.path.join(repo, os.fsdecode(next(records, b''))))
         if code in _CONFLICTS:
-            status = Status('conflict', '!')
+            status = Status('conflict')
         elif code == '??':
-            status = Status('new', 'U')
+            status = Status('new')
         elif 'D' in code:
             status = Status('modified')
         elif 'R' in code or 'C' in code:
-            status = Status('modified', 'R' if 'R' in code else 'M')
+            status = Status('modified')
         elif 'M' in code or 'T' in code:
-            status = Status('modified', 'M')
+            status = Status('modified')
         elif 'A' in code:
-            status = Status('new', 'A')
+            status = Status('new')
         else:
             continue
         # Deleted paths contribute to folders, but have no file decoration.

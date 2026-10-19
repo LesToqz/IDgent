@@ -66,9 +66,6 @@ class ExplorerPanel(Gtk.Box):
         column.pack_start(label, True)
         column.add_attribute(label, "text", 1)
         column.set_cell_data_func(label, self._git_cell_data)
-        self._badge_cell = Gtk.CellRendererText(xalign=1, scale=.85, width_chars=2)
-        column.pack_end(self._badge_cell, False)
-        column.set_cell_data_func(self._badge_cell, self._git_cell_data)
         self.tree.append_column(column)
         self.tree.connect("row-expanded", self._on_expanded)
         self.tree.connect("row-activated", self._on_activated)
@@ -108,8 +105,6 @@ class ExplorerPanel(Gtk.Box):
         icon, _name, path = model[row][:]
         statuses = self._git_snapshot.folders if icon == "folder" else self._git_snapshot.files
         status = statuses.get(path) if self._git_enabled else None
-        if cell is self._badge_cell:
-            cell.set_property("text", status.badge if status else "")
         if status:
             role = "git_" + status.kind
             found, color = self.tree.get_style_context().lookup_color("idgent_" + role)
@@ -218,7 +213,6 @@ class ExplorerPanel(Gtk.Box):
         """Resize file names and reserve enough height for their Pango metrics."""
         self.font_size = size
         self._text_cell.set_property("size-points", size)
-        self._badge_cell.set_property("size-points", size)
         description = self.tree.get_pango_context().get_font_description().copy()
         description.set_size(size * Pango.SCALE)
         metrics = self.tree.get_pango_context().get_metrics(description, None)
