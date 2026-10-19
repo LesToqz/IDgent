@@ -233,7 +233,6 @@ class ResizeGateTest(unittest.TestCase):
         self.fixed = AllocationHost()
         self.window.add(self.fixed)
         self.gate = ResizeGate()
-        self.gate.SETTLE_MS = 160
         self.child = AllocationProbe()
         self.gate.add(self.child)
         self.fixed.put(self.gate, 20, 20)
@@ -257,47 +256,77 @@ class ResizeGateTest(unittest.TestCase):
         self.assertTrue(gate.get_realized())
         self.assertEqual(gate.get_children(), [child])
 
-    def test_debounce_and_reset_on_change(self):
-        allocate(self.gate, 260, 130)
-        first_timer = self.gate._timer
-        self.assertEqual(self.child.get_allocated_width(), 200)
-        spin(100)
-        allocate(self.gate, 280, 140)
-        self.assertNotEqual(self.gate._timer, first_timer)
-        spin(100)  # Past the first deadline, before the reset deadline.
-        self.assertEqual(self.child.get_allocated_width(), 200)
-        self.assertTrue(poll(lambda: self.child.get_allocated_width() == 280))
-        self.assertEqual(self.child.get_allocated_height(), 140)
-        self.assertIsNone(self.gate._timer)
+    def hold(self, pace_ms=10000):
+        """Put the gate in the state of a terminal still answering a resize."""
+        self.gate.PACE_MS = pace_ms
+        source = Vte.Terminal()
+        self.addCleanup(source.destroy)
+        self.gate._wait_for([source])
+        return source
 
-    def test_identical_allocation_does_not_postpone_commit(self):
+    def test_plain_child_follows_every_allocation(self):
+        for width, height in ((260, 130), (280, 140), (150, 90), (200, 120)):
+            allocate(self.gate, width, height)
+            self.assertEqual(self.child.get_allocated_width(), width)
+            self.assertEqual(self.child.get_allocated_height(), height)
+            self.assertEqual(self.gate._committed, (width, height))
+        self.assertIsNone(self.gate._timer)
+        self.assertEqual(self.gate._answers, [])
+
+    def test_waiting_terminal_holds_geometry_until_it_answers(self):
+        source = self.hold()
+        allocate(self.gate, 260, 130)
+        allocate(self.gate, 280, 140)
+        spin(100)
+        self.assertEqual(self.child.get_allocated_width(), 200)
+        # Any parsed output means the program has redrawn for the last grid.
+        source.feed(b"redrawn")
+        self.assertTrue(poll(lambda: self.child.get_allocated_width() == 280, 1))
+        self.assertEqual(self.child.get_allocated_height(), 140)
+        self.assertEqual(self.gate._answers, [])
+        self.assertIsNone(self.gate._release)
+
+    def test_silent_terminal_is_released_after_pace(self):
+        self.hold(pace_ms=60)
+        allocate(self.gate, 260, 130)
+        self.assertEqual(self.child.get_allocated_width(), 200)
+        started = time.monotonic()
+        self.assertTrue(poll(lambda: self.child.get_allocated_width() == 260, 1))
+        self.assertGreaterEqual(time.monotonic() - started, .04)
+        self.assertEqual(self.gate._answers, [])
+
+    def test_identical_allocation_while_waiting_keeps_committed_geometry(self):
+        self.hold()
         allocate(self.gate, 250, 130)
-        timer = self.gate._timer
-        spin(80)
         self.child.queue_resize()
         allocate(self.gate, 250, 130)
-        self.assertEqual(self.gate._timer, timer)
-        self.assertTrue(poll(lambda: self.child.get_allocated_width() == 250))
+        self.assertEqual(self.child.get_allocated_width(), 200)
+        self.assertTrue(self.gate._answers)
 
-    def test_commit_and_return_to_committed_size_cancel_timeout(self):
+    def test_commit_skips_waiting_and_return_to_committed_size(self):
+        self.hold()
         allocate(self.gate, 270, 140)
         self.gate.commit()
         self.assertEqual(self.child.get_allocated_width(), 270)
         self.assertIsNone(self.gate._timer)
         allocate(self.gate, 310, 150)
         allocate(self.gate, 270, 140)
-        self.assertIsNone(self.gate._timer)
-        spin(200)
+        spin(100)
         self.assertEqual(self.child.get_allocated_width(), 270)
 
-    def test_destroy_cancels_live_timeout(self):
+    def test_destroy_cancels_waiting(self):
+        source = self.hold()
         allocate(self.gate, 250, 130)
-        self.assertIsNotNone(self.gate._timer)
+        self.assertIsNotNone(self.gate._release)
+        handlers = [handler for _terminal, handler in self.gate._answers]
         self.gate.destroy()
-        self.assertIsNone(self.gate._timer)
+        self.assertIsNone(self.gate._release)
+        self.assertEqual(self.gate._answers, [])
+        self.assertFalse(any(source.handler_is_connected(h) for h in handlers))
         count = len(self.child.allocations)
         self.gate.commit()
-        spin(200)
+        source.feed(b"late")
+        spin(100)
         self.assertEqual(len(self.child.allocations), count)
 
     def test_hidden_removed_destroyed_and_replacement_children(self):
@@ -323,7 +352,8 @@ class ResizeGateTest(unittest.TestCase):
         self.gate.commit()
         self.assertIsNone(self.gate.get_child())
 
-    def test_reparent_during_timeout(self):
+    def test_reparent_while_waiting(self):
+        self.hold()
         allocate(self.gate, 280, 140)
         other = Gtk.Fixed()
         other_window = Gtk.Window()
@@ -331,6 +361,7 @@ class ResizeGateTest(unittest.TestCase):
         self.addCleanup(other_window.destroy)
         self.fixed.remove(self.gate)
         self.assertIsNone(self.gate._timer)
+        self.assertEqual(self.gate._answers, [])
         other.put(self.gate, 0, 0)
         other_window.show_all()
         self.assertTrue(poll(lambda: self.child.get_mapped()))
@@ -371,7 +402,6 @@ class ResizeGateTest(unittest.TestCase):
         self.assertGreaterEqual(self.child.get_allocated_height(), 1)
 
     def test_background_padding_and_native_child_clipping_pixels(self):
-        self.gate.SETTLE_MS = 10000
         self.gate.remove(self.child)
         child = Gtk.EventBox()  # Windowed child exercises Gdk window clipping.
         provider = Gtk.CssProvider()
@@ -383,6 +413,7 @@ class ResizeGateTest(unittest.TestCase):
         allocate(self.gate, 200, 120)
         self.gate.commit()
         self.assertTrue(poll(lambda: child.get_mapped()))
+        self.hold()
 
         def pixel(x, y):
             pixbuf = Gdk.pixbuf_get_from_window(self.window.get_window(), x + 20, y + 20, 1, 1)
@@ -479,15 +510,16 @@ class BashDragTest(unittest.TestCase):
                         self.assertEqual(metric["history_copies"], 1, metric)
                         self.assertFalse(metric["garbage"], metric)
                         self.assertEqual(metric["prompt_ends"], 1, metric)
-                        self.assertTrue(delays)
-                        self.assertGreaterEqual(min(delays), .100, delays)
-                        self.assertLess(len(delays), 10, delays)
+                        # The page follows the drag live: each new geometry
+                        # waits at most for bash's redraw of the previous one.
+                        self.assertGreater(len(delays), 10, delays)
+                        self.assertLess(sorted(delays)[len(delays) // 2], .06, delays)
+                        self.assertLess(max(delays), .25, delays)
                         self.assertLessEqual(metric["winch"], len(delays), metric)
                 finally:
                     for harness in harnesses:
                         harness.close()
                 for baseline, after in zip(*measurements):
-                    self.assertGreater(baseline["winch"], after["winch"] + 10)
                     self.assertGreater(baseline["history_copies"], after["history_copies"])
                     self.assertTrue(baseline["garbage"], baseline)
 
