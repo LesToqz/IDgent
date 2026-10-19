@@ -8,7 +8,11 @@ them; Ctrl+Shift+P (command palette) works everywhere.
 """
 
 import os
+import re
 import sys
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Callable
 
@@ -19,9 +23,10 @@ gi.require_version("Gdk", "3.0")
 gi.require_version("Vte", "2.91")
 from gi.repository import Gdk, GLib, Gtk, Vte
 
-from idgent import fsops, motion, settings, style
+from idgent import fsops, gitlog, motion, settings, style
 from idgent.graphdata import SEMANTICS
 from idgent.graphview import GraphView
+from idgent.gitviews import CommitView, GitGraphView
 from idgent.overlay import OverlayHost
 from idgent.palette import Command, CommandPalette, QuickSwitcher
 from idgent.search import SKIP_DIRS
@@ -63,6 +68,15 @@ class MainWindow(Gtk.ApplicationWindow):
         self._graph_timers = {}
         self._graph_refresh_timer = None
         self._graph_errors = set()
+        self._git_errors = set()
+        self._commit_views = {}
+        self._commit_pending = set()
+        self._commit_executor = None
+        self._git_lock = threading.Lock()
+        self._git_sources = set()
+        self._git_epoch = 0
+        self._git_closed = False
+        self._git_full_notice = False
         self._settings_dialog = None
         self._font_sizes = settings.get_font_sizes()
         stored = settings.get_values()
@@ -87,6 +101,7 @@ class MainWindow(Gtk.ApplicationWindow):
             self.terminal_bottom.set_no_show_all(True)
         for panel in (self.terminal_bottom, self.terminal_right):
             panel.graph_factory = self._make_graph_view
+            panel.gitgraph_factory = self._make_gitgraph_view
             panel.connect("last-closed", self._hide_terminal)
             panel.connect("maximize-toggled", self._terminal_maximize_toggled)
         for key in settings.NEW_KEYS:
@@ -109,7 +124,10 @@ class MainWindow(Gtk.ApplicationWindow):
         for signal in ('row-inserted', 'row-deleted'):
             self.explorer.store.connect(signal, self._graph_tree_changed)
         self.editor.notebook.connect('page-removed', self._graph_tab_closed)
+        self.editor.notebook.connect_after('switch-page', self._git_selection_changed)
+        self.editor.connect('view-tab-closed', self._commit_tab_closed)
         self.connect('destroy', self._graph_cleanup)
+        self.connect('destroy', self._git_cleanup)
 
         self.dock_bottom = Gtk.Paned(orientation=Gtk.Orientation.VERTICAL)
         self.dock_bottom.pack1(self.editor, resize=True, shrink=True)
@@ -194,6 +212,9 @@ class MainWindow(Gtk.ApplicationWindow):
              "<Control><Shift><Alt>g")
         self._commands[-1] = Command("Graph view: Open local graph", self.open_local_graph,
                                      ("Ctrl+Shift+Alt+G",))
+        item(view_menu, "Git graph", "Git graph", self.open_gitgraph, "<Control><Alt>h")
+        self._commands[-1] = Command("Git graph: Open git graph", self.open_gitgraph,
+                                     ("Ctrl+Alt+H",))
         key, modifiers = Gtk.accelerator_parse("<Control><Alt>grave")
         accelerators.connect(key, modifiers, Gtk.AccelFlags.VISIBLE,
                              lambda *_: (self.toggle_terminal_right(), True)[1])
@@ -213,12 +234,15 @@ class MainWindow(Gtk.ApplicationWindow):
             ("Settings: Show hotkeys", lambda: self.open_settings("hotkeys"), ("F1",)),
             ("Graph view: Rebuild graph", self.rebuild_graph, ()),
             ("Graph view: Reset camera", self.reset_graph_camera, ()),
+            ("Git graph: Refresh", self.refresh_gitgraph, ()),
+            ("Git graph: Jump to HEAD", self.focus_git_head, ()),
+            ("Git graph: Close commit tabs", self.close_commit_tabs, ()),
             ("Theme: Next theme", self.next_theme, ("Ctrl+Alt+T",)),
             ("Editor: Toggle Markdown preview", self.toggle_markdown_view, ("Ctrl+Shift+V",)),
-            ("Editor: Zoom in", lambda: self.editor.zoom(1), ("Ctrl+=",)),
-            ("Editor: Zoom out", lambda: self.editor.zoom(-1), ("Ctrl+-",)),
+            ("Editor: Zoom in", lambda: self._editor_zoom(1), ("Ctrl+=",)),
+            ("Editor: Zoom out", lambda: self._editor_zoom(-1), ("Ctrl+-",)),
             ("Editor: Reset zoom",
-             lambda: self.editor.set_font_size(self.editor.default_font_size), ("Ctrl+0",)),
+             self._editor_zoom, ("Ctrl+0",)),
         ):
             self._commands.append(Command(label, callback, keys))
 
@@ -334,6 +358,194 @@ class MainWindow(Gtk.ApplicationWindow):
     def _graph_theme(self):
         for view in self._graph_views():
             view.set_theme(self.theme.ui, self._values['accent'] or self.theme.ui['accent'])
+        self._git_theme()
+
+    def _gitgraph_views(self):
+        return [view for panel in (self.terminal_bottom, self.terminal_right)
+                for view in panel.gitgraph_views()]
+
+    def _git_theme_ui(self):
+        return {**self.theme.ui, 'ui_font': self._values['ui_font'],
+                'editor_font': self._values['editor_font']}
+
+    def _theme_git_view(self, view):
+        ui, accent = self._git_theme_ui(), self._values['accent'] or self.theme.ui['accent']
+        if isinstance(view, CommitView):
+            view.set_theme(ui, accent, self.editor.syntax_style)
+            view.set_font_size(self.editor.font_size)
+        else:
+            view.set_theme(ui, accent)
+        view.post('setSettings', {'reduceMotion': self._values['reduce_motion']})
+
+    def _git_theme(self):
+        for view in [*self._gitgraph_views(), *self._commit_views.values()]:
+            self._theme_git_view(view)
+
+    def _selected_commit(self):
+        key = self.editor.current_view_key()
+        return key[7:] if key in self._commit_views else None
+
+    def _make_gitgraph_view(self):
+        view = GitGraphView(self.root)
+        view.connect('open-commit', lambda source, rev: self.open_commit(rev, source))
+        view.connect('error', self._git_error)
+        self._theme_git_view(view)
+        view.select(self._selected_commit())
+        return view
+
+    def open_gitgraph(self):
+        """Reuse any Git graph, otherwise prefer the wide bottom dock."""
+        self._restore_terminal_fullscreen()
+        panels = (self.terminal_bottom, self.terminal_right)
+        panel = next((p for p in panels if p.has_gitgraph()), None)
+        if panel is None:
+            panel = next((p for p in panels if not p.is_full()), None)
+            if panel is None:
+                if not self._git_full_notice:
+                    self.notify('Both docks are full. Close a pane to open Git graph.')
+                    self._git_full_notice = True
+                return None
+        self._git_full_notice = False
+        panel.set_no_show_all(False)
+        panel.show_all()
+        panel.add_gitgraph()
+        view = panel.gitgraph_views()[0]
+        view.grab_focus()
+        return view
+
+    def refresh_gitgraph(self):
+        for view in self._gitgraph_views():
+            view.refresh()
+
+    def focus_git_head(self):
+        view = self.open_gitgraph()
+        if view is not None:
+            view.focus_head()
+
+    def _git_error(self, _view, message):
+        if message in self._git_errors:
+            return
+        print('Git graph: ' + message, file=sys.stderr)
+        if not self._git_errors:
+            self.notify('Git view encountered an error. See the application log.')
+        self._git_errors.add(message)
+
+    def open_commit(self, rev, source_view=None):
+        """Open a hex object name; resolve abbreviated names off the GTK thread."""
+        if self._git_closed:
+            return None
+        if not isinstance(rev, str) or not re.fullmatch(r'[0-9a-fA-F]{4,40}', rev):
+            self.notify('Invalid commit hash')
+            return None
+        rev = rev.lower()
+        views = self._gitgraph_views()
+        if source_view is not None:
+            views = [source_view, *views]
+        commits = {c['hash']: c for view in views for c in (view.last_data or {}).get('commits', [])}
+        matches = [sha for sha in commits if sha.startswith(rev)]
+        if len(rev) < 40 and len(matches) == 1:
+            rev = matches[0]
+        if len(rev) == 40:
+            return self._open_full_commit(rev, commits.get(rev, {}).get('subject', ''))
+        request = (self._git_epoch, self.root, rev)
+        if request in self._commit_pending:
+            return None
+        self._commit_pending.add(request)
+        if self._commit_executor is None:
+            self._commit_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='idgent-commit-resolve')
+        def resolve():
+            try:
+                raw, _ = gitlog._run(request[1], ['rev-parse', '--verify', '--end-of-options',
+                                                  rev + '^{commit}'], time.monotonic() + 5, cap=256)
+                full = raw.decode('ascii').strip()
+                return full if re.fullmatch(r'[0-9a-f]{40}', full) else None
+            except (gitlog.GitError, UnicodeError):
+                return None
+        def deliver(full):
+            source = GLib.main_current_source()
+            with self._git_lock:
+                self._git_sources.discard(source.get_id())
+            self._commit_pending.discard(request)
+            if not self._git_closed and request[:2] == (self._git_epoch, self.root):
+                if full is None:
+                    self.notify('Commit not found')
+                else:
+                    self._open_full_commit(full)
+            return GLib.SOURCE_REMOVE
+        def done(future):
+            if future.cancelled():
+                return
+            with self._git_lock:
+                if not self._git_closed:
+                    self._git_sources.add(GLib.idle_add(deliver, future.result()))
+        self._commit_executor.submit(resolve).add_done_callback(done)
+        return None
+
+    def _open_full_commit(self, full_hash, subject=''):
+        key = 'commit:' + full_hash
+        view = self.editor.view_tab_widget(key)
+        if view is None:
+            view = CommitView(self.root, full_hash)
+            self._commit_views[key] = view
+            self._theme_git_view(view)
+            view.connect('open-commit', lambda source, rev: self.open_commit(rev, source))
+            view.connect('open-file', self._commit_open_file)
+            view.connect('error', self._git_error)
+        icons = Gtk.IconTheme.get_default()
+        icon = next((name for name in ('git-commit-symbolic', 'vcs-commit-symbolic',
+                                      'document-open-recent-symbolic', 'text-x-generic-symbolic')
+                     if icons.has_icon(name)), None)
+        self._restore_terminal_fullscreen()
+        self.editor.add_view_tab(key, full_hash[:7], view, tooltip=subject or full_hash,
+                                 icon_name=icon)
+        self._git_selection_changed()
+        return view
+
+    def _commit_open_file(self, _view, path, line):
+        if os.path.isabs(path) and os.path.isfile(path):
+            self.editor.open_file_at(path, max(0, line - 1))
+        else:
+            self.notify('File not in the working tree')
+
+    def _git_selection_changed(self, *_args):
+        selected = self._selected_commit()
+        for view in self._gitgraph_views():
+            view.select(selected)
+        self._git_font_size()
+
+    def _git_font_size(self):
+        for view in self._commit_views.values():
+            if (view._theme or {}).get('size') != self.editor.font_size:
+                view.set_font_size(self.editor.font_size)
+
+    def _editor_zoom(self, step=None):
+        if step is None:
+            self.editor.set_font_size(self.editor.default_font_size)
+        else:
+            self.editor.zoom(step)
+        self._git_font_size()
+
+    def _commit_tab_closed(self, _editor, key):
+        self._commit_views.pop(key, None)
+        self._git_selection_changed()
+
+    def close_commit_tabs(self):
+        self._git_epoch += 1
+        self._commit_pending.clear()
+        for key in list(self._commit_views):
+            self.editor.close_view_tab(key)
+
+    def _git_cleanup(self, _window):
+        with self._git_lock:
+            self._git_closed = True
+            sources, self._git_sources = self._git_sources, set()
+        for source in sources:
+            GLib.source_remove(source)
+        if self._commit_executor is not None:
+            self._commit_executor.shutdown(wait=True, cancel_futures=True)
+        self.close_commit_tabs()
+        for view in self._gitgraph_views():
+            view.shutdown()
 
     def open_graph(self):
         self._restore_terminal_fullscreen()
@@ -511,6 +723,7 @@ class MainWindow(Gtk.ApplicationWindow):
         elif key == "editor_font_size":
             self.editor.set_font_size(size)
             self.editor.set_default_font_size(size)
+            self._git_theme()
         elif key == "explorer_font_size":
             self.explorer.set_font_size(size)
         if not settings.set_font_size(key, size):
@@ -533,6 +746,8 @@ class MainWindow(Gtk.ApplicationWindow):
             self._apply_style()
             if key == "accent":
                 self._graph_theme()
+            else:
+                self._git_theme()
             if key == "editor_font":
                 # Re-measure gutter width and tab stops for the new family.
                 for tab in self.editor.tabs:
@@ -540,6 +755,8 @@ class MainWindow(Gtk.ApplicationWindow):
         elif key == "reduce_motion":
             motion.set_reduce_motion(value)
             for view in self._graph_views():
+                view.post("setSettings", {"reduceMotion": value})
+            for view in [*self._gitgraph_views(), *self._commit_views.values()]:
                 view.post("setSettings", {"reduceMotion": value})
         elif key == "line_numbers":
             self.editor.set_line_numbers(value)
@@ -743,6 +960,7 @@ class MainWindow(Gtk.ApplicationWindow):
         root = Path(path).expanduser().resolve()
         if not root.is_dir():
             raise ValueError(f"not a directory: {path}")
+        self.close_commit_tabs()
         self.root = str(root)
         self.explorer.set_root(self.root)
         self.terminal_bottom.set_cwd(self.root)
@@ -750,6 +968,8 @@ class MainWindow(Gtk.ApplicationWindow):
         for view in self._graph_views():
             view.set_root(self.root)
             view.set_active_file(self.editor.current_path())
+        for view in self._gitgraph_views():
+            view.set_root(self.root)
         self._update_title()
 
     def open_folder(self) -> None:
@@ -774,6 +994,10 @@ class MainWindow(Gtk.ApplicationWindow):
     def do_key_press_event(self, event: Gdk.EventKey) -> bool:
         focus = self.get_focus()
         modifiers = event.state & Gtk.accelerator_get_default_mod_mask()
+        if (modifiers == _CTRL | Gdk.ModifierType.MOD1_MASK
+                and event.keyval in (Gdk.KEY_h, Gdk.KEY_H)):
+            self.open_gitgraph()
+            return True
         if modifiers == _CTRL_SHIFT and event.keyval in (Gdk.KEY_p, Gdk.KEY_P):
             self.open_command_palette()
             return True
@@ -816,7 +1040,9 @@ class MainWindow(Gtk.ApplicationWindow):
             # Let the focused editor handle its commands before menu accelerators.
             if self.propagate_key_event(event):
                 return True
-        return Gtk.ApplicationWindow.do_key_press_event(self, event)
+        handled = Gtk.ApplicationWindow.do_key_press_event(self, event)
+        self._git_font_size()
+        return handled
 
     def _ask_quit(self) -> int:
         dialog = Gtk.MessageDialog(transient_for=self, modal=True,
