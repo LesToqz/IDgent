@@ -104,9 +104,8 @@
     const avatar = el('div', 'avatar', initials); avatar.setAttribute('aria-hidden', 'true');
     let hash = 0;
     for (const ch of author.email || name) hash = ((hash << 5) - hash + ch.codePointAt(0)) | 0;
-    const palette = [theme.accent, theme.add, theme.del, theme.modified || theme.syntax.number || theme.accent];
-    avatar.style.backgroundColor = palette[Math.abs(hash) % palette.length];
-    avatar.style.color = contrastInk(avatar.style.backgroundColor);
+    avatar.dataset.slot = Math.abs(hash) % 4;
+    styleAvatar(avatar);
     const block = el('div', 'author-block');
     const date = el('div', 'date-line', C.dateLabel(author.ts || 0) + (author.email ? ' • ' + author.email : ''));
     date.title = C.fullDate(author.ts || 0, author.tz || 0);
@@ -286,9 +285,17 @@
       // Keep fetched rows on either side of their gap when switching layouts.
       m.gaps.forEach(g => {
         const loaded = m.context.get(g.before);
-        if (loaded) { g.node.insertBefore(lineGroup(loaded.top), g.bar); g.node.append(lineGroup(loaded.bottom)); }
+        if (loaded) { g.node.prepend(lineGroup(loaded.top)); g.node.append(lineGroup(loaded.bottom)); }
         if (cached.find(old => old.before === g.before)?.exhausted) { g.exhausted = true; g.bar.remove(); }
       });
+      for (const request of pending.values()) {
+        if (request.m !== m) continue;
+        const replacement = m.gaps.find(g => g.before === request.gap.before);
+        if (replacement) {
+          request.gap = replacement; replacement.pending = true; replacement.label.textContent = 'Loading context…';
+          replacement.bar.querySelectorAll('button').forEach(b => { b.disabled = true; });
+        }
+      }
       fragment.append(diff);
     }
     m.clip.replaceChildren(fragment);
@@ -313,7 +320,7 @@
     m.context.set(gap.before, loaded); updateGap(m, gap);
   }
   function setCommit(data) {
-    clear(); detail = data;
+    clear(); delete app.dataset.state; detail = data;
     if (!data || data.ok === false) { setState(data?.error === 'unknown-revision' ? 'not-found' : 'error', data?.error); return; }
     app.append(toolbar(), header());
     const files = el('div', 'files'); app.append(files);
@@ -365,6 +372,11 @@
       .reduce((n, x, i) => n + x * [.2126, .7152, .0722][i], 0);
   }
   function contrast(a, b) { const x = luminance(a), y = luminance(b); return (Math.max(x, y) + .05) / (Math.min(x, y) + .05); }
+  function styleAvatar(avatar) {
+    const palette = [theme.accent, theme.add, theme.del, theme.modified || theme.syntax.number || theme.accent];
+    avatar.style.backgroundColor = palette[Number(avatar.dataset.slot)];
+    avatar.style.color = contrastInk(avatar.style.backgroundColor);
+  }
   function contrastInk(background) { return contrast(theme.bg, background) > contrast(theme.fg, background) ? theme.bg : theme.fg; }
   function mix(a, b, t) { const x = rgb(a), y = rgb(b); return 'rgb(' + x.map((v, i) => Math.round(v + (y[i] - v) * t)).join(',') + ')'; }
   function tinted(tint) {
@@ -372,7 +384,8 @@
     return alpha ? mix(theme.bg, tint, Number(alpha[1])) : tint;
   }
   function legible(color) {
-    const backgrounds = [theme.bg, tinted(theme.add_bg), tinted(theme.del_bg)];
+    const backgrounds = [theme.bg, tinted(theme.add_bg), tinted(theme.del_bg),
+      mix(tinted(theme.add_bg), theme.add, .19), mix(tinted(theme.del_bg), theme.del, .19)];
     for (let i = 0; i <= 100; i++) {
       const candidate = mix(color, theme.fg, i / 100);
       if (backgrounds.every(bg => contrast(candidate, bg) >= 4.5)) return candidate;
@@ -393,6 +406,7 @@
     [...root.style].filter(k => k.startsWith('--syntax-')).forEach(k => root.style.removeProperty(k));
     Object.entries(theme.syntax).forEach(([kind, color]) => { if (/^[a-z]+$/.test(kind)) root.style.setProperty('--syntax-' + kind, legible(color)); });
     root.style.colorScheme = theme.dark ? 'dark' : 'light';
+    document.querySelectorAll('.avatar').forEach(styleAvatar);
   }
   function setSettings(settings = {}) {
     if ('reduceMotion' in settings) {
@@ -401,7 +415,7 @@
     }
   }
   document.addEventListener('keydown', e => {
-    if (e.ctrlKey || e.metaKey || e.altKey || e.target.closest('input, textarea, [contenteditable="true"]') || !detail) return;
+    if (e.ctrlKey || e.metaKey || e.altKey || e.target.closest?.('input, textarea, [contenteditable="true"]') || !detail) return;
     if (e.key === 'c' && !window.getSelection().toString()) { e.preventDefault(); copySha(); }
     if (e.key !== 'j' && e.key !== 'k' || !models.length) return;
     e.preventDefault();
@@ -415,7 +429,8 @@
     const selection = window.getSelection();
     if (!selection.rangeCount || selection.isCollapsed || !e.clipboardData) return;
     const range = selection.getRangeAt(0);
-    if (!range.commonAncestorContainer.parentElement?.closest('.diff')) return;
+    const ancestor = range.commonAncestorContainer.nodeType === 1 ? range.commonAncestorContainer : range.commonAncestorContainer.parentElement;
+    if (!ancestor.closest('.diff')) return;
     const fragment = range.cloneContents();
     const code = fragment.querySelectorAll('.code');
     if (code.length) {

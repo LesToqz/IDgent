@@ -24,16 +24,16 @@
     return [[prefix, a.length - suffix], [prefix, b.length - suffix]];
   }
   function oldOffset(hunk) {
-    return hunk.old_start + hunk.old_lines - hunk.new_start - hunk.new_lines;
+    return hunk.old_start + Math.max(1, hunk.old_lines) - hunk.new_start - Math.max(1, hunk.new_lines);
   }
   function gaps(hunks) {
     if (!hunks.length) return [];
     const out = [];
-    let start = 1, offset = hunks[0].old_start - hunks[0].new_start;
+    let start = 1, offset = hunks[0].old_start + (hunks[0].old_lines ? 0 : 1) - hunks[0].new_start - (hunks[0].new_lines ? 0 : 1);
     hunks.forEach((h, index) => {
-      const end = h.new_start - 1;
+      const end = h.new_start - (h.new_lines ? 1 : 0);
       if (end >= start) out.push({before: index, start, end, offset});
-      start = Math.max(1, h.new_start + h.new_lines);
+      start = Math.max(1, h.new_start + Math.max(1, h.new_lines));
       offset = oldOffset(h);
     });
     out.push({before: hunks.length, start, end: null, offset});

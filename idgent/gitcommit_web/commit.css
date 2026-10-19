@@ -70,13 +70,13 @@ button:disabled { cursor: wait; opacity: .6; }
 .added { --emphasis-bg: var(--add-emphasis); } .removed { --emphasis-bg: var(--del-emphasis); }
 .file-note { color: var(--muted); padding: 20px 26px; font-size: 12px; background: var(--surface); border-radius: 0 0 5px 5px; }
 .mode { margin: 10px 14px; display: inline-block; font-family: var(--mono); }
-.gap { color: var(--muted); font: 11px var(--ui); }
-.gap-bar { display: flex; align-items: center; height: 29px; gap: 6px; background: var(--surface); border-block: 1px solid var(--border); margin: 4px 0; padding-left: 12px; }
+.gap { color: var(--muted); }
+.gap-bar { font: 11px var(--ui); display: flex; align-items: center; height: 29px; gap: 6px; background: var(--surface); border-block: 1px solid var(--border); margin: 4px 0; padding-left: 12px; }
 .gap-bar button { color: var(--muted); padding: 2px 6px; min-width: 25px; }
 .gap-label { padding: 3px 8px !important; font-size: 11px; }
 .context-in { animation: context-in 160ms ease-out both; }
 .split-pair { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); }
-.split-pair > :last-child { border-left: 1px solid var(--border); }
+.split-pair > :last-child { box-shadow: -1px 0 0 var(--border); }
 .split-pair .diff-row { grid-template-columns: 42px 20px minmax(0,1fr); }
 .split-pair .old-number, .split-pair .new-number { display: none; }
 .split-pair > :first-child .old-number, .split-pair > :last-child .new-number { display: block; }
