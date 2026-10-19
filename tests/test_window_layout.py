@@ -358,7 +358,7 @@ class WindowLayoutTests(unittest.TestCase):
         self.assertEqual(window.terminal_bottom.get_allocated_height(),
                          window.dock_bottom.get_allocated_height() - top)
         self.assertGreater(window.terminal_bottom.get_allocated_height(), before)
-        self.assertEqual(window.sidebar.get_position(), 260)
+        self.assertEqual(window.sidebar.get_position(), 300)
         header = window.terminal_bottom._panes[0].header
         self.assertTrue(header.get_mapped())
         self.assertEqual(header.translate_coordinates(window, 0, 0)[1] - self.content_top(), top)
@@ -382,8 +382,8 @@ class WindowLayoutTests(unittest.TestCase):
         self.assertLessEqual(right - explorer_edge, self.handle_width(window.dock) + 1)
         self.assertEqual(right + window.terminal_right.get_allocated_width(),
                          window.sidebar.get_allocated_width())
-        self.assertEqual(window.explorer.get_allocated_width(), 260)
-        self.assertEqual(window.sidebar.get_position(), 260)
+        self.assertEqual(window.explorer.get_allocated_width(), 300)
+        self.assertEqual(window.sidebar.get_position(), 300)
         self.assertTrue(window.terminal_right.get_mapped())
         window.dock.set_position(window.dock.get_allocated_width() // 2)
         self.settle_layout()
