@@ -678,6 +678,7 @@ class EditorPanel(Gtk.Box):
         tab = _EditorTab(self, path, text, ending, mtime)
         self.tabs.append(tab)
         self.notebook.append_page(tab.page, tab.header)
+        self.notebook.set_tab_reorderable(tab.page, True)
         tab.page.show_all()
         tab.header.show_all()
         self.stack.set_visible_child_name('editor')

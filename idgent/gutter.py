@@ -236,7 +236,8 @@ class ViewChrome:
         while len(self.labels) <= index:
             label = Gtk.Label(xalign=1.0)
             label.get_style_context().add_class('idgent-gutter-num')
-            label.get_style_context().add_provider(self.provider, Gtk.STYLE_PROVIDER_PRIORITY_USER)
+            # Theme roles override these standalone chrome/font fallbacks.
+            label.get_style_context().add_provider(self.provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION - 1)
             self.view.add_child_in_window(label, Gtk.TextWindowType.LEFT, PADDING_LEFT, 0)
             self.labels.append(label)
             self.label_state.append(None)

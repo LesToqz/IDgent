@@ -273,6 +273,14 @@ class MarkdownView:
         if self.view.get_left_margin() != margin:
             self.view.set_left_margin(margin)
             self.view.set_right_margin(margin)
+        # Paragraph tags override TextView margins. Move those too, including
+        # containers already rendered before the option or viewport changed.
+        for name, tag in self.tags.items():
+            if name.startswith('container-'):
+                _, quote, inset = name.split('-')
+                tag.set_property('left-margin', margin + int(quote) * 22 + int(inset))
+        if 'codeblock' in self.tags:
+            self.tags['codeblock'].set_property('right-margin', max(48, margin))
 
     def tag(self, name, **properties):
         tag = self.tags.get(name)
@@ -305,7 +313,7 @@ class MarkdownView:
         self.tag('strike', strikethrough=True)
         self.tag('code', family='monospace', background=chrome['current_line_bg'], foreground=color('string'))
         self.tag('codeblock', family='monospace', paragraph_background=chrome['current_line_bg'],
-                 foreground=fg, right_margin=48, pixels_above_lines=5, pixels_below_lines=5)
+                 foreground=fg, right_margin=max(48, self.view.get_right_margin()), pixels_above_lines=5, pixels_below_lines=5)
         self.tag('table', family='monospace', foreground=fg, pixels_below_lines=0)
         self.tag('link', foreground=color('link'), underline=p.Underline.SINGLE)
         self.tag('image', foreground=chrome['gutter_fg'])
@@ -345,7 +353,7 @@ class MarkdownView:
             inset = block.indent * 5 + (16 if block.kind == 'codeblock' else 12 if block.kind == 'list' else 0)
             container = f'container-{block.quote}-{inset}'
             if container not in self.tags:
-                tag = self.tag(container, left_margin=32 + block.quote * 22 + inset)
+                tag = self.tag(container, left_margin=self.view.get_left_margin() + block.quote * 22 + inset)
                 if block.quote:
                     tag.set_property('foreground', self.chrome['gutter_fg'])
                 # Container foreground must not override headings/links/inline styles.
