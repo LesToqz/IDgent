@@ -251,6 +251,31 @@ class PanelSplitTest(unittest.TestCase):
                 self.assertGreater(min(body.layout.ratios), 0)
                 window.destroy()
 
+    def test_terminal_gitgraph_graph_dividers_and_restore(self):
+        for stacked in (False, True):
+            with self.subTest(stacked=stacked):
+                window, panel = self.open(stacked)
+                panel.ANIMATION_MS = 0
+                panel._close_pane(panel._panes[1])
+                panel.add_gitgraph(Gtk.Entry())
+                panel.add_graph(Gtk.Entry())
+                spin(80)
+                self.assertEqual([p.kind for p in panel._panes], ['terminal', 'gitgraph', 'graph'])
+                body = panel._body
+                for handle, delta in zip(body.handles, (35, -35)):
+                    before = body.pane_sizes()
+                    drag(handle, delta)
+                    self.assertNotEqual(body.pane_sizes(), before)
+                ratios = list(body.layout.ratios)
+                panel.toggle_maximize(panel._panes[1])
+                spin(80)
+                self.assertFalse(any(h.get_visible() for h in body.handles))
+                panel.restore()
+                spin(80)
+                self.assertEqual(body.layout.ratios, ratios)
+                self.assertTrue(all(h.get_visible() for h in body.handles))
+                window.destroy()
+
     def test_real_webkit_resize_keeps_page_state_and_pause_resume(self):
         import tempfile
         from idgent.graphview import GraphView, _load_webkit

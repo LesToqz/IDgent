@@ -1060,22 +1060,25 @@ class PaneChooserTest(unittest.TestCase):
         return self.button._chooser_key(self.button.popover, event)
 
     def test_click_opens_without_choosing_and_keyboard_selects(self):
+        self.assertEqual([r.kind for r in self.button.choices.get_children()],
+                         ['terminal', 'graph', 'gitgraph'])
         self.button.clicked()
         self.assertTrue(self.button.popover.get_visible())
         self.assertEqual(self.events, [])
         self.assertEqual(self.button.choices.get_selected_row().kind, 'terminal')
-        for key, expected in ((Gdk.KEY_Down, 'graph'), (Gdk.KEY_Up, 'terminal'),
-                              (Gdk.KEY_End, 'graph'), (Gdk.KEY_Home, 'terminal')):
+        for key, expected in ((Gdk.KEY_Down, 'graph'),
+                              (Gdk.KEY_Down, 'gitgraph'), (Gdk.KEY_Up, 'graph'),
+                              (Gdk.KEY_End, 'gitgraph'), (Gdk.KEY_Home, 'terminal')):
             self.assertTrue(self.key(key))
             self.assertEqual(self.button.choices.get_selected_row().kind, expected)
         self.key(Gdk.KEY_End)
         self.assertTrue(self.key(Gdk.KEY_Return))
-        self.assertEqual(self.events, ['graph'])
+        self.assertEqual(self.events, ['gitgraph'])
         self.assertTrue(poll(lambda: not self.button.popover.get_visible()))
         self.button.clicked()
         self.assertEqual(self.button.choices.get_selected_row().kind, 'terminal')
         self.key(Gdk.KEY_space)
-        self.assertEqual(self.events, ['graph', 'terminal'])
+        self.assertEqual(self.events, ['gitgraph', 'terminal'])
 
     def test_mouse_activation_escape_and_reduced_motion(self):
         with patch.object(motion, 'animations_enabled', return_value=False):
