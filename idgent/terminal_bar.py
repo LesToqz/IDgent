@@ -148,8 +148,8 @@ class PaneHeader(Gtk.Box):
         self.fullscreen_button = _IconButton("view-fullscreen-symbolic", "□", "Fullscreen")
         self.fullscreen_button.connect("clicked", lambda _b: self.emit("fullscreen-requested"))
         self.delete_button = _IconButton("edit-delete-symbolic", "✕", "Kill terminal")
-        if kind == "graph":
-            self.delete_button.set_tooltip_text("Close graph view")
+        if kind in ("graph", "gitgraph"):
+            self.delete_button.set_tooltip_text("Close git graph" if kind == "gitgraph" else "Close graph view")
         self.delete_button.get_style_context().add_class("idgent-terminal-delete")
         self.delete_button.connect("clicked", lambda _b: self.emit("delete-requested"))
         self.pack_start(self.label_button, False, True, 0)
@@ -165,7 +165,8 @@ class PaneHeader(Gtk.Box):
 
     def set_number(self, position: int) -> None:
         """Label the header `<shell><position>` (1-based)."""
-        self.label.set_text("Graph view" if self.kind == "graph" else f"{self.shell_name}{position}")
+        self.label.set_text({"graph": "Graph view", "gitgraph": "Git graph"}.get(
+            self.kind, f"{self.shell_name}{position}"))
 
     def set_active(self, active: bool) -> None:
         """The dock's current pane: its label switches to the normal text colour."""
@@ -219,8 +220,13 @@ class AddButton(_IconButton):
             "network-workgroup-symbolic", "network-server-symbolic",
             "emblem-shared-symbolic") if theme is not None and theme.has_icon(name)),
             "emblem-shared-symbolic")
+        self.gitgraph_icon = next((name for name in (
+            "vcs-branch-symbolic", "git-symbolic", "view-list-tree-symbolic",
+            "network-workgroup-symbolic") if theme is not None and theme.has_icon(name)),
+            self.graph_icon)
         for kind, label, icon in (("terminal", "Terminal", "utilities-terminal-symbolic"),
-                                   ("graph", "Graph view", self.graph_icon)):
+                                   ("graph", "Graph view", self.graph_icon),
+                                   ("gitgraph", "Git graph", self.gitgraph_icon)):
             row = Gtk.ListBoxRow()
             row.kind = kind
             box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
@@ -243,7 +249,7 @@ class AddButton(_IconButton):
         row.grab_focus()
 
     def choose(self, kind: str) -> None:
-        if kind not in ("terminal", "graph"):
+        if kind not in ("terminal", "graph", "gitgraph"):
             return
         self.popover.popdown()
         self.emit("choose", kind)

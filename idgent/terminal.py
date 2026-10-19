@@ -105,6 +105,7 @@ class TerminalPanel(Gtk.Box):
         self.font_size = font_size
         self._cwd = cwd
         self.graph_factory: Callable[[], Gtk.Widget] | None = None
+        self.gitgraph_factory: Callable[[], Gtk.Widget] | None = None
         self.stacked = stacked
         self._destroyed = False
         # MainWindow supplies the intended first extent before moving its divider.
@@ -200,11 +201,20 @@ class TerminalPanel(Gtk.Box):
     def graph_views(self) -> list[Gtk.Widget]:
         return [pane.view for pane in self._panes if pane.kind == "graph"]
 
+    def gitgraph_count(self) -> int:
+        return sum(pane.kind == "gitgraph" for pane in self._panes)
+
+    def has_gitgraph(self) -> bool:
+        return self.gitgraph_count() > 0
+
+    def gitgraph_views(self) -> list[Gtk.Widget]:
+        return [pane.view for pane in self._panes if pane.kind == "gitgraph"]
+
     def _choose_pane(self, _button, kind: str) -> None:
         if kind == "terminal":
             self.new_terminal()
-        elif kind == "graph":
-            self.add_graph()
+        elif kind in ("graph", "gitgraph"):
+            self._add_web_pane(kind)
 
     def is_full(self) -> bool:
         return len(self._panes) >= MAX_TERMINALS
@@ -469,9 +479,17 @@ class TerminalPanel(Gtk.Box):
 
     def add_graph(self, view: Gtk.Widget | None = None) -> bool:
         """Add one graph to this dock, or focus its existing graph without a toast."""
+        return self._add_web_pane("graph", view)
+
+    def add_gitgraph(self, view: Gtk.Widget | None = None) -> bool:
+        """Add one Git graph, or focus the existing one without a limit notice."""
+        return self._add_web_pane("gitgraph", view)
+
+    def _add_web_pane(self, kind: str, view: Gtk.Widget | None = None) -> bool:
+        """Shared lifecycle for composite web views, without a PTY or ResizeGate."""
         if self._destroyed:
             return False
-        existing = next((p for p in self._panes if p.kind == "graph"), None)
+        existing = next((p for p in self._panes if p.kind == kind), None)
         if existing is not None:
             self._header_focus(existing)
             return False
@@ -480,14 +498,18 @@ class TerminalPanel(Gtk.Box):
             self.emit("limit-reached")
             return False
         if view is None:
-            if self.graph_factory is not None:
-                view = self.graph_factory()
-            else:
-                from idgent.graphview import GraphView
-                view = GraphView(self._cwd)
+            factory = self.graph_factory if kind == "graph" else self.gitgraph_factory
+            if factory is None:
+                if kind == "graph":
+                    from idgent.graphview import GraphView
+                    factory = lambda: GraphView(self._cwd)
+                else:
+                    from idgent.gitviews import GitGraphView
+                    factory = lambda: GitGraphView(self._cwd)
+            view = factory()
         if self._maximized is not None:
             self.restore()
-        header = PaneHeader(kind="graph")
+        header = PaneHeader(kind=kind)
         content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         content.pack_start(view, True, True, 0)
         inner = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
@@ -495,16 +517,16 @@ class TerminalPanel(Gtk.Box):
         inner.pack_start(content, True, True, 0)
         page = inner
         pane = _Pane(page, None, Gio.Cancellable(), header, content, page,
-                     kind="graph", view=view, id=self._next_id)
+                     kind=kind, view=view, id=self._next_id)
         view.connect("focus-in-event", self._focus_changed, pane, True)
         view.connect("focus-out-event", self._focus_changed, pane, False)
         # Focus inside composite views (e.g. WebView in GraphView) belongs to this pane.
-        content.connect("set-focus-child", self._graph_focus_child, pane)
+        content.connect("set-focus-child", self._web_focus_child, pane)
         self._insert_pane(pane)
         GLib.idle_add(self._focus_idle, pane)
         return True
 
-    def _graph_focus_child(self, _content, child, pane):
+    def _web_focus_child(self, _content, child, pane):
         pane.header.set_focused(child is not None)
         if child is not None and not pane.closed:
             self._set_active(pane)
