@@ -8,12 +8,12 @@ from gi.repository import GObject, Gtk
 from idgent import motion
 from idgent.themes import get_theme
 
-# A 39 px strip plus a 1 px divider; window controls are 52 px wide.
+# A 39 px strip plus a 1 px divider; window controls are 40 px wide.
 HEADER_HEIGHT = 40
-WINDOW_BUTTON_WIDTH = 52
-# The symbolic assets have padding around the mark: a 36 px image renders
-# an 18 px glyph. Load at that size instead of scaling a 16 px raster.
-WINDOW_ICON_SIZE = 36
+WINDOW_BUTTON_WIDTH = 40
+# The symbolic assets have padding around the mark: a 32 px image renders
+# a 16 px glyph, matching the MENU-sized cog.
+WINDOW_ICON_SIZE = 32
 # Resting cog glyph opacity; hovering fades it to 1 over 140 ms.
 GLYPH_OPACITY = 0.85
 
@@ -22,7 +22,7 @@ def build_titlebar_css(ui: dict[str, str]) -> str:
     """Build the titlebar rules from the same roles as the application theme.
 
     Reference app-style chrome: a 39 px strip plus a 1 px divider on the secondary
-    background, 52 px flat window controls, and clickable-icon hovers (radius 4,
+    background, 40 px flat window controls, and clickable-icon hovers (radius 4,
     translucent overlay) for the menus and the settings cog. Hovers are instant;
     only the cog glyph opacity fades (driven by ``motion``, see ``TitleBar``).
     ``margin: 0`` cancels the theme's -1 px solid-CSD margin that would eat the
@@ -64,6 +64,7 @@ headerbar.idgent-titlebar:backdrop {{ color: {ui['muted']}; }}
 .idgent-titlebar button.titlebutton:hover,
 .idgent-titlebar button.idgent-settings-button:hover {{ background: {hover}; color: {ui['foreground']}; }}
 .idgent-titlebar button.titlebutton:active,
+.idgent-titlebar button.idgent-settings-button:checked,
 .idgent-titlebar button.idgent-settings-button:active {{ background: {pressed}; color: {ui['foreground']}; }}
 .idgent-titlebar button.titlebutton.close:hover,
 .idgent-titlebar button.titlebutton.close:active {{ background: {ui['danger']}; color: #ffffff; }}
@@ -77,12 +78,13 @@ TITLEBAR_CSS = build_titlebar_css(get_theme(None).ui)
 class TitleBar(Gtk.HeaderBar):
     __gsignals__ = {
         "settings-requested": (GObject.SignalFlags.RUN_LAST, None, ()),
+        "dock-toggle-requested": (GObject.SignalFlags.RUN_LAST, None, ()),
     }
 
     def __init__(self, menu_bar: Gtk.MenuBar) -> None:
         super().__init__()
         self.get_style_context().add_class("idgent-titlebar")
-        # Window controls form one contiguous 3 x 52 px block; margins space the rest.
+        # Window controls form one contiguous 3 x 40 px block; margins space the rest.
         self.props.spacing = 0
         self.set_show_close_button(True)
         self.set_decoration_layout(":minimize,maximize,close")
@@ -115,6 +117,33 @@ class TitleBar(Gtk.HeaderBar):
         self.settings_button.get_accessible().set_name("Settings")
         self.settings_button.connect("clicked", lambda _: self.emit("settings-requested"))
         self.pack_end(self.settings_button)
+        self.dock_button = Gtk.ToggleButton()
+        self.dock_button.set_relief(Gtk.ReliefStyle.NONE)
+        self.dock_button.set_valign(Gtk.Align.CENTER)
+        self.dock_button.set_margin_end(6)
+        self.dock_button.get_style_context().add_class("flat")
+        self.dock_button.get_style_context().add_class("idgent-settings-button")
+        for name in ("sidebar-show-right-symbolic", "panel-right-symbolic"):
+            if icon_theme is not None and icon_theme.has_icon(name):
+                self.dock_button.add(Gtk.Image.new_from_icon_name(name, Gtk.IconSize.MENU))
+                break
+        else:
+            self.dock_button.add(Gtk.Label(label="▯"))
+        self.dock_fader = motion.StateFader(
+            self.dock_button, self._set_dock_glyph, "clickable_icon_opacity", "ease_in_out")
+        self.dock_button.set_tooltip_text("Toggle right terminal / graph dock (Ctrl+Alt+`)")
+        self.dock_button.get_accessible().set_name("Toggle right dock")
+        self._dock_click_handler = self.dock_button.connect(
+            "clicked", lambda _: self.emit("dock-toggle-requested"))
+        self.pack_end(self.dock_button)
+
+    def set_dock_active(self, active: bool) -> None:
+        # Gtk.ToggleButton.set_active emits clicked; syncing must not toggle the dock.
+        with self.dock_button.handler_block(self._dock_click_handler):
+            self.dock_button.set_active(active)
+
+    def _set_dock_glyph(self, hover: float) -> None:
+        self.dock_button.get_child().set_opacity(GLYPH_OPACITY + (1 - GLYPH_OPACITY) * hover)
 
     def do_size_allocate(self, allocation) -> None:
         # GTK owns these children and rebuilds them when window state changes.
