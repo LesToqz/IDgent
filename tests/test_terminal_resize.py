@@ -84,8 +84,10 @@ class DockWindow:
             original_spawn(terminal, *args, **kwargs)
         self.panes = [pane for panel in (self.window.terminal_bottom, self.window.terminal_right)
                       for pane in panel._panes]
+        # The six-pixel pane dividers can make the initial prompt span rows.
         assert poll(lambda: all(pane.pid for pane in self.panes) and
-                    all(PROMPT.strip() in self.text(pane.terminal) for pane in self.panes), 10)
+                    all(PROMPT.strip() in self.text(pane.terminal).replace("\n", "")
+                        for pane in self.panes), 10)
         spin(200)
         # Per frame: is any gate still showing an older geometry than its own?
         self.frames = []

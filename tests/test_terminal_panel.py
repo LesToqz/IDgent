@@ -199,7 +199,7 @@ class TerminalPanelTest(unittest.TestCase):
     def test_pane_structure_header_above_terminal(self):
         pane = self.panel._panes[0]
         self.assertIsInstance(pane.header, PaneHeader)
-        inner = pane.page.get_children()[0]
+        inner = pane.page
         self.assertEqual(inner.get_orientation(), Gtk.Orientation.VERTICAL)
         self.assertEqual(inner.get_children(), [pane.header, pane.content])
         self.assertIn(pane.terminal, pane.content.get_children())
@@ -257,10 +257,10 @@ class TerminalPanelTest(unittest.TestCase):
         self.assertLess(ys[1], ys[2])
         heights = [a.height for _, a in rects]
         self.assertLessEqual(max(heights) - min(heights), 1)
-        for pane in panel._panes[:-1]:
-            self.assertEqual(pane.divider.get_orientation(), Gtk.Orientation.HORIZONTAL)
-            self.assertTrue(pane.divider.get_visible())
-        self.assertFalse(panel._panes[-1].divider.get_visible())
+        self.assertEqual(len(panel._body.handles), 2)
+        for handle in panel._body.handles:
+            self.assertEqual(handle.line.get_orientation(), Gtk.Orientation.HORIZONTAL)
+            self.assertTrue(handle.get_visible())
         panel.destroy()
 
     def test_set_cwd_only_changes_new_shells(self):

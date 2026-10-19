@@ -74,7 +74,7 @@ class StyleTest(unittest.TestCase):
             # Explorer baseline re-baselined by explorer-polish.
             (build_explorer_css, '4c49197a6e2b8f33107e08f2ec8a3588615c3453a2d5a4e41423d7a566e45773'),
             (build_editor_css, '8371e5d6e34fb59a3aaf87f768ee502dbc1c5bc84dc48e8de4d1aba547966326'),  # re-baselined by tabs-polish
-            (build_terminal_css, 'c534f9ff319e95ba46339b66b6cfe75310188eb01c0fc411ba21547802dfef79'),  # re-baselined for graph pane chooser
+            (build_terminal_css, '6f2f18cebc2ff798ee147d5b75fea71cd12ed0b51dc372d82df28ff691efcf92'),  # re-baselined for draggable pane handles
         )
         for builder, expected in baselines:
             with self.subTest(component=builder.__module__):

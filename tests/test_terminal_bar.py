@@ -223,7 +223,11 @@ class ChromeCssTest(unittest.TestCase):
                 provider.load_from_data(css.encode())
                 self.assertEqual(errors, [])
                 # Hover/active states are instant; glyph opacity is the only motion (StateFader).
-                self.assertNotIn("transition", css)
+                self.assertNotIn("transition", css.replace("transition: none;", ""))
+                self.assertIn('.idgent-pane-handle:hover .idgent-terminal-sep', css)
+                self.assertIn('.idgent-pane-handle:active .idgent-terminal-sep', css)
+                self.assertIn('.idgent-pane-handle:focus .idgent-terminal-sep', css)
+                self.assertIn(f"background: {theme.ui['accent']}", css)
                 self.assertIn(f"background: alpha({theme.ui['overlay']}, 0.067)", css)
                 self.assertIn(f"inset 0 -2px {theme.ui['accent']}", css)
 
