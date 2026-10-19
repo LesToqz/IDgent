@@ -401,6 +401,26 @@ class GitGraphView(_WebHost):
     def set_theme(self, ui: dict, accent: str):
         self._apply_theme(git_colors(ui, accent))
 
+    def set_root(self, root: str):
+        """Forget the previous repository, invalidating any in-flight collection."""
+        if self._closed:
+            return
+        self.root = os.path.abspath(os.fspath(root))
+        if self._debounce is not None:
+            GLib.source_remove(self._debounce)
+            self._debounce = None
+        for monitor in self._monitors.values():
+            monitor.cancel()
+        self._monitors.clear()
+        self.last_data = self._digest = None
+        self._focus = None
+        self.select(None)
+        # setState('loading') deliberately preserves a graph during refresh.
+        # Clear data first so a folder switch never displays the previous repo.
+        self.post('setData', {'ok': True, 'commits': []})
+        self._set_state('loading')
+        self.refresh()
+
     def select(self, hash: str | None):
         self._selection = hash
         self.post('select', hash)
@@ -557,6 +577,12 @@ class CommitView(_WebHost):
 
     def set_theme(self, ui: dict, accent: str, syntax_style: dict | None = None):
         self._apply_theme(commit_colors(ui, accent, syntax_style))
+
+    def set_font_size(self, size: int):
+        """Match the editor's live size, including unsaved settings changes."""
+        if self._theme is not None and not self._closed:
+            self._theme = {**self._theme, 'size': size}
+            self.post('setTheme', self._theme)
 
     def reload(self):
         if self._closed or not self.available:

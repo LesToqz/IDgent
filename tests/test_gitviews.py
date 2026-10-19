@@ -372,3 +372,30 @@ class HostTest(unittest.TestCase):
         self.windows[-1].show_all()
         self.assertEqual(self.js('1+1'), 2)
         self.assertEqual(self.errors, [])
+
+    def test_set_root_clears_selection_monitors_and_rejects_old_collection(self):
+        view = self.make()
+        self.ready(view)
+        old_monitors = list(view._monitors.values())
+        view.select(self.repo.git('rev-parse', 'HEAD'))
+        other = build_linear(self.root / 'other', 4)
+        view.set_root(str(other.path))
+        self.assertIsNone(view.last_data)
+        self.assertIsNone(view._selection)
+        self.assertTrue(all(m.is_cancelled() for m in old_monitors))
+        self.assertTrue(poll(lambda: view.last_data is not None and len(view.last_data['commits']) == 4))
+        self.assertEqual(view.last_data['repo']['root'], str(other.path))
+        self.assertEqual(view.root, str(other.path))
+        plain = self.root / 'plain'
+        plain.mkdir()
+        view.set_root(str(plain))
+        self.assertTrue(poll(lambda: view._state[0] == 'not-a-repo'))
+        self.assertIsNone(view.last_data)
+        self.assertEqual(self.errors, [])
+
+    def test_commit_font_size_uses_live_editor_size(self):
+        view = self.make(CommitView)
+        self.ready(view)
+        view.set_font_size(23)
+        self.assertEqual(view._theme['size'], 23)
+        self.assertEqual(self.js("calls.filter(c=>c[0]==='setTheme').at(-1)[1].size", view), 23)
