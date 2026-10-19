@@ -71,7 +71,8 @@ class StyleTest(unittest.TestCase):
         # whitespace, but pin selectors, declaration order and values. Future
         # component restyling packages should deliberately update these hashes.
         baselines = (
-            (build_explorer_css, '9de9a3bae71c2a8ec8183097004e78860b43485d9543727de6ea1982f6fa15b2'),
+            # Explorer baseline re-baselined by explorer-polish.
+            (build_explorer_css, '15a72cadf487035d4db7fdf8ec0005d035a4c80e6d41076d646eeb75c4e4497f'),
             (build_editor_css, 'fb50cdcd94fa21ef79796db3a0c13315098dd4141b88c93f58aff43ee82daae1'),
             (build_terminal_css, 'e53922f9d2ed7f7ca2da349f359dd33342c8aac55ae033dfc8b555ae0b6b0415'),  # re-baselined by terminal-polish
         )

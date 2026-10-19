@@ -205,17 +205,35 @@ from .themes import get_theme
 
 def build_css(ui: dict[str, str]) -> str:
     return f"""
-.idgent-search-row {{ background: {ui['sidebar_bg']}; padding: 5px 6px; }}
+@define-color idgent_search_match {ui['accent_text']};
+@define-color idgent_search_group {ui['faint']};
+.idgent-search, .idgent-search scrolledwindow, .idgent-search viewport {{
+    background: {ui['sidebar_bg']}; }}
+.idgent-search-row {{ background: {ui['sidebar_bg']}; padding: 4px 12px 8px; }}
 .idgent-search-entry {{ background: {ui['input_bg']}; color: {ui['foreground']};
-    border: 1px solid {ui['border']}; border-radius: 2px; min-height: 24px; padding: 0 5px; }}
-.idgent-search-entry:focus {{ border-color: {ui['accent']}; }}
+    border: 1px solid {ui['border']}; border-radius: 5px; min-height: 20px; padding: 4px 8px;
+    font-size: 13px; }}
+.idgent-search-entry:hover {{ border-color: {ui['border_hover']}; }}
+.idgent-search-entry:focus {{ border-color: {ui['border_focus']}; box-shadow: 0 0 0 2px {ui['border_focus']}; }}
+.idgent-search-entry image {{ color: {ui['muted']}; }}
+.idgent-search-entry image.right {{ min-width: 16px; padding: 0 6px; border-radius: 14px; }}
+.idgent-search-entry image.right:hover {{ color: {ui['foreground']}; background: alpha({ui['overlay']}, 0.067); }}
 .idgent-search-toggle {{ background: transparent; color: {ui['muted']};
-    border: 0; box-shadow: none; min-height: 24px; min-width: 24px; padding: 0 3px; }}
-.idgent-search-toggle:hover {{ background: {ui['hover']}; }}
-.idgent-search-toggle:checked {{ background: {ui['selection_active']}; color: {ui['selection_fg']}; }}
-.idgent-search-summary {{ color: {ui['muted']}; background: {ui['sidebar_bg']}; padding: 4px 8px; }}
-.idgent-search-results {{ background: {ui['sidebar_bg']}; color: {ui['foreground']}; }}
-.idgent-search-results:selected {{ background: {ui['selection_active']}; color: {ui['selection_fg']}; }}
+    border: 0; border-radius: 4px; box-shadow: none; min-height: 16px; min-width: 16px;
+    padding: 4px; font-size: 13px; }}
+.idgent-search-toggle label {{ opacity: 0.85; }}
+.idgent-search-toggle:hover {{ background: alpha({ui['overlay']}, 0.067); color: {ui['foreground']}; }}
+.idgent-search-toggle:hover label, .idgent-search-toggle:checked label {{ opacity: 1; }}
+.idgent-search-toggle:checked {{ background: alpha({ui['accent']}, 0.1); color: {ui['accent_text']}; }}
+.idgent-search-summary {{ color: {ui['faint']}; background: {ui['sidebar_bg']};
+    font-size: 12px; padding: 4px 12px; }}
+treeview.idgent-search-results.view {{ background: {ui['sidebar_bg']}; color: {ui['muted']};
+    font-size: 13px; -GtkTreeView-vertical-separator: 2; -GtkTreeView-horizontal-separator: 4;
+    -GtkTreeView-expander-size: 10; }}
+treeview.idgent-search-results.view:hover, treeview.idgent-search-results.view:selected {{
+    background: alpha({ui['overlay']}, 0.067); color: {ui['foreground']}; border-radius: 8px; }}
+treeview.idgent-search-results.view:focus {{ -gtk-outline-radius: 8px; }}
+treeview.idgent-search-results expander {{ color: {ui['muted']}; }}
 """
 
 
@@ -235,6 +253,7 @@ class SearchPanel(Gtk.Box):
 
     def __init__(self, content: Gtk.Widget, root: str = ''):
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
+        self.get_style_context().add_class('idgent-search')
         self.root = os.path.abspath(root) if root else ''
         self.current_path = None
         self.text_provider = None
@@ -248,11 +267,16 @@ class SearchPanel(Gtk.Box):
         row = Gtk.Box(spacing=2)
         row.get_style_context().add_class('idgent-search-row')
         self.entry = Gtk.SearchEntry(placeholder_text='Search')
+        # GtkSearchEntry provides the search icon and a secondary clear icon
+        # only while text is present, including keyboard/accessibility support.
+        self.entry.set_width_chars(6)
         self.entry.get_style_context().add_class('idgent-search-entry')
         row.pack_start(self.entry, True, True, 0)
         self.case_button = Gtk.ToggleButton(label='Aa', tooltip_text='Match case')
         self.regex_button = Gtk.ToggleButton(label='.*', tooltip_text='Use regular expression')
         for button in (self.case_button, self.regex_button):
+            button.set_valign(Gtk.Align.CENTER)
+            button.get_accessible().set_name(button.get_tooltip_text())
             button.get_style_context().add_class('idgent-search-toggle')
             row.pack_start(button, False, False, 0)
             button.connect('toggled', self._changed)
@@ -271,6 +295,9 @@ class SearchPanel(Gtk.Box):
         self.tree.get_style_context().add_class('idgent-search-results')
         self.tree.set_enable_search(False)
         self.tree.set_activate_on_single_click(True)
+        self.tree.set_margin_start(12)
+        self.tree.set_margin_end(12)
+        self.tree.set_margin_bottom(24)
         column = Gtk.TreeViewColumn()
         icon = Gtk.CellRendererPixbuf()
         column.pack_start(icon, False)
@@ -281,8 +308,10 @@ class SearchPanel(Gtk.Box):
         label = Gtk.CellRendererText(ypad=2, ellipsize=Pango.EllipsizeMode.END)
         column.pack_start(label, True)
         column.add_attribute(label, 'markup', 2)
+        column.set_cell_data_func(label, self._style_result)
         self._cells = [number, label]
         self.tree.append_column(column)
+        self.set_font_size(10)
         scroll = Gtk.ScrolledWindow()
         scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
         scroll.add(self.tree)
@@ -325,10 +354,36 @@ class SearchPanel(Gtk.Box):
     def set_font_size(self, size):
         """Size the result rows (in points)."""
         self.font_size = size
+        description = self.tree.get_pango_context().get_font_description().copy()
+        description.set_size(size * Pango.SCALE)
+        metrics = self.tree.get_pango_context().get_metrics(description, None)
+        height = (metrics.get_ascent() + metrics.get_descent()) / Pango.SCALE
         for cell in self._cells:
             cell.set_property('size-points', size)
+            cell.set_fixed_size(-1, max(20, int(height + .999) + 4))
         self.tree.columns_autosize()
         self.tree.queue_resize()
+
+    def _style_result(self, column, cell, model, row, data=None):
+        """Resolve Pango colours at paint time so live theme changes keep hits fresh."""
+        group = model[row][7] == 'group'
+        context = self.tree.get_style_context()
+        found, colour = context.lookup_color('idgent_search_group' if group else 'idgent_search_match')
+        markup = model[row][2]
+        if found:
+            hex_colour = '#{:02x}{:02x}{:02x}'.format(
+                *(round(channel * 255) for channel in (colour.red, colour.green, colour.blue)))
+            if group:
+                markup = f'<span foreground="{hex_colour}" weight="600">{markup}</span>'
+            elif model[row][7] == 'match':
+                markup = markup.replace('<b><u>', f'<span foreground="{hex_colour}"><b><u>').replace(
+                    '</u></b>', '</u></b></span>')
+        cell.set_property('markup', markup)
+        if group:
+            attributes = cell.get_property('attributes')
+            attributes.change(Pango.attr_size_new_absolute(12 * Pango.SCALE))
+            attributes.change(Pango.attr_weight_new(Pango.Weight.SEMIBOLD))
+            cell.set_property('attributes', attributes)
 
     def focus_search(self):
         self.entry.grab_focus()

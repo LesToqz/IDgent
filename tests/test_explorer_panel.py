@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -13,8 +14,10 @@ gi.require_version('Gtk', '3.0')
 gi.require_version("Gdk", "3.0")
 from gi.repository import Gdk, Gtk
 
-from idgent.explorer import ExplorerPanel
+from idgent.explorer import ExplorerPanel, build_css
+from idgent import fsops, style
 from idgent.fsops import FsOpError
+from idgent.themes import THEMES, get_theme
 
 
 class ExplorerTests(unittest.TestCase):
@@ -232,6 +235,248 @@ class ExplorerTests(unittest.TestCase):
         with patch.object(self.panel, '_rename_dialog') as action:
             self.assertTrue(self.panel._on_key(self.panel.tree, event))
             action.assert_called_once()
+
+    def test_hidden_preference_filters_lazy_children_and_preserves_expansion(self):
+        folder = self.root / 'Zdir'
+        (folder / '.secret').touch()
+        (self.root / '.private').mkdir()
+        self.panel.refresh()
+        self.expand(folder)
+        self.panel._select(str(self.root / 'A.py'))
+        self.panel.set_show_hidden(False)
+        self.assertIsNone(self.panel._find(str(self.root / '.hidden')))
+        self.assertIsNone(self.panel._find(str(self.root / '.private')))
+        self.assertIsNone(self.panel._find(str(folder / '.secret')))
+        self.assertIn(str(folder), self.panel._expanded_paths())
+        self.assertEqual(self.panel._selected_path(), str(self.root / 'A.py'))
+        self.panel.set_show_hidden(True)
+        self.assertIsNotNone(self.panel._find(str(folder / '.secret')))
+        self.assertIsNotNone(self.panel._find(str(self.root / '.hidden')))
+
+    def test_current_file_reveals_nested_path_without_activating_it(self):
+        activated = []
+        self.panel.connect('file-activated', lambda _, path: activated.append(path))
+        path = str(self.root / 'Zdir' / 'inner' / 'deep.py')
+        self.panel.set_current_file(path)
+        self.assertEqual(self.panel._selected_path(), path)
+        self.assertIn(str(self.root / 'Zdir' / 'inner'), self.panel._expanded_paths())
+        self.assertEqual(self.panel.search.current_path, path)
+        self.panel.set_current_file(None)
+        self.assertIsNone(self.panel._selected_path())
+        self.panel.set_current_file('/outside-project.py')
+        self.assertIsNone(self.panel._selected_path())
+        self.assertEqual(activated, [])
+
+    def test_delete_defaults_confirmation_and_cancel(self):
+        path = self.root / 'A.py'
+        self.panel._select(str(path))
+        self.assertTrue(self.panel.show_hidden)
+        self.assertTrue(self.panel.confirm_delete)
+        self.assertEqual(self.panel.delete_mode, 'delete')
+        with patch.object(Gtk.Dialog, 'run', return_value=Gtk.ResponseType.CANCEL) as prompt:
+            self.panel._delete_dialog()
+            prompt.assert_called_once()
+        self.assertTrue(path.exists())
+        with patch.object(Gtk.Dialog, 'run', return_value=Gtk.ResponseType.OK) as prompt:
+            self.panel._delete_dialog()
+            prompt.assert_called_once()
+        self.assertFalse(path.exists())
+
+    def test_disable_confirmation_skips_prompt_and_invalid_mode_keeps_setting(self):
+        path = self.root / 'A.py'
+        self.panel._select(str(path))
+        self.panel.set_confirm_delete(False)
+        with self.assertRaises(ValueError):
+            self.panel.set_delete_mode('invalid')
+        self.assertEqual(self.panel.delete_mode, 'delete')
+        with patch.object(Gtk.Dialog, 'run') as prompt:
+            self.panel._delete_dialog()
+            prompt.assert_not_called()
+        self.assertFalse(path.exists())
+
+    def test_trash_success_updates_tree_and_emits_once(self):
+        path = self.root / 'A.py'
+        destination = self.root / 'trashed.py'
+        self.panel._select(str(path))
+        self.panel.set_delete_mode('trash')
+        self.panel.set_confirm_delete(False)
+        deleted = []
+        self.panel.connect('path-deleted', lambda _, item: deleted.append(item))
+
+        def move(file, cancellable):
+            Path(file.get_path()).rename(destination)
+            return True
+
+        with patch.object(fsops.Gio.File, 'trash', move), patch.object(Gtk.Dialog, 'run') as prompt:
+            self.panel._delete_dialog()
+            prompt.assert_not_called()
+        self.assertEqual(deleted, [str(path)])
+        self.assertIsNone(self.panel._find(str(path)))
+        self.assertTrue(destination.exists())
+
+    def test_trash_fallback_requires_separate_permanent_confirmation(self):
+        for confirm in (False, True):
+            for accept in (False, True):
+                with self.subTest(confirm=confirm, accept=accept):
+                    path = self.root / 'A.py'
+                    path.write_text('keep')
+                    self.panel.refresh()
+                    self.panel._select(str(path))
+                    self.panel.set_delete_mode('trash')
+                    self.panel.set_confirm_delete(confirm)
+                    prompts = []
+
+                    def respond(dialog):
+                        prompts.append((dialog.props.text, dialog.props.secondary_text))
+                        if 'Move ' in dialog.props.text:
+                            return Gtk.ResponseType.OK
+                        return Gtk.ResponseType.OK if accept else Gtk.ResponseType.CANCEL
+
+                    with patch.object(fsops.Gio.File, 'trash', return_value=False), \
+                            patch.object(Gtk.Dialog, 'run', respond):
+                        self.panel._delete_dialog()
+                    self.assertEqual(len(prompts), 2 if confirm else 1)
+                    self.assertIn('Delete permanently instead?', prompts[-1][1])
+                    self.assertEqual(path.exists(), not accept)
+
+    def test_trash_permission_failure_reports_error_without_fallback(self):
+        path = self.root / 'A.py'
+        self.panel._select(str(path))
+        self.panel.set_delete_mode('trash')
+        self.panel.set_confirm_delete(False)
+        with patch.object(fsops, 'trash', side_effect=FsOpError('Permission denied')), \
+                patch.object(self.panel, '_confirm_removal') as confirm, \
+                patch.object(Gtk.Dialog, 'run', return_value=Gtk.ResponseType.CLOSE) as error:
+            self.panel._delete_dialog()
+            confirm.assert_not_called()
+            error.assert_called_once()
+        self.assertTrue(path.exists())
+
+    @staticmethod
+    def poll(predicate, timeout=3):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            while Gtk.events_pending():
+                Gtk.main_iteration()
+            if predicate():
+                return True
+            time.sleep(.005)
+        return False
+
+    def show_panel(self, theme='idgent-dark'):
+        style.apply_theme(get_theme(theme))
+        window = Gtk.Window()
+        window.set_default_size(300, 400)
+        window.add(self.panel)
+        self.addCleanup(window.destroy)
+        window.show_all()
+        window.present()
+        self.assertTrue(self.poll(window.is_active))
+        return window
+
+    def row_pixel(self, window, tree, x, y):
+        x, y = tree.convert_bin_window_to_widget_coords(x, y)
+        x, y = tree.translate_coordinates(window, x, y)
+        pixels = Gdk.pixbuf_get_from_window(window.get_window(), x, y, 1, 1)
+        return tuple(pixels.get_pixels()[:3])
+
+    def test_tree_geometry_rounded_selection_hover_and_live_themes(self):
+        window = self.show_panel()
+        tree = self.panel.tree
+        self.panel._select(str(self.root / 'A.py'))
+        self.panel.search.entry.grab_focus()
+        window.set_focus_visible(False)
+        path = tree.get_selection().get_selected_rows()[1][0]
+        for name in ('idgent-dark', 'idgent-light'):
+            with self.subTest(theme=name):
+                theme = get_theme(name)
+                style.apply_theme(theme)
+                self.assertTrue(self.poll(lambda: tree.get_allocated_width() > 1))
+                area = tree.get_background_area(path, tree.get_column(0))
+                self.assertTrue(24 <= area.height <= 26, area.height)
+                self.assertEqual(tree.get_margin_start(), 12)
+                self.assertEqual(tree.get_margin_end(), 12)
+                sidebar = tuple(int(theme.ui['sidebar_bg'][i:i + 2], 16) for i in (1, 3, 5))
+                overlay = tuple(int(theme.ui['overlay'][i:i + 2], 16) for i in (1, 3, 5))
+                tint = tuple(round(a * .933 + b * .067) for a, b in zip(sidebar, overlay))
+                corner = lambda: self.row_pixel(window, tree, area.x, area.y)
+                centre = lambda: self.row_pixel(window, tree, area.width - 15, area.y + area.height // 2)
+                self.assertTrue(self.poll(lambda: corner() == sidebar), (corner(), sidebar))
+                self.assertTrue(self.poll(lambda: all(abs(a - b) <= 1 for a, b in zip(centre(), tint))))
+                # A real pointer hover produces the same tint, without a timed fade.
+                tree.get_selection().unselect_all()
+                origin = tree.get_bin_window().get_origin()
+                pointer = Gdk.Display.get_default().get_default_seat().get_pointer()
+                pointer.warp(Gdk.Screen.get_default(), origin.x + area.width - 15,
+                             origin.y + area.y + area.height // 2)
+                self.assertTrue(self.poll(lambda: centre() == tint))
+                pointer.warp(Gdk.Screen.get_default(), 0, 0)
+                self.assertTrue(self.poll(lambda: centre() == sidebar))
+                self.panel._select(str(self.root / 'A.py'))
+                self.panel.search.entry.grab_focus()
+
+    def test_header_icons_accessibility_and_instant_css_for_all_themes(self):
+        self.show_panel()
+        header = self.panel.get_children()[0]
+        self.assertEqual(header.get_accessible().get_name(), 'EXPLORER')
+        self.assertEqual(header.get_tooltip_text(), 'EXPLORER')
+        actions = header.get_children()[0]
+        self.assertEqual(actions.get_halign(), Gtk.Align.CENTER)
+        self.assertEqual([button.get_accessible().get_name() for button in actions.get_children()],
+                         ['New File', 'New Folder', 'Refresh'])
+        for theme in THEMES:
+            with self.subTest(theme=theme.id):
+                provider = Gtk.CssProvider()
+                errors = []
+                provider.connect('parsing-error', lambda *args: errors.append(args[-1]))
+                provider.load_from_data(style.build_css(theme).encode())
+                self.assertEqual(errors, [])
+                self.assertNotIn('transition:', build_css(theme.ui))
+
+    def test_header_actions_create_in_selected_folder_and_refresh(self):
+        self.show_panel()
+        folder = self.root / 'Zdir'
+        self.panel._select(str(folder))
+        new_file, new_folder, refresh = self.panel.get_children()[0].get_children()[0].get_children()
+
+        def accept_name(title, initial, action):
+            action('created.txt' if title == 'New File' else 'created-folder')
+
+        with patch.object(self.panel, '_name_dialog', side_effect=accept_name):
+            new_file.clicked()
+            self.assertTrue((folder / 'created.txt').is_file())
+            self.assertEqual(self.panel._selected_path(), str(folder / 'created.txt'))
+            new_folder.clicked()
+            self.assertTrue((folder / 'created-folder').is_dir())
+            self.assertEqual(self.panel._selected_path(), str(folder / 'created-folder'))
+
+        external = folder / 'external.txt'
+        external.touch()
+        self.assertIsNone(self.panel._find(str(external)))
+        refresh.clicked()
+        self.assertIsNotNone(self.panel._find(str(external)))
+        self.assertEqual(self.panel._selected_path(), str(folder / 'created-folder'))
+
+    def test_delete_menu_item_inherits_base_padding_radius_and_danger(self):
+        self.show_panel()
+        self.panel._select(str(self.root / 'A.py'))
+        menus = []
+        with patch.object(Gtk.Menu, 'popup_at_widget', lambda menu, *args: menus.append(menu)):
+            self.panel._menu()
+        menu = menus[0]
+        self.addCleanup(menu.destroy)
+        item = next(item for item in menu.get_children() if item.get_label() == 'Delete')
+        self.assertTrue(item.get_sensitive())
+        context = item.get_style_context()
+        self.assertTrue(context.has_class('destructive-action'))
+        for state in (Gtk.StateFlags.NORMAL, Gtk.StateFlags.PRELIGHT):
+            color = context.get_color(state)
+            expected = get_theme('idgent-dark').ui['danger']
+            self.assertEqual(tuple(round(c * 255) for c in (color.red, color.green, color.blue)),
+                             tuple(int(expected[i:i + 2], 16) for i in (1, 3, 5)))
+            padding = context.get_padding(state)
+            self.assertEqual((padding.top, padding.right, padding.bottom, padding.left), (4, 8, 4, 8))
+            self.assertEqual(context.get_property('border-radius', state), 4)
 
 
 if __name__ == '__main__':

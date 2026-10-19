@@ -5,9 +5,15 @@ import os
 from pathlib import Path
 import shutil
 
+from gi.repository import Gio, GLib
+
 
 class FsOpError(Exception):
     pass
+
+
+class TrashUnavailable(FsOpError):
+    """This location cannot use trash; permanent removal needs explicit consent."""
 
 
 def validate_name(name: str) -> None:
@@ -79,8 +85,8 @@ def rename(path: str, new_name: str) -> str:
     return target
 
 
-def delete(path: str, project_root: str | None = None) -> str:
-    """Remove an entry, protecting the filesystem root and an optional project root."""
+def _removal_target(path: str, project_root: str | None) -> str:
+    """Apply the same root and symlink protections to both removal modes."""
     target = _absolute(path)
     resolved = os.path.realpath(target)
     # A symlink is an entry to unlink, even when it points at a protected root.
@@ -90,6 +96,25 @@ def delete(path: str, project_root: str | None = None) -> str:
              or (project_root is not None and resolved == os.path.realpath(project_root)))
     ):
         raise FsOpError(f"Cannot delete a filesystem or project root: {target}")
+    return target
+
+
+def trash(path: str, project_root: str | None = None) -> str:
+    """Move an entry to the system trash. Never silently delete it instead."""
+    target = _removal_target(path, project_root)
+    try:
+        if not Gio.File.new_for_path(target).trash(None):
+            raise TrashUnavailable(f"Trash is unavailable for: {target}")
+    except GLib.Error as error:
+        if error.matches(Gio.io_error_quark(), Gio.IOErrorEnum.NOT_SUPPORTED):
+            raise TrashUnavailable(f"Trash is unavailable for: {target}") from error
+        raise FsOpError(f"Cannot move {target} to trash: {error.message}") from error
+    return target
+
+
+def delete(path: str, project_root: str | None = None) -> str:
+    """Remove an entry, protecting the filesystem root and an optional project root."""
+    target = _removal_target(path, project_root)
     try:
         if os.path.islink(target) or not os.path.isdir(target):
             os.unlink(target)

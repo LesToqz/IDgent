@@ -9,7 +9,8 @@ from unittest.mock import patch
 
 from idgent.search import (MAX_FILE_SIZE, SKIP_DIRS, SEARCH_CSS, SearchError,
                            SearchPanel, build_css, find_in_text, iter_project_files, search)
-from idgent.themes import THEMES
+from idgent.themes import THEMES, get_theme
+from idgent import style
 from gi.repository import Gdk, GLib, Gtk, Pango
 
 
@@ -316,7 +317,8 @@ class WidgetTests(FilesFixture):
         self.assertEqual(tuple(self.panel.store[row][4:7]), (0, 120, 6))
         self.assertEqual(preview.get_property('ellipsize'), Pango.EllipsizeMode.END)
         self.assertEqual(number.get_property('ellipsize'), Pango.EllipsizeMode.NONE)
-        pump_until(lambda: self.panel.tree.get_allocated_width() == 260)
+        # The navigator now reserves a 12 px inset on either side.
+        pump_until(lambda: self.panel.tree.get_allocated_width() == 260 - 24)
         scroll = self.panel.tree.get_parent()
         adjustment = scroll.get_hadjustment()
         self.assertLessEqual(adjustment.get_upper(), adjustment.get_page_size())
@@ -432,3 +434,111 @@ class WidgetTests(FilesFixture):
         for theme in THEMES:
             provider = Gtk.CssProvider()
             provider.load_from_data(build_css(theme.ui).encode())
+
+    def show_styled_window(self):
+        self.window.destroy()
+        style.apply_theme(get_theme('idgent-dark'))
+        self.window = Gtk.Window()
+        self.window.set_default_size(300, 350)
+        self.panel = SearchPanel(Gtk.Label(label='Explorer tree'), str(self.root))
+        self.window.add(self.panel)
+        self.window.show_all()
+        self.window.present()
+        self.addCleanup(self.window.destroy)
+        pump_until(self.window.is_active)
+
+    def pixel(self, widget, x, y):
+        x, y = widget.translate_coordinates(self.window, x, y)
+        return tuple(Gdk.pixbuf_get_from_window(self.window.get_window(), x, y, 1, 1).get_pixels()[:3])
+
+    def test_entry_geometry_native_clear_icon_and_focus_ring(self):
+        self.show_styled_window()
+        entry = self.panel.entry
+        secondary = Gtk.EntryIconPosition.SECONDARY
+        self.assertEqual(entry.get_allocated_height(), 30)
+        self.assertIsNotNone(entry.get_icon_name(Gtk.EntryIconPosition.PRIMARY))
+        self.assertIsNone(entry.get_icon_name(secondary))
+        self.panel.search_now('needle')
+        self.window.show_all()
+        self.assertEqual(entry.get_icon_name(secondary), 'edit-clear-symbolic')
+        self.assertTrue(entry.get_icon_activatable(secondary))
+        event = Gdk.Event.new(Gdk.EventType.BUTTON_RELEASE)
+        event.button = 1
+        entry.emit('icon-release', secondary, event)
+        self.assertEqual(self.panel.query, '')
+        self.assertEqual(self.panel.stack.get_visible_child_name(), 'content')
+        self.window.show_all()
+        self.assertIsNone(entry.get_icon_name(secondary))
+        self.assertEqual(entry.get_allocated_height(), 30)
+        for name in ('idgent-dark', 'idgent-light'):
+            with self.subTest(theme=name):
+                theme = get_theme(name)
+                style.apply_theme(theme)
+                entry.grab_focus()
+                self.window.set_focus_visible(True)
+                ring = tuple(int(theme.ui['border_focus'][i:i + 2], 16) for i in (1, 3, 5))
+                pump_until(lambda: self.pixel(entry, -1, 15) == ring)
+                self.assertEqual(entry.get_style_context().get_property(
+                    'border-radius', entry.get_state_flags()), 5)
+
+    def test_result_rows_share_geometry_and_rounded_overlay_in_both_themes(self):
+        self.show_styled_window()
+        self.panel.search_now('needle')
+        tree = self.panel.tree
+        path = Gtk.TreePath.new_from_string('0:0')
+        tree.set_cursor(path)
+        self.panel.entry.grab_focus()
+        self.window.set_focus_visible(False)
+        pump_until(lambda: tree.get_allocated_width() > 1)
+        for name in ('idgent-dark', 'idgent-light'):
+            with self.subTest(theme=name):
+                theme = get_theme(name)
+                style.apply_theme(theme)
+                area = tree.get_background_area(path, tree.get_column(0))
+                group_area = tree.get_background_area(Gtk.TreePath.new_from_string('0'), tree.get_column(0))
+                self.assertTrue(24 <= area.height <= 26, area.height)
+                self.assertEqual(group_area.height, area.height)
+                sidebar = tuple(int(theme.ui['sidebar_bg'][i:i + 2], 16) for i in (1, 3, 5))
+                tint = tuple(round(a * .933 + int(theme.ui['overlay'][i:i + 2], 16) * .067)
+                             for a, i in zip(sidebar, (1, 3, 5)))
+                x, y = tree.convert_bin_window_to_widget_coords(area.x, area.y)
+                pump_until(lambda: self.pixel(tree, x, y) == sidebar)
+                pump_until(lambda: self.pixel(tree, x + area.width - 15, y + area.height // 2) == tint)
+                self.assertNotIn('transition:', build_css(theme.ui))
+
+    def test_group_and_match_attributes_follow_live_theme_switches(self):
+        self.show_styled_window()
+        self.panel.search_now('<needle>')
+        column = self.panel.tree.get_column(0)
+        cell = self.panel._cells[1]
+        for theme in THEMES:
+            with self.subTest(theme=theme.id):
+                style.apply_theme(theme)
+                # Resolving a style query and cell data also works before paint.
+                group = self.panel.store.get_iter_from_string('0')
+                match = self.panel.store.get_iter_from_string('0:0')
+                column.cell_set_cell_data(self.panel.store, group, False, False)
+                attrs = cell.get_property('attributes').to_string()
+                self.assertIn('absolute-size 12288', attrs)
+                self.assertIn('weight semibold', attrs)
+                faint = Pango.Color()
+                faint.parse(theme.ui['faint'])
+                self.assertIn(faint.to_string(), attrs)
+                column.cell_set_cell_data(self.panel.store, match, False, False)
+                attrs = cell.get_property('attributes').to_string()
+                accent = Pango.Color()
+                accent.parse(theme.ui['accent_text'])
+                self.assertIn(accent.to_string(), attrs)
+                self.assertNotIn('absolute-size', attrs)
+                self.assertEqual(cell.get_property('text'), '<needle> & more')
+
+    def test_search_toggles_have_compact_geometry_and_accessible_names(self):
+        self.show_styled_window()
+        for button, name in ((self.panel.case_button, 'Match case'),
+                             (self.panel.regex_button, 'Use regular expression')):
+            self.assertEqual(button.get_accessible().get_name(), name)
+            self.assertLessEqual(button.get_allocated_height(), 30)
+            self.assertLessEqual(button.get_allocated_width(), 30)
+            button.set_active(True)
+            context = button.get_style_context()
+            self.assertAlmostEqual(context.get_background_color(button.get_state_flags()).alpha, .1)
