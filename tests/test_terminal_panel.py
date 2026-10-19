@@ -126,14 +126,14 @@ class TerminalPanelTest(unittest.TestCase):
         self.assertIs(control._panes[0].frame, control._panes[0].page)
         control.destroy()
 
-    def test_discrete_layout_commits_without_waiting_for_debounce(self):
+    def test_discrete_layout_commits_without_waiting_for_pace(self):
         self.panel.new_terminal()
         pane = self.panel._panes[0]
         self.wait_spawn(self.panel._panes[1])
         self.assertTrue(poll(lambda: pane.frame._committed == pane.frame._target))
-        # A long timer makes accidental fallback to debounce fail this test.
+        # A long pace makes an accidental wait for a silent shell fail this test.
         for other in self.panel._panes:
-            other.frame.SETTLE_MS = 10000
+            other.frame.PACE_MS = 10000
         self.panel.toggle_maximize(pane)
         self.assertTrue(poll(lambda: pane.frame._committed == pane.frame._target
                              and pane.frame.get_allocated_width() > 700, .5))

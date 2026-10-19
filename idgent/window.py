@@ -100,8 +100,12 @@ class MainWindow(Gtk.ApplicationWindow):
         self.dock.pack1(self.dock_bottom, resize=True, shrink=True)
         self.dock.pack2(self.terminal_right, resize=False, shrink=True)
         self._size_pending = {self.terminal_bottom: True, self.terminal_right: True}
-        self.dock_bottom.connect_after("size-allocate", self._size_terminal, self.terminal_bottom)
-        self.dock.connect_after("size-allocate", self._size_terminal, self.terminal_right)
+        for dock, panel in ((self.dock_bottom, self.terminal_bottom), (self.dock, self.terminal_right)):
+            dock.connect_after("size-allocate", self._size_terminal, panel)
+            # A dock shown into a laid-out window gets its final position before
+            # its first allocation, so its shells never see an interim grid.
+            panel.connect("show", lambda panel, dock: self._size_terminal(
+                dock, dock.get_allocation(), panel, shown=True), dock)
         self.sidebar = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
         self.sidebar.pack1(self.explorer, resize=False, shrink=False)
         self.sidebar.pack2(self.dock, resize=True, shrink=False)
@@ -369,7 +373,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self.set_theme(THEMES[(index + 1) % len(THEMES)].id)
 
     def _size_terminal(self, dock: Gtk.Paned, allocation: Gdk.Rectangle,
-                       panel: TerminalPanel) -> None:
+                       panel: TerminalPanel, shown: bool = False) -> None:
         if (self._fullscreen_panel is not None or not self._size_pending[panel]
                 or not panel.get_visible()):
             return
@@ -377,13 +381,21 @@ class MainWindow(Gtk.ApplicationWindow):
         extent = allocation.width if right else allocation.height
         if extent <= 1:
             return
-        first, second = dock.get_child1().get_allocation(), panel.get_allocation()
-        handle = max(0, extent - (first.width + second.width if right
-                                  else first.height + second.height))
+        if shown:
+            # Not allocated yet: the handle is not measurable from the children.
+            handle = dock.style_get_property("handle-size")
+        else:
+            first, second = dock.get_child1().get_allocation(), panel.get_allocation()
+            handle = max(0, extent - (first.width + second.width if right
+                                      else first.height + second.height))
         available = extent - handle
+        if not shown and self._size_pending[panel] == ("shown", extent):
+            self._size_pending[panel] = False
+            return
         size = (min(max(round(extent * .4), 380), int(extent * .6), available - 300)
                 if right else min(max(round(extent * .3), 150), available - 150))
-        self._size_pending[panel] = False
+        # A show-time size is confirmed by the first allocation at the same extent.
+        self._size_pending[panel] = ("shown", extent) if shown else False
         dock.set_position(max(0, available - max(0, size)))
 
     def _restore_terminal_fullscreen(self) -> None:
