@@ -149,8 +149,9 @@ class WindowIntegrationTests(unittest.TestCase):
             # GTK CSS transitions must finish before reading realized style values.
             deadline = time.monotonic() + .25
             self.assertTrue(poll(lambda: time.monotonic() >= deadline))
+            # updated by tabs-polish
             for widget, key in ((self.window, 'bg'), (self.window.explorer, 'sidebar_bg'),
-                                (self.window.editor.status, 'status_bg')):
+                                (self.window.editor.status, 'sidebar_bg')):
                 self.assertTrue(widget.get_realized())
                 self.assert_color(widget.get_style_context().get_background_color(Gtk.StateFlags.NORMAL),
                                   theme.ui[key])

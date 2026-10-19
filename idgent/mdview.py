@@ -247,6 +247,8 @@ class MarkdownView:
         self.Gtk, self.GLib, self.Pango, self.Gdk = Gtk, GLib, Pango, Gdk
         self.open_file, self.source_path = open_file, source_path
         self.view = Gtk.TextView(editable=False, cursor_visible=False, wrap_mode=Gtk.WrapMode.WORD_CHAR)
+        self.readable_width = False
+        self.view.connect('size-allocate', self._resize_readable)
         self.view.set_left_margin(32)
         self.view.set_right_margin(32)
         self.view.set_top_margin(44)
@@ -261,6 +263,24 @@ class MarkdownView:
         self.view.get_style_context().add_provider(self.provider, Gtk.STYLE_PROVIDER_PRIORITY_USER + 1)
         self.view.connect('button-release-event', self._release)
         self.view.connect('destroy', lambda *_: self.destroy())
+
+    def set_readable_width(self, enabled: bool) -> None:
+        self.readable_width = bool(enabled)
+        self._resize_readable(self.view, self.view.get_allocation())
+
+    def _resize_readable(self, _view, allocation):
+        margin = max(32, (allocation.width - 700 + 1) // 2) if self.readable_width else 32
+        if self.view.get_left_margin() != margin:
+            self.view.set_left_margin(margin)
+            self.view.set_right_margin(margin)
+        # Paragraph tags override TextView margins. Move those too, including
+        # containers already rendered before the option or viewport changed.
+        for name, tag in self.tags.items():
+            if name.startswith('container-'):
+                _, quote, inset = name.split('-')
+                tag.set_property('left-margin', margin + int(quote) * 22 + int(inset))
+        if 'codeblock' in self.tags:
+            self.tags['codeblock'].set_property('right-margin', max(48, margin))
 
     def tag(self, name, **properties):
         tag = self.tags.get(name)
@@ -285,15 +305,15 @@ class MarkdownView:
         self.provider.load_from_data(f'textview, textview text {{background-color:{bg}; color:{fg}; font-family:sans-serif; font-size:{size}pt;}}'.encode())
         p = self.Pango
         self.tag('body', pixels_above_lines=3, pixels_below_lines=8)
-        for level, scale in enumerate((2, 1.6, 1.35, 1.2, 1.1, 1), 1):
-            self.tag('h' + str(level), foreground=color('heading'), weight=p.Weight.BOLD,
+        for level, scale in enumerate((1.618, 1.462, 1.318, 1.188, 1.076, 1), 1):
+            self.tag('h' + str(level), foreground=color('heading'), weight=700 if level <= 3 else 600,
                      scale=scale, pixels_above_lines=14, pixels_below_lines=8)
         self.tag('strong', foreground=color('strong'), weight=p.Weight.BOLD)
         self.tag('emphasis', foreground=color('emphasis'), style=p.Style.ITALIC)
         self.tag('strike', strikethrough=True)
         self.tag('code', family='monospace', background=chrome['current_line_bg'], foreground=color('string'))
         self.tag('codeblock', family='monospace', paragraph_background=chrome['current_line_bg'],
-                 foreground=fg, right_margin=48, pixels_above_lines=5, pixels_below_lines=5)
+                 foreground=fg, right_margin=max(48, self.view.get_right_margin()), pixels_above_lines=5, pixels_below_lines=5)
         self.tag('table', family='monospace', foreground=fg, pixels_below_lines=0)
         self.tag('link', foreground=color('link'), underline=p.Underline.SINGLE)
         self.tag('image', foreground=chrome['gutter_fg'])
@@ -333,7 +353,7 @@ class MarkdownView:
             inset = block.indent * 5 + (16 if block.kind == 'codeblock' else 12 if block.kind == 'list' else 0)
             container = f'container-{block.quote}-{inset}'
             if container not in self.tags:
-                tag = self.tag(container, left_margin=32 + block.quote * 22 + inset)
+                tag = self.tag(container, left_margin=self.view.get_left_margin() + block.quote * 22 + inset)
                 if block.quote:
                     tag.set_property('foreground', self.chrome['gutter_fg'])
                 # Container foreground must not override headings/links/inline styles.
@@ -415,3 +435,47 @@ class MarkdownView:
                 if a <= offset < b:
                     return self.activate_link(target)
         return False
+
+
+def mode_icon(mode):
+    """Original eye/code strokes rasterized from the image's live CSS colour.
+
+    BytesIcon SVGs are not classified as symbolic by GTK3, even with
+    -gtk-icon-style: symbolic. Rebuild only when the inherited colour changes.
+    """
+    from gi.repository import Gtk, GdkPixbuf
+    paths = {
+        'preview': '<path d="M2 10s3.5-6 8-6 8 6 8 6-3.5 6-8 6-8-6-8-6Z"/><circle cx="10" cy="10" r="2.7"/>',
+        'source': '<path d="m6 5-5 5 5 5m8-10 5 5-5 5M12 3 8 17"/>',
+    }
+    image = Gtk.Image()
+    previous = None
+
+    def recolour(widget):
+        nonlocal previous
+        color = widget.get_style_context().get_color(widget.get_state_flags()).to_string()
+        scale = widget.get_scale_factor()
+        if (color, scale) == previous:
+            return
+        previous = color, scale
+        svg = f'<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20"><g fill="none" stroke="{color}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">{paths[mode]}</g></svg>'
+        loader = GdkPixbuf.PixbufLoader.new_with_type('svg')
+        loader.write(svg.encode())
+        loader.close()
+        widget.set_from_pixbuf(loader.get_pixbuf())
+
+    image.connect('style-updated', recolour)
+    recolour(image)
+    return image
+
+
+def build_css(ui: dict[str, str]) -> str:
+    """Theme the source/preview switch through the main application provider."""
+    return f'''
+.md-toggle {{ background: {ui['bg']}; border: 0; border-radius: 8px; padding: 3px; }}
+.idgent-editor .md-toggle button {{ background: transparent; color: {ui['muted']};
+    border: 0; border-radius: 4px; padding: 2px 4px; min-width: 20px; min-height: 20px;
+    box-shadow: none; margin: 0; transition: none; }}
+.idgent-editor .md-toggle button:hover {{ background: alpha({ui['overlay']}, .067); color: {ui['foreground']}; }}
+.idgent-editor .md-toggle button:checked {{ background: alpha({ui['accent']}, .10); color: {ui['accent_text']}; }}
+'''
