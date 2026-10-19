@@ -219,3 +219,58 @@ class SettingsWindowKeysTest(unittest.TestCase):
         self.assertEqual(settings.get_values(), settings.DEFAULTS)
         self.assertTrue(settings.set_value('terminal_blink', False))
         self.assertEqual(json.loads(self.path.read_text()), {'terminal_blink': False})
+
+
+class GraphSettingsTest(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        env = patch.dict(os.environ, XDG_CONFIG_HOME=directory.name)
+        env.start()
+        self.addCleanup(env.stop)
+
+    def test_defaults_are_independent_and_not_user_tuned(self):
+        graph = settings.get_graph()
+        self.assertEqual(graph['textFadeMultiplier'], 0)
+        self.assertFalse(graph['showTags'])
+        self.assertEqual(graph['scale'], 1)
+        self.assertTrue(graph['showCode'])
+        graph['colorGroups'].append({'query': 'x', 'color': '#ffffff'})
+        self.assertEqual(settings.get_graph()['colorGroups'], [])
+        self.assertEqual(settings.normalize_graph(None), settings.GRAPH_DEFAULTS)
+
+    def test_graph_validation_and_persistence(self):
+        raw = dict(search=12, showTags='true', showCode=False, showOrphans=False,
+                   localDepth=99, scale=-1, centerStrength=float('nan'),
+                   repelStrength=100, linkStrength=True, linkDistance=-4,
+                   unknown=3, colorGroups=[{'query': 'tag:a', 'color': '#ABCDEF', 'junk': 1},
+                                          {'query': 'bad', 'color': 'red'}, None])
+        settings.save({'keep': 7})
+        self.assertTrue(settings.set_graph(raw))
+        result = settings.get_graph()
+        self.assertEqual(result['search'], '')
+        self.assertFalse(result['showTags'])
+        self.assertFalse(result['showCode'])
+        self.assertFalse(result['showOrphans'])
+        self.assertEqual(result['localDepth'], settings.GRAPH_LIMITS['localDepth'][1])
+        self.assertEqual(result['repelStrength'], 20)
+        self.assertEqual(result['linkDistance'], 30)
+        self.assertEqual(result['scale'], .01)
+        self.assertEqual(result['linkStrength'], 1)
+        self.assertEqual(result['centerStrength'], settings.GRAPH_DEFAULTS['centerStrength'])
+        self.assertEqual(result['colorGroups'], [{'query': 'tag:a', 'color': '#abcdef'}])
+        self.assertNotIn('unknown', settings.load()['graph'])
+        self.assertEqual(settings.load()['keep'], 7)
+        self.assertEqual(settings.get_value('graph'), result)
+
+    def test_every_numeric_bound_and_invalid_value(self):
+        for key, (low, high) in settings.GRAPH_LIMITS.items():
+            for raw, expected in ((-10**100, low), (10**100, high),
+                                  (float('inf'), settings.GRAPH_DEFAULTS[key]),
+                                  ('2', settings.GRAPH_DEFAULTS[key]),
+                                  (True, settings.GRAPH_DEFAULTS[key])):
+                with self.subTest(key=key, raw=raw):
+                    self.assertEqual(settings.normalize_graph({key: raw})[key], expected)
+        groups = [{'query': str(n), 'color': '#123456'} for n in range(20)]
+        self.assertEqual(len(settings.normalize_graph({'colorGroups': groups})['colorGroups']), 12)
+        self.assertEqual(settings.normalize_graph({'colorGroups': {}})['colorGroups'], [])

@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 from pathlib import Path
 import tempfile
 
@@ -149,6 +150,8 @@ _FONT_NAME_MAX = 200
 
 def normalize(key: str, value: object) -> object:
     """Validate one value: clamp numbers, otherwise invalid values use the default."""
+    if key == 'graph':
+        return normalize_graph(value)
     if key == 'theme':
         return get_theme(value if isinstance(value, str) else None).id
     if key in FONT_KEYS:
@@ -200,3 +203,62 @@ def set_values(values: dict) -> bool:
 
 def reset_value(key: str) -> bool:
     return set_value(key, DEFAULTS[key])
+
+
+# Reference app's initial graph preferences; user-tuned graph.json values are not defaults.
+GRAPH_DEFAULTS = {
+    'search': '', 'showTags': False, 'showAttachments': False,
+    'hideUnresolved': False, 'showOrphans': True, 'showCode': True,
+    'showArrow': False, 'textFadeMultiplier': 0, 'nodeSizeMultiplier': 1,
+    'lineSizeMultiplier': 1, 'centerStrength': 0.518713248970312,
+    'repelStrength': 10, 'linkStrength': 1, 'linkDistance': 250,
+    'colorGroups': [], 'collapse-filter': True, 'collapse-display': True,
+    'collapse-forces': True, 'collapse-color-groups': True, 'scale': 1,
+    'localDepth': 1, 'localIncoming': True, 'localOutgoing': True,
+}
+GRAPH_LIMITS = {
+    'textFadeMultiplier': (-3, 3), 'nodeSizeMultiplier': (0.1, 5),
+    'lineSizeMultiplier': (0.1, 5), 'centerStrength': (0, 1),
+    'repelStrength': (0, 20), 'linkStrength': (0, 1),
+    'linkDistance': (30, 500), 'scale': (0.01, 10), 'localDepth': (1, 5),
+}
+DEFAULTS['graph'] = GRAPH_DEFAULTS
+
+
+def normalize_graph(value: object) -> dict:
+    """Return independent, JSON-safe graph preferences, dropping unknown keys."""
+    value = value if isinstance(value, dict) else {}
+    result = {}
+    for key, default in GRAPH_DEFAULTS.items():
+        raw = value.get(key, default)
+        if isinstance(default, bool):
+            result[key] = raw if isinstance(raw, bool) else default
+        elif key in GRAPH_LIMITS:
+            if (isinstance(raw, bool) or not isinstance(raw, (int, float))
+                    or isinstance(raw, float) and not math.isfinite(raw)):
+                raw = default
+            low, high = GRAPH_LIMITS[key]
+            result[key] = max(low, min(high, raw))
+            if key == 'localDepth':
+                result[key] = round(result[key])
+        elif key == 'colorGroups':
+            groups = []
+            for group in raw if isinstance(raw, list) else []:
+                if (isinstance(group, dict) and isinstance(group.get('query'), str)
+                        and isinstance(group.get('color'), str)
+                        and re.fullmatch(r'#[0-9a-fA-F]{6}', group['color'])):
+                    groups.append({'query': group['query'], 'color': group['color'].lower()})
+                if len(groups) == 12:
+                    break
+            result[key] = groups
+        else:
+            result[key] = raw if isinstance(raw, str) else default
+    return result
+
+
+def get_graph() -> dict:
+    return normalize_graph(load().get('graph'))
+
+
+def set_graph(value: dict) -> bool:
+    return save({'graph': normalize_graph(value)})
