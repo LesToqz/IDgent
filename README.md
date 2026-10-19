@@ -41,9 +41,9 @@ File → Open Folder changes the explorer root and the directory for new shells;
 existing shells keep their directories. Deletion is permanent by default; Settings →
 Files can move deleted items to the system trash instead.
 
-Git colours in the explorer mark untracked files green with **U**, staged new files
-with **A**, modified files amber with **M** (renames **R**), and conflicts red with
-**!**. Folders inherit their strongest descendant status, including while collapsed.
+Git colours in the explorer mark untracked and staged new files green, modified
+and renamed files orange, and conflicts red. Folders inherit their strongest
+descendant status, including while collapsed.
 Decorations follow the theme and refresh after saves, file operations and window focus.
 
 The editor has tabs, line numbers, current-line and matching-bracket highlights,
