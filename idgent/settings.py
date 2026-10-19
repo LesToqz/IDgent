@@ -268,10 +268,19 @@ def normalize_graph(value: object) -> dict:
         elif key == 'colorGroups':
             groups = []
             for group in raw if isinstance(raw, list) else []:
-                if (isinstance(group, dict) and isinstance(group.get('query'), str)
-                        and isinstance(group.get('color'), str)
-                        and re.fullmatch(r'#[0-9a-fA-F]{6}', group['color'])):
-                    groups.append({'query': group['query'], 'color': group['color'].lower()})
+                if not isinstance(group, dict) or not isinstance(group.get('query'), str):
+                    continue
+                color = group.get('color')
+                if isinstance(color, str) and re.fullmatch(r'#[0-9a-fA-F]{6}', color):
+                    color = color.lower()
+                elif (isinstance(color, dict) and type(color.get('rgb')) is int
+                      and 0 <= color['rgb'] <= 0xffffff
+                      and type(color.get('a')) in (int, float)
+                      and math.isfinite(color['a']) and 0 <= color['a'] <= 1):
+                    color = {'a': color['a'], 'rgb': color['rgb']}
+                else:
+                    continue
+                groups.append({'query': group['query'], 'color': color})
                 if len(groups) == 12:
                     break
             result[key] = groups

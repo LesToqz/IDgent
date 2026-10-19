@@ -1,7 +1,6 @@
 """Pure-Python project graphs with configurable Reference app-style policies.
 
-Queries select notes/code. Tags, attachments and unresolved targets survive only
-when directly linked to a selected note/code node. No GUI modules are imported.
+Queries remove non-matching files/tags; unresolved targets are unfiltered. No GUI modules are imported.
 """
 from __future__ import annotations
 
@@ -54,6 +53,8 @@ class GraphOptions:
     show_orphans: bool = True
     show_code: bool = True
     groups: list[dict] = field(default_factory=list)
+    # The existing data API keeps linked secondary nodes; the UI uses spec B.2/C.1.
+    reference_app_filters: bool = False
 
 
 @dataclass
@@ -68,6 +69,7 @@ class Node:
     out_degree: int = 0
     size_hint: int = 1
     group: int | None = None
+    ctime: float | None = None
 
 
 @dataclass
@@ -107,6 +109,7 @@ class _File:
     tags: list[str]
     aliases: list[str]
     refs: list
+    ctime: float | None = field(default=None, compare=False)
 
     @property
     def label(self):
@@ -229,7 +232,12 @@ class GraphIndex:
         if isinstance(aliases, str):
             aliases = [aliases] if aliases else []
         refs = extract_links(text) if kind == 'note' else extract_code_links(rel, text) if kind == 'code' else []
-        return _File(rel, kind, text, extract_tags(text) if kind in SEMANTICS['tags_from_kinds'] else [], aliases, refs)
+        try:
+            info = os.stat(os.path.join(self.root, rel))
+            ctime = float(getattr(info, 'st_birthtime', min(info.st_ctime, info.st_mtime)))
+        except OSError:
+            ctime = None
+        return _File(rel, kind, text, extract_tags(text) if kind in SEMANTICS['tags_from_kinds'] else [], aliases, refs, ctime)
 
     def _register(self, item, remove=False):
         key = self._key(item.path)
@@ -345,7 +353,7 @@ class GraphIndex:
         self._last_candidates = candidates
         return candidates[0] if candidates else None
 
-    def build(self, options=None):
+    def build(self, options=None, *, local_file=None):
         options = options or GraphOptions()
         nodes, edges, ambiguous = {}, {}, []
         for path, item in self._files.items():
@@ -353,7 +361,7 @@ class GraphIndex:
                 continue
             if item.kind == 'code' and not options.show_code:
                 continue
-            nodes[path] = Node(path, item.label, item.kind, path, pp.dirname(path), list(item.tags))
+            nodes[path] = Node(path, item.label, item.kind, path, pp.dirname(path), list(item.tags), ctime=item.ctime)
 
         def edge(source, target, kind, resolved=True):
             if source == target and not SEMANTICS['keep_self_links']:
@@ -377,7 +385,7 @@ class GraphIndex:
                     dest = self._files[target]
                     if dest.kind == 'code' and not options.show_code or dest.kind == 'attachment' and not options.show_attachments:
                         continue
-                    nodes.setdefault(target, Node(target, dest.label, dest.kind, target, pp.dirname(target), list(dest.tags)))
+                    nodes.setdefault(target, Node(target, dest.label, dest.kind, target, pp.dirname(target), list(dest.tags), ctime=dest.ctime))
                 elif code or options.existing_only:
                     continue
                 else:
@@ -397,14 +405,21 @@ class GraphIndex:
                     edge(path, target, 'tag')
         links = list(edges.values())
         if options.query:
-            selected = {key for key, node in nodes.items() if node.kind in SEMANTICS['query_primary_kinds'] and match_query(self._files[key], options.query)}
-            secondary = {link.target for link in links if link.source in selected and nodes[link.target].kind not in SEMANTICS['query_primary_kinds']}
-            secondary.update(link.source for link in links if link.target in selected and nodes[link.source].kind not in SEMANTICS['query_primary_kinds'])
-            nodes = {key: node for key, node in nodes.items() if key in selected or key in secondary}
+            if options.reference_app_filters:
+                nodes = {key: node for key, node in nodes.items()
+                         if key == local_file or node.kind == 'unresolved' or match_query(self._files.get(key, node), options.query)}
+            else:
+                selected = {key for key, node in nodes.items() if node.kind in SEMANTICS['query_primary_kinds'] and match_query(self._files[key], options.query)}
+                secondary = {link.target for link in links if link.source in selected and nodes[link.target].kind not in SEMANTICS['query_primary_kinds']}
+                secondary.update(link.source for link in links if link.target in selected and nodes[link.source].kind not in SEMANTICS['query_primary_kinds'])
+                nodes = {key: node for key, node in nodes.items() if key in selected or key in secondary}
             links = [link for link in links if link.source in nodes and link.target in nodes]
         for node in nodes.values():
             item = self._files.get(node.id, node)
-            node.group = next((i for i, group in enumerate(options.groups) if match_query(item, group.get('query', ''))), None)
+            node.group = next((i for i, group in enumerate(options.groups)
+                               if (not options.reference_app_filters or
+                                   node.kind not in ('tag', 'unresolved') and group.get('query', '').strip())
+                               and match_query(item, group.get('query', ''))), None)
         if not options.show_orphans:
             linked = {end for link in links for end in (link.source, link.target)}
             nodes = {key: node for key, node in nodes.items() if key in linked}
@@ -451,10 +466,10 @@ class GraphIndex:
         return Graph(sorted(nodes.values(), key=lambda n: n.id), sorted(links, key=lambda e: (e.source, e.target, e.kind)), truncated, stats)
 
     def local(self, path, depth=1, incoming=True, outgoing=True, options=None):
-        graph = self.build(options)
         focus = self._rel(path)
         if focus:
             focus = self._paths.get(self._key(focus), focus)
+        graph = self.build(options, local_file=focus)
         nodes = {n.id: n for n in graph.nodes}
         neighbors = defaultdict(set)
         for link in graph.links:
