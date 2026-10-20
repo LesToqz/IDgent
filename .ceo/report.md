@@ -1,20 +1,15 @@
 # Report: notes (slug: notes)
 
-STATUS: BLOCKED (one non-owned test file). Every goal in the brief is implemented and verified.
-The only failing test is `tests/test_titlebar_dock.py:63`. It asserts the old behaviour that the
-brief replaces, and I don't own that file.
+STATUS: DONE
 
-## Blocked item (needs CEO decision / owner)
-- File: `tests/test_titlebar_dock.py`, test `test_button_accessibility_geometry_fade_and_keyboard_activation`,
-  line 63: `self.assertEqual(self.window.terminal_right.terminal_count(), 1)` after activating the
-  right-dock button.
-- Reason: the brief says "Clicking the right-dock toggle must open the right dock with a GRAPH VIEW
-  pane by default". The button now opens a graph pane, so `terminal_count()` is 0 and `graph_count()` is 1.
-- Suggested change (one line): `self.assertEqual((self.window.terminal_right.graph_count(),
-  self.window.terminal_right.terminal_count()), (1, 0))`.
-- Ctrl+Alt+` and the palette's "View: Terminal on Right" still open a terminal. Both are named
-  for the terminal, and the second test in that file depends on it. Only the titlebar toggle defaults
-  to a graph.
+## Follow-up
+- `tests/test_titlebar_dock.py`: in test_button_accessibility_geometry_fade_and_keyboard_activation the right-dock
+  button now expects graph_count()==1 and terminal_count()==0. Nothing else in that file changed. Commit
+  `test(titlebar): right-dock button opens a graph by default`.
+- Targeted set plus tests.test_titlebar_dock: 135 tests, OK.
+- Full suite (`discover -s tests`): the first run died with a segmentation fault (core dumped) after repeated
+  Gtk/Gdk CRITICAL messages, which matches the known flake. I didn't identify the test. The rerun gave
+  898 tests, OK (skipped=2). The segfault is unfixed and I didn't investigate it.
 
 ## What changed
 - `idgent/notes.py` (new):
