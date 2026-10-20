@@ -627,6 +627,25 @@ class WindowWiringTest(unittest.TestCase):
         self.assertNotIn(str(self.root / '.hidden.txt'), shown)
         window.overlay.hide_prompt()
 
+    def test_notes_slash_commands_dispatch_startup_and_live(self):
+        # The settings owner adds this key independently; exercise the agreed dispatch now.
+        values = settings.load()
+        values['notes_slash_commands'] = False
+        keys = tuple(dict.fromkeys((*settings.NEW_KEYS, 'notes_slash_commands')))
+        with patch.object(settings, 'load', return_value=values), patch.object(settings, 'NEW_KEYS', keys):
+            window = self.window()
+        self.assertFalse(window.editor.slash_commands)
+        path = Path(notes.create_note(str(self.root), 'Commands'))
+        window.editor.open_file(str(path))
+        tab = window.editor._current()
+        self.assertIsNone(tab.slash_menu)
+        window._values['notes_slash_commands'] = True
+        window._apply_setting('notes_slash_commands')
+        self.assertIsNotNone(tab.slash_menu)
+        window._values['notes_slash_commands'] = False
+        window._apply_setting('notes_slash_commands')
+        self.assertIsNone(tab.slash_menu)
+
     def test_settings_window_shows_current_values_and_real_hotkeys(self):
         window = self.window()
         view = self.open_file(window)

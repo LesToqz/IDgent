@@ -13,7 +13,7 @@ gi.require_version('Gtk', '3.0')
 gi.require_version('Gdk', '3.0')
 from gi.repository import Gdk, GLib, GObject, Gtk, Pango
 
-from idgent import gutter, highlight, livemd, motion
+from idgent import gutter, highlight, livemd, motion, notes, slashmenu
 
 MAX_FILE_SIZE = 5 * 1024 * 1024
 COMMENT_EXTENSIONS = {'.py', '.sh', '.toml', '.yaml', '.yml', '.conf'}
@@ -222,6 +222,7 @@ class _EditorTab(_TabHeader):
         self.chrome = gutter.ViewChrome(self.view, panel.chrome)
         self.chrome.set_line_numbers(panel.line_numbers)
         self.chrome.set_highlight_line(panel.highlight_line)
+        self.slash_menu = None
         self.md_mode = 'source'
         self.md_renderer = None
         self._md_restore_idle = 0
@@ -278,12 +279,22 @@ class _EditorTab(_TabHeader):
         if self.panel.md_live_preview and not self.md_large:
             self.set_markdown_mode('preview')
 
+    def _sync_slash_menu(self) -> None:
+        enabled = (self.panel.slash_commands and self.md_mode == 'preview'
+                   and notes.is_note_path(self.path) and not self._md_closed)
+        if enabled and self.slash_menu is None:
+            self.slash_menu = slashmenu.SlashMenu(self.view)
+        elif not enabled and self.slash_menu is not None:
+            self.slash_menu.destroy()
+            self.slash_menu = None
+
     def style_markdown(self) -> None:
         if self.md_renderer:
             self.md_renderer.set_style(self.panel.syntax_style, self.panel.chrome, self.panel.font_size)
 
     def _destroy_markdown(self, *_: object) -> None:
         self._md_closed = True
+        self._sync_slash_menu()
         if self._md_restore_idle:
             GLib.source_remove(self._md_restore_idle)
             self._md_restore_idle = 0
@@ -305,6 +316,7 @@ class _EditorTab(_TabHeader):
         self.chrome.set_line_numbers(self.panel.line_numbers and not live)
         self.chrome.set_highlight_line(self.panel.highlight_line and not live)
         self.md_renderer.set_enabled(live)
+        self._sync_slash_menu()
         self.buffer.place_cursor(self.buffer.get_iter_at_offset(cursor))
         adjustment.set_value(offset)
         if self._md_restore_idle:
@@ -336,6 +348,7 @@ class _EditorTab(_TabHeader):
         self.path = path
         self.detect_language()
         self._sync_markdown()
+        self._sync_slash_menu()
         self.update_title()
 
     def update_title(self) -> None:
@@ -401,6 +414,7 @@ class EditorPanel(Gtk.Box):
         self.indent_tabs, self.indent_width = False, 4
         self.auto_pair = False
         self.md_live_preview = self.md_readable_width = True
+        self.slash_commands = True
         self._announced_path = ''
         self.tabs: list[_EditorTab] = []
         self._view_tabs: dict[str, _ViewTab] = {}
@@ -573,6 +587,12 @@ class EditorPanel(Gtk.Box):
     def set_md_live_preview(self, enabled: bool) -> None:
         """Choose the initial mode of subsequently opened Markdown tabs."""
         self.md_live_preview = bool(enabled)
+
+    def set_slash_commands(self, enabled: bool) -> None:
+        """Enable note slash commands on every live tab, including future tabs."""
+        self.slash_commands = bool(enabled)
+        for tab in self.tabs:
+            tab._sync_slash_menu()
 
     def set_md_readable_width(self, enabled: bool) -> None:
         """Cap preview text at 700 logical pixels, centred in the viewport."""
@@ -888,6 +908,8 @@ class EditorPanel(Gtk.Box):
             buffer.end_user_action()
 
     def _key_press(self, _view: Gtk.TextView, event: Gdk.EventKey, tab: _EditorTab) -> bool:
+        if tab.slash_menu and tab.slash_menu.handle_key(_view, event):
+            return True
         if self._tab_shortcut(event):
             return True
         key = event.keyval
