@@ -1,117 +1,38 @@
-STATUS: DONE
+STATUS: DONE (implementation complete; two out-of-scope integration test incompatibilities reported below)
 
-## Root cause
-`ResizeGate` (idgent/resizegate.py) is supposed to hold the next terminal grid
-until the shell has answered the previous SIGWINCH, because readline computes
-its redraw for one width. It took **any** `contents-changed` as that answer.
-VTE emits `contents-changed` for its own resize about one update (~15 ms)
-later, even when the child has written nothing. This was verified with bash
-stopped by SIGSTOP: the gate released at about 15 ms. So the gate committed
-the next width while bash's redraw was still in flight. When that redraw
-(computed for a wider grid, where the prompt fits on one row) is parsed at a
-narrower grid, VTE autowraps it onto two rows. Readline still believes it is
-one row, so its next redraw clears only the lower row and leaves the upper one
-behind. You get one stacked `lestoq@wall-e:~/projects/` row per race, exactly
-as in the screenshots.
+Changes:
+- idgent/settings.py: all contract feature, explorer, terminal, graph-type, Git graph and notes keys; md_live_preview replaces md_default_preview. Existing legacy JSON keys survive but have no accessor/default. Terminal pane default 6, bounds 1..8; commit bounds 100..10000.
+- idgent/settings_dialog.py: nine navigation pages in requested order; first Enable row per feature; disabled rows remain searchable and use sensitivity plus opacity 0.48. Moved explorer font and Markdown rows. Added shell entry with advisory hint, pane and commit spins, notes-folder info, eight graph controls with reset, full graph callbacks, silent initialization and copied values.
+- README.md: settings pages and feature preferences documented.
+- tests/test_settings.py, tests/test_settings_dialog.py: contract validation, persistence/reset, legacy key, graph preservation, page order, callbacks, keyboard navigation, search, sensitivity/opacity and silent initialization.
 
-A second path made it worse on dock close/reopen: `TerminalPanel._commit_layout`
-(after-paint on map/unmap) force-committed every gate in the window, including
-gates still waiting for their shell.
+Verification:
+- XDG_CONFIG_HOME=$(mktemp -d) GDK_BACKEND=x11 dbus-run-session -- xvfb-run -a python3 -X faulthandler -W ignore::DeprecationWarning -m unittest tests.test_settings tests.test_settings_dialog -v
+  PASS: 44 tests, 4.447 seconds. Log: .ceo/targeted.log.
+- Full suite launched ONCE using the same isolated X11 command with "discover -s tests"; 920 tests in 449.433 seconds; 916 passed, 2 skipped, 1 failure, 1 error (rc 1). Both issues are in unowned tests/test_window_wiring.py. Log: .ceo/full-suite.log.
+- XDG_CONFIG_HOME=$(mktemp -d) GDK_BACKEND=x11 dbus-run-session -- timeout 8 xvfb-run -a python3 -m idgent .
+  PASS: rc 124, no traceback. Log: .ceo/smoke.log.
+- git diff HEAD~2 --check: PASS. Diff wording check: PASS.
+- Real GTK screenshots captured using Gdk.pixbuf_get_from_window under xvfb with a 1280x1200 screen. LOOKED at all eight requested images, plus both disabled Git graph images, in .ceo/screenshots/.
+  SAW: aligned end controls, readable labels and descriptions, rounded cards and separators, complete notes-folder row, shell hint and full terminal list, graph decimals and dropdowns. Both palettes preserve contrast. Disabled Git graph rows visibly fade while Enable stays active. Replaced an unavailable Git navigation icon with an available symbolic list icon.
 
-Why it shows on the user's machine and not in earlier tests: on a fast host,
-bash answers within VTE's update interval. In the user's VM the answer can land
-after the gate's premature commit. The bottom dock's minimum width is fixed in
-pixels, about 25 columns at the user's cell size (fewer than the 33-column
-prompt), so squeezing the bottom dock (right dock divider far left) crosses the
-prompt width. The right dock does the same when narrowed. In LC_ALL=C, readline
-mostly recovers, which is another reason C-locale tests missed this.
+Decisions / assumptions:
+- Kept the existing "files" page ID; displayed title is "File explorer".
+- Followed this task's explicit unknown-graph-key preservation acceptance requirement: normalize_graph now retains unknown graph keys; known keys retain existing validation/ranges. This differs from the older dropping policy in docs/graph-spec.md; that document is outside the owned files.
+- Used existing reduceMotion graph setting, labelled "Reduce graph motion", rather than inventing an animation key.
+- Notes path comes from the transient parent's root, with "<project>" placeholder when used standalone.
+- Existing fonts/theme retain their dedicated change signals; all added scalar settings persist and use setting-changed. Graph rows emit key "graph" and the full copied dictionary.
+- Concurrent persisted graph-panel changes are retained when editing an individual graph setting.
+- No dependency, stylesheet, widgets.py, window.py or other unowned file changes.
+- Contrary to .ceo/common.md, .ceo/report.md is already tracked in this checkout (from commit 76bd125). Committed the report last under the supplied AGENTS.md reporting rule to leave the worktree clean. Screenshots and verification logs remain ignored.
 
-Not the cause (checked): the deferred spawn (spawn grids were always the final
-ones), panesplit close/reopen, a second spawn or re-feed (no extra spawns
-logged), or a VTE reflow (instrumented: no grid change ever happened with
-`rewrap-on-resize` on).
+Commits:
+- 3d2a076 feat(settings-core): add feature settings pages and storage keys
+- 911c8cc fix(settings-core): dim disabled rows and retain concurrent graph edits
+- de82c38 docs(settings-core): document graph change callbacks
 
-## Fix (no text is hidden or rewritten, nothing is sent to the shell)
-- idgent/resizegate.py:
-  - After a grid change, a one-shot high-priority GLib fd watch on the PTY
-    master records when the program actually writes. VTE reads its PTY lazily
-    from the main loop, so the watch sees the bytes first.
-  - `contents-changed` counts as the answer only once the program has written
-    and `FIONREAD` on the master is 0 (VTE parsed everything). VTE's own resize
-    signal is ignored.
-  - PTY-less terminals (fed output) keep the old behaviour.
-  - If the `PACE_MS` timeout fires while an answer is in flight (written, not
-    yet parsed), the gate waits one more period. A silent program is still
-    released after `PACE_MS`.
-  - New `commit_when_answered()`: commit now, or once the terminals have
-    redrawn.
-- idgent/terminal.py: `_commit_layout` uses `commit_when_answered()` instead
-  of forcing `commit()` on gates that are waiting.
-
-## Tests
-- New tests/test_terminal_dup.py. Real MainWindow, real bash behind a small
-  PTY proxy that delays the shell's output by 25 ms (like a loaded VM) and
-  makes the race deterministic:
-  - `test_right_dock_user_locale`, `test_bottom_dock_user_locale`: drag the
-    dock below prompt width, widen, close (toggle), reopen, drag again; assert
-    exactly one prompt row. The bottom case uses font 15 so its minimum is
-    25 columns, like the user's.
-  - `test_both_docks_c_locale`: same with LC_ALL=C, plus the exact cursor
-    position and typing-wrap checks.
-  - `test_gate_waits_for_shell_output_not_vte_resize_signal`: SIGSTOP the
-    shell and assert the gate does not release on VTE's own signal.
-- tests/test_resizegate.py: 3 unit tests (VTE signal ignored before output,
-  in-flight answer extends the release once, `commit_when_answered` defers
-  then commits).
-
-## Verification
-- On old code (2cbc26c sources, 3 runs): fails every time. Failures were
-  right-dock user locale, C-locale bottom, and the gate-timing test, plus
-  bottom user locale in 1 of 3 runs. Example failure (C, bottom, after
-  reopen, 25 columns):
-  `['lestoq@wall-e:~/projects/', 'lestoq@wall-e:~/projects/', 'lestoq@wall-e:~/projects/', 'IDgent$ ']`.
-- Fixed code: test_terminal_dup passes 3/3 in the user locale and 4/4 with
-  LC_ALL=C, and 5/5 under full CPU load (`yes` on every core).
-- Targeted:
-  `XDG_CONFIG_HOME=$(mktemp -d) GDK_BACKEND=x11 dbus-run-session -- xvfb-run -a python3 -W ignore::DeprecationWarning -m unittest tests.test_terminal_panel tests.test_terminal_bar tests.test_terminal_startup tests.test_terminal_resize tests.test_terminal_dup tests.test_panesplit tests.test_resizegate tests.test_settings_wiring`
-  - en_US.UTF-8: Ran 186, OK.
-  - LC_ALL=C: Ran 186, 2 failures, both `BashDragTest.test_drag_comparison`
-    `assertGreater(baseline["history_copies"], ...)`. This is pre-existing: it
-    fails identically on the old code under LC_ALL=C (checked twice). The
-    ungated control does not corrupt in C, so the "baseline must be broken"
-    check fails. The gated harness's own checks pass. Not touched.
-- Full suite, run 1 (earlier fix version, before commit 10b273b): 913 tests,
-  2 failures:
-  - `test_settings_wiring...commits_gate`: it expects `commit()` after a font
-    change. Fixed by `commit_when_answered` committing after the answer.
-  - `test_bottom_dock_user_locale` under suite load: timeout released while
-    an answer was in flight. Fixed by the one-time extension.
-- Full suite, run 2 (final):
-  `XDG_CONFIG_HOME=$(mktemp -d) GDK_BACKEND=x11 dbus-run-session -- xvfb-run -a python3 -X faulthandler -W ignore::DeprecationWarning -m unittest discover -s tests`
-  gave Ran 916, OK (skipped=2). No test_search_wiring segfault in either run.
-
-## Screenshots (.ceo/, not committed, checked by me)
-All taken in the real MainWindow with the user's ~/.bashrc, font 15, after
-right/bottom drags, then close and reopen of both docks.
-- .ceo/terminal-dup-master-slow.png: old code with the delayed shell. The
-  right terminal is full of stacked prompt fragments, as in the user report.
-- .ceo/terminal-dup-fixed-slow.png: fixed code, user locale. One prompt per
-  terminal. The cursor is 5 cells early (inside `IDgent`): that is the known
-  upstream bash53-020 readline bug after narrow-then-wide in UTF-8. It is out
-  of scope, and is not present in C.
-- .ceo/terminal-dup-fixed-slow-C.png: fixed code, LC_ALL=C. One prompt per
-  terminal, cursor right after the prompt.
-- .ceo/terminal-dup-2.png: fixed code, real (undelayed) shells after
-  resize/close/reopen. Clean.
-
-## Open issues / assumptions
-- The upstream bash 5.3.9 (< bash53-020) cursor offset remains in UTF-8 after
-  shrinking below the prompt width and widening again. Out of scope per brief.
-- A program that takes longer than 2 x `PACE_MS` (100 ms) to *start* writing
-  its redraw can still race. That would need a longer `PACE_MS`, which slows
-  drags for silent programs; I left it at 50 ms.
-- The fd watch relies on VTE reading its PTY in the main loop (true for the
-  installed VTE 0.84). If a future VTE reads on a thread, the gate falls back
-  to the `PACE_MS` timeout.
-- tests/test_terminal_dup.py imports DockWindow and the assertion helpers from
-  tests/test_terminal_resize.py. That file is unchanged.
+Open issues:
+- Full suite: test_window_wiring.WindowWiringTest.test_startup_applies_stored_values errors at line 348 because its stored fixture calls settings.set_values with removed md_default_preview.
+- Full suite: test_window_wiring.WindowWiringTest.test_every_setting_changes_the_live_widgets_and_persists fails at line 326 because CHANGES enumerates the old NEW_KEYS, including md_default_preview and omitting the new contract keys.
+- Left tests/test_window_wiring.py unchanged as specifically directed by the brief. The live-md / feature-wiring integration must update the old fixture/key enumeration and connect the new keys before these two tests can pass.
+- Feature wiring is deliberately left to the assigned later task.
