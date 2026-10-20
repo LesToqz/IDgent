@@ -293,6 +293,13 @@ Layout commands restore fullscreen first. Esc is intentionally not bound to
 terminal fullscreen. Resizing is applied once a drag settles. Output already on
 screen is not re-flowed, preventing duplicated prompts.
 
+In live notes under `.IDgent/Notes`, type `/` at a line start or after a space to
+open the command menu. Filter by typing, choose with arrows and Enter or Tab,
+and dismiss with Esc. Commands include plain text, headings 1–3, bullet and
+numbered lists, to-do lists, quotes, dividers, code and Mermaid blocks, tables,
+links, today's ISO date, callouts, and images. A command is one undoable edit;
+slash commands can be switched off in Notes settings.
+
 ## Themes
 
 Pick a theme in Settings → Appearance for a live switch, or press **Ctrl+Alt+T**

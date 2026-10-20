@@ -831,6 +831,8 @@ class MainWindow(Gtk.ApplicationWindow):
             self.editor.set_auto_pair(value)
         elif key == "md_live_preview":
             self.editor.set_md_live_preview(value)
+        elif key == "notes_slash_commands":
+            self.editor.set_slash_commands(value)
         elif key == "md_readable_width":
             self.editor.set_md_readable_width(value)
         elif key == "show_hidden":
