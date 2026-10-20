@@ -3,6 +3,7 @@
 Run: GDK_BACKEND=x11 xvfb-run -a python3 -W ignore::DeprecationWarning -m unittest tests.test_graph_web -v
 """
 import json
+import math
 import os
 import shutil
 import subprocess
@@ -13,6 +14,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PAGE = os.path.join(ROOT, 'idgent', 'graph_web', 'graph.html')
 SHOTS = os.path.join(ROOT, '.ceo', 'shots')
 DEMO_VAULT = '/home/lestoq/projects/demo'
+with open(os.path.join(ROOT, 'tests', 'graph_params.json'), encoding='utf-8') as fh:
+    GRAPH_DEFAULTS = json.load(fh)['defaults']
 
 LIGHT = {
     'background': '#ffffff', 'node': '#5c5c5c', 'node_focused': '#8a5cf5', 'node_tag': '#08b94e',
@@ -259,13 +262,13 @@ class GraphPageTests(unittest.TestCase):
             p.pump(0.2)
             self.assertEqual(len(p.of_type('ready')), 1, p.messages)
             self.assertEqual(p.of_type('error'), [])
-            self.assertIn('Building graph', p.js("document.getElementById('status').textContent"))
+            self.assertIn('Mapping this project…', p.js("document.getElementById('status').textContent"))
             p.call('setData', {'nodes': [], 'links': []})
             p.pump(0.1)
-            self.assertIn('No linked files yet', p.js("document.getElementById('status').textContent"))
+            self.assertIn('No files match this view', p.js("document.getElementById('status').textContent"))
             p.call('setData', {'nodes': [{'id': 'a.md', 'label': 'a', 'kind': 'note'}], 'links': [], 'truncated': True})
             p.pump(0.1)
-            self.assertIn('Showing the 1 most', p.js("document.getElementById('notice').textContent"))
+            self.assertIn('View limited to 1 files with the most connections', p.js("document.getElementById('notice').textContent"))
         finally:
             p.destroy()
 
@@ -348,12 +351,12 @@ class GraphPageTests(unittest.TestCase):
         st = p.js('IDGraph._debug.settings()')
         self.assertEqual(st['repelStrength'], 12)
         self.assertEqual(st['nodeSizeMultiplier'], 2)
-        self.assertEqual(p.js("document.querySelector('input[aria-label=\"Repel force\"]').value"), '12')
+        self.assertEqual(p.js("document.querySelector('input[aria-label=\"Space between files\"]').value"), '12')
         self.assertEqual(p.js("document.querySelectorAll('.group').length"), 1)
         self.assertGreaterEqual(p.stats()['alpha'], 0.25, 'forces reheat')
         p.pump(0.4)
         self.assertEqual(p.of_type('settings'), [], 'setSettings must not echo')
-        p.call('setSettings', {'repelStrength': 10, 'nodeSizeMultiplier': 1, 'showTags': False, 'colorGroups': [],
+        p.call('setSettings', {'repelStrength': GRAPH_DEFAULTS['repelStrength'], 'nodeSizeMultiplier': 1, 'showTags': False, 'colorGroups': [],
                                'collapse-filter': True, 'collapse-color-groups': True, 'collapse-display': True,
                                'collapse-forces': True})
 
@@ -363,9 +366,10 @@ class GraphPageTests(unittest.TestCase):
         self._demo()
         s0 = p.stats()
         p.wheel(200, 150, -120)
-        p.wait_for('Math.abs(IDGraph.stats().scale - 1.5) < 0.02', 3)
+        expected = s0['targetScale'] * math.exp(120 / 480)
+        p.wait_for(f'Math.abs(IDGraph.stats().scale - {expected}) < 0.02', 3)
         st = p.stats()
-        self.assertAlmostEqual(st['targetScale'], 1.5 * s0['targetScale'], places=4)
+        self.assertAlmostEqual(st['targetScale'], expected, places=4)
         p.pump(0.8)
         self.assertTrue(any('scale' in m['settings'] for m in p.of_type('settings')), 'zoom is persisted')
         # zoom-in keeps the world point under the pointer fixed
@@ -373,9 +377,11 @@ class GraphPageTests(unittest.TestCase):
         self.assertAlmostEqual(st['pan'][0] + wx * st['scale'], 200, delta=1.0)
         p.wheel(200, 150, 120)
         p.wheel(200, 150, 120)
-        p.wait_for('Math.abs(IDGraph.stats().scale - 1/1.5) < 0.01', 3)
-        p.wheel(200, 150, 3, mode=1)   # line mode: 3 lines = 120 px
-        p.wait_for('Math.abs(IDGraph.stats().scale - 1/2.25) < 0.01', 3)
+        expected = s0['targetScale'] * math.exp(-120 / 480)
+        p.wait_for(f'Math.abs(IDGraph.stats().scale - {expected}) < 0.01', 3)
+        p.wheel(200, 150, 3, mode=1)   # IDgent line mode: 3 lines = 72 px
+        expected *= math.exp(-72 / 480)
+        p.wait_for(f'Math.abs(IDGraph.stats().scale - {expected}) < 0.01', 3)
         p.call('setSettings', {'scale': 1})
         p.wait_for('Math.abs(IDGraph.stats().scale - 1) < 0.01', 3)
 
@@ -487,7 +493,7 @@ class GraphPageTests(unittest.TestCase):
         p.pump(0.1)
         self.assertTrue(p.js('IDGraph._debug.menuOpen()'))
         items = p.js("[...document.querySelectorAll('#menu .item')].map(e => e.textContent)")
-        self.assertEqual(items, ['Open', 'Open in new tab', 'Open to the right', 'Reveal in explorer', 'Copy path'])
+        self.assertEqual(items, ['Open file', 'Open another tab', 'Open in right pane', 'Locate in project tree', 'Copy file location'])
         self.assertEqual(p.js("document.querySelector('#menu .item').getBoundingClientRect().height"), 28)
         p.snapshot('06-context-menu')
         p.js("document.getElementById('menu').dispatchEvent(new KeyboardEvent('keydown', {key: 'ArrowDown', bubbles: true}));"
@@ -507,9 +513,9 @@ class GraphPageTests(unittest.TestCase):
         p.call('setSettings', {'close': False, 'collapse-filter': False, 'collapse-forces': False,
                                'collapse-display': False, 'collapse-color-groups': False})
         p.pump(0.3)
-        p.js("document.querySelector('button[aria-label=\"Tags\"]').click()")
-        p.js("{ const r = document.querySelector('input[aria-label=\"Repel force\"]'); r.value = '15'; r.dispatchEvent(new Event('input')); }")
-        p.js("{ const s = document.querySelector('input[aria-label=\"Search files\"]'); s.value = 'tag:#x'; s.dispatchEvent(new Event('input')); }")
+        p.js("document.querySelector('button[aria-label=\"Tag markers\"]').click()")
+        p.js("{ const r = document.querySelector('input[aria-label=\"Space between files\"]'); r.value = '15'; r.dispatchEvent(new Event('input')); }")
+        p.js("{ const s = document.querySelector('input[aria-label=\"Filter project files\"]'); s.value = 'tag:#x'; s.dispatchEvent(new Event('input')); }")
         p.pump(0.04)
         self.assertEqual(p.of_type('options'), [], 'options are debounced')
         p.pump(0.15)
@@ -532,19 +538,22 @@ class GraphPageTests(unittest.TestCase):
         p.pump(0.1)
         self.assertFalse(p.js("document.getElementById('popup').hidden"))
         p.snapshot('07-panel-color-popup')
+        selected_colour = p.js("document.querySelectorAll('#popup .swatch')[3].getAttribute('aria-label')")
         p.js("document.querySelectorAll('#popup .swatch')[3].click()")
         p.pump(0.4)
-        self.assertEqual(p.of_type('settings')[-1]['settings']['colorGroups'][0]['color']['a'], 1)
+        colour = p.of_type('settings')[-1]['settings']['colorGroups'][0]['color']
+        self.assertRegex(colour, r'^#[0-9a-f]{6}$')
+        self.assertEqual(colour, selected_colour)
         p.messages.clear()
         p.js("document.querySelector('.sec-head').click()")
         p.pump(0.4)
         self.assertEqual(p.of_type('settings')[-1]['settings'], {'collapse-filter': True})
-        p.js("document.querySelector('button[aria-label=\"Restore default settings\"]').click()")
+        p.js("document.querySelector('button[aria-label=\"Reset graph preferences\"]').click()")
         p.pump(0.4)
         last = p.of_type('settings')[-1]['settings']
-        self.assertEqual(last['repelStrength'], 10)
-        self.assertEqual(last['colorGroups'], [])
-        self.assertFalse(last['showTags'])
+        self.assertEqual(last['repelStrength'], GRAPH_DEFAULTS['repelStrength'])
+        self.assertEqual(last['colorGroups'], GRAPH_DEFAULTS['colorGroups'])
+        self.assertEqual(last['showTags'], GRAPH_DEFAULTS['showTags'])
         self.assertEqual(p.js('IDGraph._debug.settings().search'), 'tag:#x', 'restore leaves the search text')
         self.assertEqual(p.js("document.querySelectorAll('.group').length"), 0)
         p.js("document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', bubbles: true}))")
@@ -561,13 +570,13 @@ class GraphPageTests(unittest.TestCase):
         p.call('setData', g)
         p.call('setSettings', {'close': False, 'collapse-filter': False})
         p.settle()
-        self.assertEqual(p.js('IDGraph._debug.weight(%s)' % json.dumps(center)), 30)
+        self.assertEqual(p.js('IDGraph._debug.weight(%s)' % json.dumps(center)), 12)
         rows = p.js("[...document.querySelectorAll('.sec .row:not(.is-hidden) .name')].map(e => e.textContent)")
-        self.assertIn('Depth2', ''.join(rows).replace(' ', ''))
-        self.assertNotIn('Orphans', rows)
+        self.assertIn('Neighbourhoodhops2', ''.join(rows).replace(' ', ''))
+        self.assertNotIn('Unlinked files', rows)
         p.snapshot('08-local-graph')
         p.messages.clear()
-        p.js("{ const r = document.querySelector('input[aria-label=\"Depth\"]'); r.value = '3'; r.dispatchEvent(new Event('input')); }")
+        p.js("{ const r = document.querySelector('input[aria-label=\"Neighbourhood hops\"]'); r.value = '3'; r.dispatchEvent(new Event('input')); }")
         p.pump(0.15)
         self.assertEqual(p.of_type('options')[-1]['options']['local'],
                          {'enabled': True, 'depth': 3, 'incoming': True, 'outgoing': True})
@@ -597,7 +606,7 @@ class GraphPageTests(unittest.TestCase):
         self.assertTrue(p.call('focus', far))
         p.wait_for("(() => { const q = IDGraph._debug.screenPos(%s); const s = IDGraph.stats(); return Math.hypot(q[0]-s.width/2, q[1]-s.height/2) < 2; })()" % json.dumps(far), 5)
         p.pump(0.6)
-        self.assertEqual(p.js('IDGraph._debug.nodeColor(%s)' % json.dumps(far)), '#a68af9')
+        self.assertEqual(p.js('IDGraph._debug.nodeColor(%s)' % json.dumps(far)), '#63b3ed')
 
     def test_16_keyboard_pan_zoom(self):
         p = self.page
@@ -618,14 +627,14 @@ class GraphPageTests(unittest.TestCase):
         p.call('setSettings', {'reduceMotion': True})
         p.wheel(450, 300, -120)
         p.pump(0.05)
-        self.assertAlmostEqual(p.stats()['scale'], 1.5, places=3)
+        self.assertAlmostEqual(p.stats()['scale'], math.exp(120 / 480), places=3)
         p.call('setSettings', {'reduceMotion': False, 'scale': 1})
         p.pump(0.5)
 
     def test_18_timelapse(self):
         p = self.page
         self._demo(80, 4)
-        p.js("document.querySelector('button[aria-label=\"Start timelapse animation\"]').click()")
+        p.js("document.querySelector('button[aria-label=\"Replay project history\"]').click()")
         p.pump(0.5)
         self.assertTrue(p.js('IDGraph._debug.timelapse()'))
         self.assertLess(p.stats()['nodes'], 80)

@@ -125,6 +125,12 @@ class EasingTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             duration_ms(float("inf"))
 
+    def test_component_duration_contracts(self):
+        # Existing component call sites keep their keys with IDgent timings.
+        self.assertEqual(duration_ms("tab_close_reflow"), DURATIONS["travel"])
+        self.assertEqual(duration_ms("clickable_icon_opacity"), DURATIONS["state"])
+        self.assertEqual(duration_ms("notice_hover_grace"), DURATIONS["pause"])
+
 
 class ColorTest(unittest.TestCase):
     def test_hex_and_rgb_midpoints(self):
@@ -212,6 +218,20 @@ class GtkFixture(unittest.TestCase):
 
 
 class TweenTest(GtkFixture):
+    def test_component_durations_animate_and_respect_reduced_motion(self):
+        for reduced in (False, True):
+            set_reduce_motion(reduced)
+            for duration in ("tab_close_reflow", "clickable_icon_opacity"):
+                with self.subTest(reduced=reduced, duration=duration):
+                    values, done = [], []
+                    handle = animate(self.widget, duration, values.append,
+                                     on_done=lambda: done.append(True))
+                    self.assertEqual(handle.finished, reduced)
+                    self.assertEqual(values, [1] if reduced else [0])
+                    self.finish(handle)
+                    self.assertEqual(values[-1], 1)
+                    self.assertEqual(done, [True])
+
     def test_150ms_tween_finishes_in_8_to_12_real_frames(self):
         frames, values = [], []
         clock = self.widget.get_frame_clock()

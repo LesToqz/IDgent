@@ -45,6 +45,26 @@ the hue wheel by 137.5 degrees from a blue starting hue (210 degrees), with
 65% saturation and 64% dark / 42% light luminance. Existing packed RGBA colours
 remain accepted for saved preferences and host bridge compatibility.
 
+## Page text and accessibility
+
+The canvas is labelled “Project files and references”. Before data arrives the
+status reads “Mapping this project…”; an empty result reads “No files match this
+view”. A capped result announces “View limited to N files with the most
+connections”, where N is the visible file count.
+
+Scope controls use “Filter project files”, “Tag markers”, “Referenced assets”,
+“Hide missing targets”, “Unlinked files”, and “Source and imports”. In local
+mode, “Neighbourhood hops”, “Referenced by”, and “References to” replace the
+unlinked-file control. Numeric controls use the labels in the settings table.
+“Reset graph preferences” restores filter, display, force and colour-rule
+defaults, plus traversal defaults in local mode, while retaining search text,
+zoom and section visibility. “Replay project history” is the timeline button's
+accessible label.
+
+A file's menu offers “Open file”, “Open another tab”, “Open in right pane”,
+“Locate in project tree”, and “Copy file location”, in that order. These labels
+express project actions; host action identifiers remain stable.
+
 ## Project data and filters
 
 Notes use Markdown references and tags; source files contribute imports. Assets

@@ -184,7 +184,9 @@ class CommitPageTests(unittest.TestCase):
         self.assertLessEqual(p.js('document.documentElement.scrollWidth'), 520)
         self.assertTrue(p.js("[...document.querySelectorAll('.code')].every(n => n.scrollWidth <= n.clientWidth + 1)"))
         p.call('setTheme', palette(False))
-        self.assertEqual(p.js('getComputedStyle(document.body).backgroundColor'), 'rgb(255, 255, 255)')
+        background = palette(False)['bg']
+        expected = 'rgb(%d, %d, %d)' % tuple(int(background[i:i + 2], 16) for i in (1, 3, 5))
+        self.assertEqual(p.js('getComputedStyle(document.body).backgroundColor'), expected)
         p.shot('03-reference-light-520')
         p.resize(900, 1000)
         p.shot('04-reference-light-900')

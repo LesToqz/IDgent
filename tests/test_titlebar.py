@@ -476,7 +476,8 @@ class TitleBarTests(unittest.TestCase):
         ui = get_theme('idgent-dark').ui
         self.assertAlmostEqual(glyph.get_opacity(), GLYPH_OPACITY, delta=1 / 255)
         self.assertEqual(bar.settings_fader.duration, 'clickable_icon_opacity')
-        self.assertEqual(motion.duration_ms(bar.settings_fader.duration), 140)
+        self.assertEqual(motion.duration_ms(bar.settings_fader.duration),
+                         motion.DURATIONS['clickable_icon_opacity'])
         self.hover(gear)
         height = gear.get_allocated_height()
         self.assert_pixel(gear, 2, height // 2, blend(ui['sidebar_bg'], ui['overlay'], 0.067))
