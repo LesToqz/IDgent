@@ -39,7 +39,8 @@ def utf8_locale():
 
 
 class StartupWindow:
-    def __init__(self, maximized=False, before_show=0, autostart=True, right=False):
+    def __init__(self, maximized=False, before_show=0, autostart=True, right=False,
+                 bottom=None, size=(1200, 750), prompt=PS1, prompt_text=PROMPT):
         self.directory = tempfile.TemporaryDirectory(prefix="idgent-startup-")
         self.environment = patch.dict(os.environ, {
             "XDG_CONFIG_HOME": str(Path(self.directory.name) / "config")})
@@ -48,6 +49,7 @@ class StartupWindow:
         self.spawns = []
         self.started = time.monotonic()
         self.locale = utf8_locale()
+        self.prompt, self.prompt_text = prompt, prompt_text
         self.original_spawn = Vte.Terminal.spawn_async
         self.spawn_patch = patch.object(Vte.Terminal, "spawn_async",
                                         lambda terminal, *a, **kw: self.spawn(terminal, *a, **kw))
@@ -58,12 +60,18 @@ class StartupWindow:
             assert application.register(None)
         style.apply_style()
         self.window = MainWindow(application, self.directory.name)
+        self.window.set_default_size(*size)
         if before_show:
             spin(before_show)
         self.window.show_all()
         self.shown_at = time.monotonic()
         if right:
             self.window.toggle_terminal_right()
+        bottom_count = int(autostart) if bottom is None else bottom
+        for panel, count in ((self.window.terminal_bottom, bottom_count),
+                             (self.window.terminal_right, int(right))):
+            while panel.terminal_count() < count:
+                assert panel.new_terminal()
         if maximized:
             # Xvfb has no WM. Deliver the large allocation a maximizing WM
             # would send just after map, on the next main-loop turn.
@@ -78,7 +86,7 @@ class StartupWindow:
         index = len(self.spawns)
         log = Path(self.directory.name) / f"sizes-{index}"
         rc = Path(self.directory.name) / f"rc-{index}"
-        rc.write_text("PS1=" + shlex.quote(PS1) + "\n" +
+        rc.write_text("PS1=" + shlex.quote(self.prompt) + "\n" +
                       f"stty size >> {shlex.quote(str(log))}\n" +
                       f"trap 'stty size >> {shlex.quote(str(log))}' WINCH\n")
         environment = {key: value for key, value in os.environ.items()
@@ -98,7 +106,7 @@ class StartupWindow:
     def ready(self):
         panes = [pane for panel in (self.window.terminal_bottom, self.window.terminal_right)
                  for pane in panel._panes]
-        return bool(panes) and all(p.pid and PROMPT.strip() in DockWindow.text(p.terminal)
+        return bool(panes) and all(p.pid and self.prompt_text.strip() in DockWindow.text(p.terminal).replace("\n", "")
                                    for p in panes)
 
     def measurements(self):
@@ -134,9 +142,9 @@ class TerminalStartupTest(unittest.TestCase):
                          dock.measurements())
         columns = terminal.get_column_count()
         self.assertEqual(tuple(terminal.get_cursor_position()),
-                         (len(PROMPT) % columns, len(PROMPT) // columns), dock.measurements())
+                         (len(dock.prompt_text) % columns, len(dock.prompt_text) // columns), dock.measurements())
         self.assertEqual(DockWindow.text(terminal).replace("\n", "").strip(),
-                         PROMPT.strip(), dock.measurements())
+                         dock.prompt_text.strip(), dock.measurements())
         ok, rows, columns = terminal.get_pty().get_size()
         self.assertTrue(ok)
         self.assertEqual((columns, rows), (terminal.get_column_count(), terminal.get_row_count()))
@@ -151,6 +159,36 @@ class TerminalStartupTest(unittest.TestCase):
         rows = DockWindow.rows(terminal)
         expected = [line[i:i + columns] for i in range(0, len(line), columns)]
         self.assertEqual([r.rstrip() for r in rows[:len(expected)]], expected, dock.measurements())
+
+    def test_six_panes_both_docks_at_supported_window_widths(self):
+        for width in (1200, 1500):
+            for kind in ('bottom', 'right'):
+                with self.subTest(width=width, dock=kind):
+                    # Keep the prompt within the narrow columns, including its UTF-8 locale.
+                    dock = StartupWindow(bottom=6 if kind == 'bottom' else 1,
+                                         right=6 if kind == 'right' else False,
+                                         size=(width, 750),
+                                         prompt=r"\[\033[32m\]idgent\[\033[0m\]$ ", prompt_text="idgent$ ")
+                    try:
+                        self.assertTrue(poll(dock.ready, 10), dock.measurements())
+                        spin(250)
+                        panel = getattr(dock.window, 'terminal_' + kind)
+                        self.assertEqual(panel.pane_count(), 6)
+                        self.assertEqual(dock.window.get_size().width, width)
+                        for pane in panel._panes:
+                            self.assert_prompt(dock, pane.terminal)
+                            self.assertGreaterEqual(pane.terminal.get_column_count(), 8)
+                            self.assertGreaterEqual(pane.terminal.get_row_count(), 2)
+                            self.assertLessEqual(pane.page.get_allocated_width(),
+                                                 pane.frame.get_allocated_width())
+                            self.assertLessEqual(pane.page.get_allocated_height(),
+                                                 pane.frame.get_allocated_height())
+                            self.assertFalse(pane.content.get_children()[1].get_visible())
+                        self.assertFalse(panel.new_terminal())
+                        self.assertEqual(panel.toast.get_text(), 'Cannot add (limit 6)')
+                        print('SIX PANES', width, kind, dock.measurements(), flush=True)
+                    finally:
+                        dock.close()
 
     def test_initial_default_window(self):
         dock = self.open()

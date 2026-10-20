@@ -20,7 +20,7 @@ gi.require_version("Gdk", "3.0")
 gi.require_version("Vte", "2.91")
 from gi.repository import Gdk, GLib, Gtk, Vte
 
-from idgent.terminal import MAX_TERMINALS, TerminalPanel, pick_shell, safe_cwd
+from idgent.terminal import TerminalPanel, pick_shell, safe_cwd
 from idgent.terminal_bar import PaneHeader
 from idgent.resizegate import ResizeGate
 
@@ -575,6 +575,7 @@ class GraphPaneTest(unittest.TestCase):
         self.addCleanup(self.window.destroy)
 
     def test_graph_lifecycle_numbering_focus_and_terminal_settings(self):
+        self.panel.set_max_panes(3)
         self.assertTrue(self.panel.new_terminal())
         terminal1 = self.panel._panes[0]
         graph = Gtk.Entry()
@@ -614,6 +615,7 @@ class GraphPaneTest(unittest.TestCase):
         self.assertFalse(self.panel.has_graph())
 
     def test_chooser_factory_is_lazy_and_duplicate_graph_focuses_without_limit(self):
+        self.panel.set_max_panes(3)
         calls, limits = [], []
         self.panel.graph_factory = lambda: calls.append(True) or Gtk.Entry()
         self.panel.connect('limit-reached', lambda _p: limits.append(True))
@@ -664,6 +666,7 @@ class StackedGraphPaneTest(GraphPaneTest):
 
 class GitGraphPaneTest(GraphPaneTest):
     def test_gitgraph_lifecycle_limits_focus_and_numbering(self):
+        self.panel.set_max_panes(3)
         class FakeView(Gtk.Box):
             def __init__(self):
                 super().__init__()

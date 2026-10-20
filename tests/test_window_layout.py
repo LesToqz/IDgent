@@ -301,6 +301,7 @@ class WindowLayoutTests(unittest.TestCase):
     def test_each_dock_limit_and_split_toast(self):
         self.window.toggle_terminal_right()
         for panel in (self.window.terminal_bottom, self.window.terminal_right):
+            panel.set_max_panes(3)
             # The dock + opens a chooser; choose Terminal to create a pane.
             panel.add_button.choose("terminal")
             panel.add_button.choose("terminal")

@@ -19,12 +19,12 @@ gi.require_version("Gdk", "3.0")
 from gi.repository import Gdk, GLib, Gtk
 
 from idgent import motion, style
-from idgent.terminal import MAX_TERMINALS, TerminalPanel
+from idgent.terminal import TerminalPanel
 from idgent.terminal_bar import (GLYPH_OPACITY, AddButton, LimitToast, PaneHeader, build_css,
                                  cancel_fade, fade)
 from idgent.themes import THEMES, _contrast, get_theme
 
-LIMIT_TEXT = "Cannot add (limit 3)"
+LIMIT_TEXT = "Cannot add (limit 6)"
 
 
 def setUpModule() -> None:
@@ -589,15 +589,15 @@ class PanelFixture:
         reached = []
         panel.connect("limit-reached", lambda _p: reached.append(True))
         self.assertEqual(self.labels(panel), ["bash1"])
-        self.add(panel)
-        self.add(panel)
-        self.assertEqual(self.labels(panel), ["bash1", "bash2", "bash3"])
+        for _ in range(panel.max_panes - 1):
+            self.add(panel)
+        self.assertEqual(self.labels(panel), [f"bash{i + 1}" for i in range(panel.max_panes)])
         self.assertTrue(panel.is_full())
         self.assertTrue(panel.add_button.get_style_context().has_class("limit"))
         self.assertEqual(panel.add_button.get_tooltip_text(), LIMIT_TEXT)
         self.assertFalse(panel.toast.get_visible())
         self.assertFalse(panel.new_terminal())
-        self.assertEqual(panel.terminal_count(), MAX_TERMINALS)
+        self.assertEqual(panel.terminal_count(), panel.max_panes)
         self.assertEqual(reached, [True])
         self.assertTrue(panel.toast.get_visible())
         self.assertEqual(panel.toast.get_text(), LIMIT_TEXT)
@@ -607,22 +607,23 @@ class PanelFixture:
         self.assertFalse(panel.is_full())
         self.assertFalse(panel.add_button.get_style_context().has_class("limit"))
         self.assertTrue(panel.new_terminal())
-        self.assertEqual(panel.terminal_count(), MAX_TERMINALS)
+        self.assertEqual(panel.terminal_count(), panel.max_panes)
         self.assertEqual(reached, [True])
 
 
 class PanelBarMixin(PanelFixture):
     """Behaviour that must hold for side-by-side and stacked docks alike."""
 
-    def test_limit_three_with_toast_and_independent_docks(self):
+    def test_limit_six_with_toast_and_independent_docks(self):
         right = self.dock(self.directory.name)
         self.exercise_limit(self.panel)
         self.assertTrue(self.panel.is_full())
         self.assertEqual(right.terminal_count(), 1)
         self.exercise_limit(right)
-        self.assertEqual((self.panel.terminal_count(), right.terminal_count()), (3, 3))
+        self.assertEqual((self.panel.terminal_count(), right.terminal_count()), (6, 6))
 
     def test_limit_applies_to_every_add_path(self):
+        self.panel.set_max_panes(3)
         self.add()
         self.add()
         event = Gdk.Event.new(Gdk.EventType.KEY_PRESS)
@@ -685,6 +686,7 @@ class PanelBarMixin(PanelFixture):
         self.assertEqual(len(self.panel._panes), 3)
 
     def test_plus_is_in_the_top_right_corner_and_clear_of_header_controls(self):
+        self.panel.set_max_panes(3)
         self.add()
         panel = self.panel
         self.settle()
@@ -733,6 +735,7 @@ class PanelBarMixin(PanelFixture):
         self.assertTrue(corner().header.get_style_context().has_class("corner"))
 
     def test_toast_sits_under_the_header_row_over_the_terminals(self):
+        self.panel.set_max_panes(3)
         self.add()
         self.add()
         panel = self.panel
@@ -741,7 +744,7 @@ class PanelBarMixin(PanelFixture):
         self.assertFalse(panel.new_terminal())
         self.assertTrue(poll(lambda: panel.toast.get_allocated_width() > 1))
         toast = rect(panel.toast, panel)
-        self.assertEqual(panel.toast.get_text(), LIMIT_TEXT)
+        self.assertEqual(panel.toast.get_text(), f"Cannot add (limit {panel.max_panes})")
         self.assertGreaterEqual(toast[1], panel.HEADER_HEIGHT)
         self.assertLess(toast[1], panel.HEADER_HEIGHT + 20)
         self.assertGreaterEqual(toast[0] + toast[2], panel.get_allocated_width() - 24)
@@ -967,6 +970,7 @@ class AnimationMixin(PanelFixture):
         self.assert_headers_above_terminals()
 
     def test_limit_is_freed_while_pane_is_closing(self):
+        self.panel.set_max_panes(3)
         self.add()
         self.add()
         self.panel.close_current()

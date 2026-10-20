@@ -124,7 +124,7 @@ Git graph draws the repository's history with Horizontal / Vertical view icons t
 either dock's **+ → Git graph** chooser, **View → Git graph**, **Ctrl+Alt+H**,
 or **Git graph: Open git graph** in the command palette. The menu, shortcut and
 palette focus an existing Git graph, or open one below the editor (on the right
-if the bottom dock's three panes are occupied). Each dock permits one Git graph
+if the bottom dock is full). Each dock permits one Git graph
 alongside Graph view and terminals. The shortcut also works from a terminal.
 
 The default branch has a main line, with coloured branch lanes and labels,
@@ -278,12 +278,21 @@ starts a new shell.
 - Drag between panes to resize them left/right in the bottom dock or up/down in
   the right dock; double-click a divider to restore equal sizes.
 
-Each terminal has its own header, labelled bash1…bash3 in order (or the selected
+Each terminal has its own header, labelled bash1…bash6 in order (or the selected
 shell's name), with fullscreen and delete icons. The **+** in the dock's top-right
-corner adds a terminal. Each dock independently allows three; adding a fourth
-shows **Cannot add terminal (limit 3)**. Adding/deleting terminals animates them;
+corner opens a chooser for a terminal, graph view or Git graph. Each dock allows
+six panes by default, configurable from 1 to 8 in Settings → Terminal. All pane
+kinds share this limit; adding a seventh shows **Cannot add (limit 6)**.
+Adding/deleting terminals animates them;
 closing the last hides the dock. Split inserts after the focused pane.
 Right-click offers Copy, Paste, Select All, Clear, Split Terminal and Kill Terminal.
+
+**Turning features off:** Settings lets you switch the file explorer, terminal,
+graph view, Git graph and notes off independently. Changes apply immediately.
+Disabling a pane feature closes its panes and stops its shells or web views;
+re-enabling restores those panes. The chooser only offers enabled features.
+Turning off the explorer also hides its notes and file search panels. Turning
+off notes removes note insert toolbars while keeping open documents editable.
 
 A header's fullscreen icon, or View → Toggle Terminal Fullscreen, fills the whole
 window content area with that terminal, keeping the top bar visible. Toggle again

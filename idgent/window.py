@@ -81,6 +81,8 @@ class MainWindow(Gtk.ApplicationWindow):
         self._font_sizes = settings.get_font_sizes()
         stored = settings.get_values()
         self._values = {key: stored[key] for key in settings.NEW_KEYS}
+        self._disabled_panes = {}
+        self._explorer_was_visible = True
         self._commands: list[Command] = []
         self._recent_files: list[str] = []
         self._switcher = self._palette = None
@@ -91,8 +93,8 @@ class MainWindow(Gtk.ApplicationWindow):
         self.editor.set_font_size(self._font_sizes["editor_font_size"])
         self.editor.set_default_font_size(self._font_sizes["editor_font_size"])
         terminal_size = self._font_sizes["terminal_font_size"]
-        autostart = self._values['terminal_autostart']
-        self.terminal_bottom = TerminalPanel(self.root, autostart=autostart,
+        autostart = self._values['terminal_autostart'] and self.feature_enabled('terminal')
+        self.terminal_bottom = TerminalPanel(self.root, autostart=False,
                                              font_size=terminal_size)
         self.terminal_right = TerminalPanel(self.root, autostart=False, stacked=True,
                                             font_size=terminal_size)
@@ -100,12 +102,13 @@ class MainWindow(Gtk.ApplicationWindow):
         if not autostart:
             self.terminal_bottom.set_no_show_all(True)
         for panel in (self.terminal_bottom, self.terminal_right):
+            panel.connect("feature-disabled", lambda _p, kind: self._require_feature(kind))
             panel.graph_factory = self._make_graph_view
             panel.gitgraph_factory = self._make_gitgraph_view
             panel.connect("last-closed", self._hide_terminal)
             panel.connect("maximize-toggled", self._terminal_maximize_toggled)
         for key in settings.NEW_KEYS:
-            if key not in ('accent', 'ui_font', 'editor_font', 'reduce_motion'):
+            if key not in ('accent', 'ui_font', 'editor_font', 'reduce_motion') and not key.startswith('feature_'):
                 self._apply_setting(key)
         self.explorer.connect("file-activated", lambda _, path: self.editor.open_file(path))
         self.explorer.connect("path-renamed", lambda _, old, new: self.editor.on_path_renamed(old, new))
@@ -152,7 +155,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self.titlebar = TitleBar(self._build_menu())
         self.titlebar.connect("settings-requested", lambda _: self.open_settings())
         self.titlebar.connect("dock-toggle-requested", lambda _: self.toggle_right_dock())
-        self.titlebar.connect("bottom-dock-toggle-requested", lambda _: self.toggle_terminal_bottom())
+        self.titlebar.connect("bottom-dock-toggle-requested", lambda _: self._toggle_dock(self.terminal_bottom))
         self.titlebar.connect("explorer-toggle-requested", lambda _: self.toggle_explorer())
         for widget, sync in ((self.terminal_right, self.titlebar.set_dock_active),
                              (self.terminal_bottom, self.titlebar.set_bottom_dock_active),
@@ -165,9 +168,66 @@ class MainWindow(Gtk.ApplicationWindow):
         self.overlay = OverlayHost(layout)
         self.add(self.overlay)
         self._add_commands()
+        for key in settings.NEW_KEYS:
+            if key.startswith("feature_"):
+                self._apply_setting(key)
+        if autostart:
+            self.terminal_bottom.new_terminal()
         self._update_title()
         self.connect("delete-event", self._on_delete)
         self.set_theme(self.theme.id, persist=False)
+
+    def feature_enabled(self, name: str) -> bool:
+        return bool(self._values.get(f"feature_{name}", True))
+
+    def _require_feature(self, name: str) -> bool:
+        if self.feature_enabled(name):
+            return True
+        label = {"explorer": "File explorer", "terminal": "Terminal", "graph": "Graph view",
+                 "gitgraph": "Git graph", "notes": "Notes"}[name]
+        self.notify(f"{label} is turned off in Settings.")
+        return False
+
+    def _sync_features(self, name: str) -> None:
+        """One source of availability for dock creation, choosers and commands."""
+        self._restore_terminal_fullscreen()
+        kinds = tuple(kind for kind in ("terminal", "graph", "gitgraph")
+                      if self.feature_enabled(kind))
+        panels = (self.terminal_bottom, self.terminal_right)
+        if name in ("terminal", "graph", "gitgraph"):
+            for panel in panels:
+                panel.set_pane_kinds(kinds)
+                key = (panel, name)
+                if not self.feature_enabled(name):
+                    self._disabled_panes.setdefault(key, sum(p.kind == name for p in panel._panes))
+                    panel.close_kind(name)
+                else:
+                    count = self._disabled_panes.pop(key, 0)
+                    if count:
+                        panel.set_no_show_all(False)
+                        panel.show_all()
+                        for _ in range(count):
+                            self._add_dock_pane(panel, name)
+        if name == "explorer":
+            enabled = self.feature_enabled(name)
+            if not enabled and self.explorer.get_visible():
+                self._explorer_was_visible = True
+            self.explorer.set_no_show_all(not (enabled and self._explorer_was_visible))
+            self.explorer.set_visible(enabled and self._explorer_was_visible)
+        if name == "graph" and not self.feature_enabled("graph"):
+            self._graph_cleanup(self)
+        self.explorer.set_notes_enabled(self.feature_enabled("notes"))
+        self._sync_note_toolbars()
+        for button, visible in ((self.titlebar.explorer_button, self.feature_enabled("explorer")),
+                                (self.titlebar.dock_button, bool(kinds)),
+                                (self.titlebar.bottom_dock_button, bool(kinds))):
+            button.set_no_show_all(not visible)
+            button.set_visible(visible)
+
+    @staticmethod
+    def _add_dock_pane(panel: TerminalPanel, kind: str) -> bool:
+        return {"terminal": panel.new_terminal, "graph": panel.add_graph,
+                "gitgraph": panel.add_gitgraph}[kind]()
 
     def _build_menu(self) -> Gtk.MenuBar:
         bar = Gtk.MenuBar()
@@ -242,7 +302,8 @@ class MainWindow(Gtk.ApplicationWindow):
             ("Graph view: Reset camera", self.reset_graph_camera, ()),
             ("Git graph: Refresh", self.refresh_gitgraph, ()),
             ("Git graph: Jump to HEAD", self.focus_git_head, ()),
-            ("Git graph: Close commit tabs", self.close_commit_tabs, ()),
+            ("Git graph: Close commit tabs",
+             lambda: self.close_commit_tabs() if self._require_feature("gitgraph") else None, ()),
             ("Theme: Next theme", self.next_theme, ("Ctrl+Alt+T",)),
             ("Markdown: Toggle source mode", self.toggle_markdown_view, ("Ctrl+Shift+M",)),
             ("Editor: Zoom in", lambda: self._editor_zoom(1), ("Ctrl+=",)),
@@ -259,7 +320,8 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def commands(self) -> list[Command]:
         """Every command-palette entry (menu actions first) with its hotkey labels."""
-        return list(self._commands)
+        return [command for command in self._commands
+                if not command.label.startswith("Notes:") or self.feature_enabled("notes")]
 
     def hotkeys(self) -> list[tuple[str, str]]:
         """(label, accelerator) pairs for the settings Hotkeys page: the commands,
@@ -296,12 +358,20 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def show_notes(self) -> None:
         """Reveal and focus the Notes section below the file tree."""
+        if not self._require_feature("notes"):
+            return None
+        if not self._require_feature("explorer"):
+            return
         self._restore_terminal_fullscreen()
         if not self.explorer.get_visible():
             self._toggle(self.explorer)
         self.explorer.focus_notes()
 
     def new_note(self) -> None:
+        if not self._require_feature("notes"):
+            return None
+        if not self._require_feature("explorer"):
+            return
         self.show_notes()
         self.explorer.new_note_dialog()
 
@@ -310,6 +380,8 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def apply_note_command(self, command_id: str, tab=None):
         """Insert a note command's Markdown into a Markdown tab (default: the active one)."""
+        if not self._require_feature("notes"):
+            return None
         tab = tab or self._editor_tab(self.editor.current_path())
         if tab is None or tab.md_renderer is None:
             self.notify("Open a note or Markdown file to use note commands.")
@@ -325,7 +397,8 @@ class MainWindow(Gtk.ApplicationWindow):
         """Give every open note tab the insert toolbar above its editor (and only those)."""
         for tab in self.editor.tabs:
             toolbar = getattr(tab, "_note_toolbar", None)
-            wanted = not tab.deleted and notes.is_note(self.root, tab.path)
+            wanted = (self.feature_enabled("notes") and self._values["notes_toolbar"]
+                      and not tab.deleted and notes.is_note(self.root, tab.path))
             if wanted and toolbar is None:
                 toolbar = tab._note_toolbar = notes.NoteToolbar()
                 toolbar.connect("command", lambda _, command_id, tab=tab:
@@ -404,14 +477,15 @@ class MainWindow(Gtk.ApplicationWindow):
                 for view in panel.graph_views()]
 
     def _make_graph_view(self):
-        view = GraphView(self.root, settings=settings.get_graph())
+        view = GraphView(self.root, settings=self._values.get("graph", settings.get_graph()))
         view.connect('open-file', self._graph_open_file)
-        view.connect('settings-changed', lambda _view, values: settings.set_graph(values))
+        view.connect('settings-changed', self._graph_settings_changed)
         view.connect('page-action', self._graph_action)
         view.connect('error', self._graph_error)
         view.set_theme(self.theme.ui, self._values['accent'] or self.theme.ui['accent'])
         view.post('setSettings', {'reduceMotion': self._values['reduce_motion']})
         view.set_active_file(self.editor.current_path())
+        view.set_graph_type(self._values["graph_default_type"])
         # Include edits made before the graph was opened.
         for tab in self.editor.tabs:
             if tab.buffer.get_modified() and not tab.deleted and self._graph_indexed(tab.path):
@@ -448,16 +522,43 @@ class MainWindow(Gtk.ApplicationWindow):
         key = self.editor.current_view_key()
         return key[7:] if key in self._commit_views else None
 
+    def _configure_gitgraph(self, view) -> None:
+        values = self._values
+        view.set_orientation(values['gitgraph_orientation'])
+        view.set_max_commits(values['gitgraph_max_commits'])
+        view.set_options(values['gitgraph_show_remotes'], values['gitgraph_show_tags'],
+                         values['gitgraph_time_format'])
+
+    def _git_orientation_changed(self, _view, value) -> None:
+        settings.set_value('gitgraph_orientation', value)
+        self._setting_changed(None, 'gitgraph_orientation', value)
+        if self._settings_dialog is not None:
+            self._settings_dialog.set_values({'gitgraph_orientation': value})
+
+    def _graph_settings_changed(self, source, values) -> None:
+        self._values["graph"] = settings.normalize_graph(values)
+        if not settings.set_graph(values):
+            self._notify_unsaved_settings()
+        for view in self._graph_views():
+            if view is not source:
+                view.set_settings(values)
+        if self._settings_dialog is not None:
+            self._settings_dialog.set_values({'graph': values})
+
     def _make_gitgraph_view(self):
         view = GitGraphView(self.root)
         view.connect('open-commit', lambda source, rev: self.open_commit(rev, source))
         view.connect('error', self._git_error)
+        view.connect('orientation-changed', self._git_orientation_changed)
+        self._configure_gitgraph(view)
         self._theme_git_view(view)
         view.select(self._selected_commit())
         return view
 
     def open_gitgraph(self):
         """Reuse any Git graph, otherwise prefer the wide bottom dock."""
+        if not self._require_feature("gitgraph"):
+            return None
         self._restore_terminal_fullscreen()
         panels = (self.terminal_bottom, self.terminal_right)
         panel = next((p for p in panels if p.has_gitgraph()), None)
@@ -477,10 +578,14 @@ class MainWindow(Gtk.ApplicationWindow):
         return view
 
     def refresh_gitgraph(self):
+        if not self._require_feature("gitgraph"):
+            return None
         for view in self._gitgraph_views():
             view.refresh()
 
     def focus_git_head(self):
+        if not self._require_feature("gitgraph"):
+            return None
         view = self.open_gitgraph()
         if view is not None:
             view.focus_head()
@@ -611,19 +716,25 @@ class MainWindow(Gtk.ApplicationWindow):
             view.shutdown()
 
     def open_graph(self):
+        if not self._require_feature("graph"):
+            return None
         self._restore_terminal_fullscreen()
         panel = self.terminal_right
         panel.set_no_show_all(False)
         panel.show_all()
+        existing = panel.has_graph()
         panel.add_graph()
         if not panel.has_graph():
             return None
         view = panel.graph_views()[0]
-        view.show_global()
+        if existing:
+            view.show_global()
         view.grab_focus()
         return view
 
     def open_local_graph(self):
+        if not self._require_feature("graph"):
+            return None
         path = self.editor.current_path()
         if not path:
             self.notify('Open a file to show its local graph.')
@@ -634,10 +745,14 @@ class MainWindow(Gtk.ApplicationWindow):
         return view
 
     def rebuild_graph(self):
+        if not self._require_feature("graph"):
+            return None
         for view in self._graph_views():
             view.refresh_file(self.root)
 
     def reset_graph_camera(self):
+        if not self._require_feature("graph"):
+            return None
         for view in self._graph_views():
             if view.last_data is not None:
                 # The page recentres a full replacement; clear first to reset positions.
@@ -657,6 +772,8 @@ class MainWindow(Gtk.ApplicationWindow):
     def _graph_action(self, view, message):
         kind = message['type']
         if kind == 'search' and isinstance(message.get('query'), str):
+            if not self._require_feature('explorer'):
+                return
             self.search_in_files()
             self.explorer.focus_search(message['query'])
         elif kind == 'create':
@@ -681,6 +798,8 @@ class MainWindow(Gtk.ApplicationWindow):
             if action == 'copy-path':
                 Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).set_text(path, -1)
             elif action == 'reveal':
+                if not self._require_feature('explorer'):
+                    return
                 self._restore_terminal_fullscreen()
                 if not self.explorer.get_visible():
                     self._toggle(self.explorer)
@@ -798,7 +917,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self._apply_setting(key)
         if key == "terminal_autostart":
             self.notify("The start-up terminal setting applies from the next start.")
-        if settings.get_value(key) != value:
+        if (settings.get_graph() if key == "graph" else settings.get_value(key)) != value:
             self._notify_unsaved_settings()
 
     def _apply_setting(self, key: str) -> None:
@@ -835,6 +954,41 @@ class MainWindow(Gtk.ApplicationWindow):
             self.editor.set_slash_commands(value)
         elif key == "md_readable_width":
             self.editor.set_md_readable_width(value)
+        elif key.startswith("feature_"):
+            self._sync_features(key.removeprefix("feature_"))
+        elif key == "graph":
+            for view in self._graph_views():
+                view.set_settings(value)
+        elif key.startswith("gitgraph_"):
+            for view in self._gitgraph_views():
+                self._configure_gitgraph(view)
+        elif key in ("explorer_git_colors", "explorer_folders_first", "explorer_compact"):
+            {"explorer_git_colors": self.explorer.set_git_colors,
+             "explorer_folders_first": self.explorer.set_folders_first,
+             "explorer_compact": self.explorer.set_compact}[key](value)
+        elif key == "notes_sort":
+            self.explorer.set_notes_sort(value)
+        elif key == "notes_open_after_create":
+            self.explorer.open_after_create = value
+        elif key == "notes_toolbar":
+            self._sync_note_toolbars()
+        elif key == "terminal_max_panes":
+            for panel in terminals:
+                panel.set_max_panes(value)
+        elif key == "terminal_shell":
+            shell = value
+            if shell and not (os.path.isfile(shell) and os.access(shell, os.X_OK)):
+                # A notice needs the overlay, constructed after start-up options.
+                GLib.idle_add(self._invalid_shell, shell)
+                shell = ""
+            for panel in terminals:
+                panel.set_shell(shell)
+        elif key == "terminal_copy_on_select":
+            for panel in terminals:
+                panel.set_copy_on_select(value)
+        elif key == "terminal_bell":
+            for panel in terminals:
+                panel.set_bell(value)
         elif key == "show_hidden":
             self.explorer.set_show_hidden(value)
         elif key == "confirm_delete":
@@ -851,6 +1005,11 @@ class MainWindow(Gtk.ApplicationWindow):
             for panel in terminals:
                 panel.set_scrollback(value)
         # terminal_autostart is read once, when the window is built.
+
+    def _invalid_shell(self, shell: str) -> bool:
+        if not self._git_closed:
+            self.notify(f"Shell {shell} is not executable; using the default shell.")
+        return GLib.SOURCE_REMOVE
 
     def _apply_style(self, theme: Theme | None = None) -> None:
         style.apply_theme(self.theme if theme is None else theme, accent=self._values["accent"],
@@ -937,6 +1096,8 @@ class MainWindow(Gtk.ApplicationWindow):
             widget.hide()
 
     def toggle_terminal_fullscreen(self) -> None:
+        if not self._require_feature("terminal"):
+            return
         if self._fullscreen_panel is not None:
             self._restore_terminal_fullscreen()
             return
@@ -949,7 +1110,8 @@ class MainWindow(Gtk.ApplicationWindow):
         if panel is None:
             panel = self.terminal_bottom
             self._show_terminal(panel)
-        panel.toggle_maximize()
+        if panel.pane_count():
+            panel.toggle_maximize()
 
     def _hide_terminal(self, panel: TerminalPanel) -> None:
         self._restore_terminal_fullscreen()
@@ -960,10 +1122,16 @@ class MainWindow(Gtk.ApplicationWindow):
         panel.set_no_show_all(False)
         panel.show_all()
         if panel.pane_count() == 0:
-            panel.new_terminal()
+            kind = next((kind for kind in ("terminal", "graph", "gitgraph")
+                         if self.feature_enabled(kind)), None)
+            if kind is None:
+                self._hide_terminal(panel)
+                self.notify("All dock features are turned off in Settings.")
+                return
+            self._add_dock_pane(panel, kind)
         panel.focus_terminal()
 
-    def _toggle_terminal(self, panel: TerminalPanel) -> None:
+    def _toggle_dock(self, panel: TerminalPanel) -> None:
         self._restore_terminal_fullscreen()
         if panel.get_visible():
             self._hide_terminal(panel)
@@ -971,10 +1139,14 @@ class MainWindow(Gtk.ApplicationWindow):
             self._show_terminal(panel)
 
     def toggle_terminal_bottom(self) -> None:
-        self._toggle_terminal(self.terminal_bottom)
+        if not self._require_feature("terminal"):
+            return None
+        self._toggle_dock(self.terminal_bottom)
 
     def toggle_terminal_right(self) -> None:
-        self._toggle_terminal(self.terminal_right)
+        if not self._require_feature("terminal"):
+            return None
+        self._toggle_dock(self.terminal_right)
 
     def toggle_right_dock(self) -> None:
         """The titlebar toggle: an empty right dock opens with a graph view pane."""
@@ -982,10 +1154,14 @@ class MainWindow(Gtk.ApplicationWindow):
         panel = self.terminal_right
         if panel.get_visible():
             self._hide_terminal(panel)
-        elif panel.pane_count() or self.open_graph() is None:
+        elif panel.pane_count() or not self.feature_enabled("graph"):
             self._show_terminal(panel)
+        else:
+            self.open_graph()
 
     def split_terminal(self) -> None:
+        if not self._require_feature("terminal"):
+            return None
         focus = self.get_focus()
         panel = (self.terminal_right if focus is not None
                  and focus.is_ancestor(self.terminal_right) else self.terminal_bottom)
@@ -1006,11 +1182,16 @@ class MainWindow(Gtk.ApplicationWindow):
             widget.hide()
 
     def toggle_explorer(self) -> None:
+        if not self._require_feature("explorer"):
+            return None
         self._restore_terminal_fullscreen()
         self._toggle(self.explorer)
+        self._explorer_was_visible = self.explorer.get_visible()
 
     def search_in_files(self) -> None:
         """Show the explorer and focus its search box, seeded from a one-line selection."""
+        if not self._require_feature("explorer"):
+            return None
         self._restore_terminal_fullscreen()
         if not self.explorer.get_visible():
             self._toggle(self.explorer)

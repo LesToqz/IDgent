@@ -203,7 +203,7 @@ class AddButton(_IconButton):
         "choose": (GObject.SignalFlags.RUN_LAST, None, (str,)),
     }
 
-    def __init__(self, limit: int = 3):
+    def __init__(self, limit: int = 6):
         super().__init__("list-add-symbolic", "+", "New pane")
         self._limit = limit
         self.get_style_context().add_class("idgent-terminal-add")
@@ -224,9 +224,23 @@ class AddButton(_IconButton):
             "vcs-branch-symbolic", "git-symbolic", "view-list-tree-symbolic",
             "network-workgroup-symbolic") if theme is not None and theme.has_icon(name)),
             self.graph_icon)
+        self.set_kinds(("terminal", "graph", "gitgraph"))
+        self.popover.add(self.choices)
+        self.choices.connect("row-activated", lambda _box, row: self.choose(row.kind))
+        self.popover.connect("key-press-event", self._chooser_key)
+        self.connect("clicked", self._open)
+        self.connect("destroy", lambda _b: self.popover.destroy())
+
+    def set_kinds(self, kinds) -> None:
+        self._kinds = tuple(kinds)
+        self.popover.popdown()
+        for row in self.choices.get_children():
+            row.destroy()
         for kind, label, icon in (("terminal", "Terminal", "utilities-terminal-symbolic"),
                                    ("graph", "Graph view", self.graph_icon),
                                    ("gitgraph", "Git graph", self.gitgraph_icon)):
+            if kind not in self._kinds:
+                continue
             row = Gtk.ListBoxRow()
             row.kind = kind
             box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
@@ -234,13 +248,14 @@ class AddButton(_IconButton):
             box.pack_start(Gtk.Label(label=label, xalign=0), True, True, 0)
             row.add(box)
             self.choices.add(row)
-        self.popover.add(self.choices)
-        self.choices.connect("row-activated", lambda _box, row: self.choose(row.kind))
-        self.popover.connect("key-press-event", self._chooser_key)
-        self.connect("clicked", self._open)
-        self.connect("destroy", lambda _b: self.popover.destroy())
+        self.set_sensitive(bool(self._kinds))
+
+    def set_limit(self, limit: int) -> None:
+        self._limit = limit
 
     def _open(self, _button=None) -> None:
+        if not self._kinds:
+            return
         self.popover.set_transitions_enabled(motion.animations_enabled())
         self.popover.show_all()
         row = self.choices.get_row_at_index(0)
@@ -249,7 +264,7 @@ class AddButton(_IconButton):
         row.grab_focus()
 
     def choose(self, kind: str) -> None:
-        if kind not in ("terminal", "graph", "gitgraph"):
+        if kind not in self._kinds:
             return
         self.popover.popdown()
         self.emit("choose", kind)
@@ -258,6 +273,8 @@ class AddButton(_IconButton):
         key = event.keyval
         rows = self.choices.get_children()
         selected = self.choices.get_selected_row()
+        if not rows:
+            return False
         index = selected.get_index() if selected is not None else 0
         if key == Gdk.KEY_Escape:
             self.popover.popdown()
@@ -297,7 +314,7 @@ class LimitToast(Gtk.Label):
     # Rises this far into place; margins cannot go negative, so no slide from the right.
     SLIDE_PX = 8
 
-    def __init__(self, limit: int = 3):
+    def __init__(self, limit: int = 6):
         super().__init__(label=f"Cannot add (limit {limit})")
         self._timer: int | None = None
         self._destroyed = False
