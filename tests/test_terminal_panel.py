@@ -575,6 +575,7 @@ class GraphPaneTest(unittest.TestCase):
         self.addCleanup(self.window.destroy)
 
     def test_graph_lifecycle_numbering_focus_and_terminal_settings(self):
+        self.panel.set_max_panes(3)
         self.assertTrue(self.panel.new_terminal())
         terminal1 = self.panel._panes[0]
         graph = Gtk.Entry()

@@ -110,6 +110,24 @@ class GraphViewTest(unittest.TestCase):
         self.addCleanup(self.window.destroy)
         self.errors = []
 
+    def test_stored_default_type_and_dialog_options(self):
+        preferences = graphview.preferences
+        preferences.set_value('graph_default_type', 'note')
+        view = self.make_view()
+        self.ready()
+        self.assertEqual(view.graph_type, 'note')
+        view.set_graph_type('local')
+        preferences.set_value('graph_default_type', 'global')
+        self.assertEqual(view.graph_type, 'local')
+        graph = preferences.normalize_graph({'showTags': False, 'search': 'example'})
+        view.set_settings(graph)
+        self.assertEqual(view._settings, graph)
+        self.assertIsNotNone(view._options_timer)
+        self.assertTrue(poll(lambda: view._options_timer is None))
+        view.shutdown()
+        view.set_settings(graph)
+        self.assertIsNone(view._options_timer)
+
     def make_view(self, **kwargs):
         self.view = GraphView(self.root.name, **{'page': FAKE_PAGE, **kwargs})
         self.view.connect('error', lambda _v, message: self.errors.append(message))

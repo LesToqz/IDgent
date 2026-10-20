@@ -19,6 +19,8 @@ from idgent import motion, notes, settings, style
 from idgent.palette import CommandPalette, QuickSwitcher
 from idgent.themes import THEMES, get_theme
 from idgent.window import MainWindow
+from tests.test_graphview import poll, web_processes
+from tests.test_terminal_panel import alive
 
 CTRL = Gdk.ModifierType.CONTROL_MASK
 SHIFT = Gdk.ModifierType.SHIFT_MASK
@@ -288,17 +290,23 @@ class WindowWiringTest(unittest.TestCase):
             for panel in terminals:
                 self.assertEqual(panel._cursor_shape, value)
                 for pane in panel._panes:
+                    if pane.terminal is None:
+                        continue
                     self.assertEqual(pane.terminal.get_cursor_shape(), VTE_SHAPES[value])
         elif key == 'terminal_blink':
             for panel in terminals:
                 self.assertEqual(panel._cursor_blink, value)
                 for pane in panel._panes:
+                    if pane.terminal is None:
+                        continue
                     self.assertEqual(pane.terminal.get_cursor_blink_mode(),
                                      Vte.CursorBlinkMode.ON if value else Vte.CursorBlinkMode.OFF)
         elif key == 'terminal_scrollback':
             for panel in terminals:
                 self.assertEqual(panel._scrollback, value)
                 for pane in panel._panes:
+                    if pane.terminal is None:
+                        continue
                     self.assertEqual(pane.terminal.get_scrollback_lines(), value)
         elif key == 'reduce_motion':
             self.assertEqual(motion.animations_enabled(), False if value else self.animations)
@@ -377,6 +385,9 @@ class WindowWiringTest(unittest.TestCase):
         window = self.window()
         self.open_file(window)
         window.toggle_terminal_right()
+        for panel in (window.terminal_bottom, window.terminal_right):
+            panel.add_graph()
+            panel.add_gitgraph()
         spin()
         self.assertTrue(window.terminal_right._panes)
         window.open_settings()
@@ -402,6 +413,181 @@ class WindowWiringTest(unittest.TestCase):
         spin()
         self.assert_live(window, 'terminal_cursor', 'underline')
         self.assert_live(window, 'terminal_scrollback', 5000)
+
+    def test_feature_panes_close_processes_and_restore_in_both_docks(self):
+        window = self.window()
+        window.toggle_terminal_right()
+        window.open_settings()
+        dialog = window._settings_dialog
+        dialog.hide()
+        for kind in ('terminal', 'graph', 'gitgraph'):
+            with self.subTest(feature=kind):
+                if kind != 'terminal':
+                    for panel in (window.terminal_bottom, window.terminal_right):
+                        window._add_dock_pane(panel, kind)
+                        panel.show_all()
+                    self.assertTrue(poll(lambda: len(web_processes()) >= 2, 8))
+                panes = [p for panel in (window.terminal_bottom, window.terminal_right)
+                         for p in panel._panes if p.kind == kind]
+                if kind == 'terminal':
+                    self.assertTrue(poll(lambda: all(p.pid for p in panes)))
+                processes = {p.pid for p in panes if p.pid}
+                web_before = web_processes()
+                dialog._changed('feature_' + kind, False)
+                for panel in (window.terminal_bottom, window.terminal_right):
+                    self.assertNotIn(kind, panel.add_button._kinds)
+                    self.assertFalse(any(p.kind == kind for p in panel._panes + panel._closing))
+                self.assertTrue(poll(lambda: all(not alive(pid) for pid in processes)))
+                for pane in panes:
+                    self.assertTrue(pane.closed)
+                    if pane.view is not None:
+                        self.assertTrue(pane.view._closed)
+                        self.assertIsNone(pane.view.webview)
+                        self.assertFalse(pane.view._sources)
+                if kind != 'terminal':
+                    self.assertTrue(poll(lambda: not (web_processes() & web_before), 8))
+                print('FEATURE PROCESSES', kind, 'closed shells', len(processes),
+                      'web before/after', len(web_before), len(web_processes()), flush=True)
+                label, accel = {
+                    'terminal': ('View: Split Terminal', '<Control>grave'),
+                    'graph': ('Graph view: Open graph view', '<Control><Alt>g'),
+                    'gitgraph': ('Git graph: Open git graph', '<Control><Alt>h')}[kind]
+                commands = {c.label: c for c in window.commands()}
+                commands[label].callback()
+                Gtk.accel_groups_activate(window, *Gtk.accelerator_parse(accel))
+                self.assertIn('turned off in Settings', window.overlay.notices[-1].text)
+                self.assertEqual(settings.get_value('feature_' + kind), False)
+                dialog._changed('feature_' + kind, True)
+                for panel in (window.terminal_bottom, window.terminal_right):
+                    self.assertIn(kind, panel.add_button._kinds)
+                    self.assertEqual(sum(p.kind == kind for p in panel._panes), 1)
+                    # End each scenario with empty web views, so process counts isolate a feature.
+                    if kind != 'terminal':
+                        panel.close_kind(kind)
+                if kind != 'terminal':
+                    self.assertTrue(poll(lambda: not web_processes(), 8))
+
+    def test_explorer_notes_toolbar_and_all_dock_toggles_follow_features(self):
+        window = self.window()
+        folder = self.root / '.IDgent' / 'Notes'
+        folder.mkdir(parents=True)
+        (folder / 'Example.md').write_text('# Example\n')
+        self.open_file(window, '.IDgent/Notes/Example.md')
+        tab = window.editor._current()
+        window.open_settings()
+        dialog = window._settings_dialog
+        dialog.hide()
+        for key in ('notes_toolbar', 'feature_notes'):
+            dialog._changed(key, False)
+            self.assertIsNone(tab._note_toolbar)
+            self.assertEqual(tab.source_scroll.get_margin_top(), 0)
+            if key == 'feature_notes':
+                self.assertFalse(window.explorer.notes_button.get_visible())
+                self.assertFalse(any(c.label.startswith('Notes:') for c in window.commands()))
+                with patch.object(window, 'notify') as notice:
+                    window.new_note()
+                    window.apply_note_command('bold')
+                    self.assertEqual(notice.call_count, 2)
+            dialog._changed(key, True)
+            self.assertIsNotNone(tab._note_toolbar)
+        dialog._changed('feature_explorer', False)
+        window.show_all()
+        self.assertFalse(window.explorer.get_visible())
+        self.assertFalse(window.titlebar.explorer_button.get_visible())
+        for action in (window.toggle_explorer, window.search_in_files, window.show_notes):
+            with patch.object(window, 'notify') as notice:
+                action()
+                notice.assert_called_once()
+            self.assertFalse(window.explorer.get_visible())
+        dialog._changed('feature_explorer', True)
+        self.assertTrue(window.explorer.get_visible())
+        self.assertTrue(window.titlebar.explorer_button.get_visible())
+        dialog._changed('feature_graph', False)
+        window.titlebar.dock_button.clicked()
+        self.assertEqual(window.terminal_right.terminal_count(), 1)
+        self.assertFalse(window.terminal_right.has_graph())
+        window.titlebar.dock_button.clicked()
+        for kind in ('terminal', 'graph', 'gitgraph'):
+            dialog._changed('feature_' + kind, False)
+        window.show_all()
+        self.assertFalse(window.titlebar.dock_button.get_visible())
+        self.assertFalse(window.titlebar.bottom_dock_button.get_visible())
+        dialog._changed('feature_gitgraph', True)
+        self.assertTrue(window.titlebar.dock_button.get_visible())
+        window.titlebar.dock_button.clicked()
+        self.assertTrue(window.terminal_right.has_gitgraph())
+        self.assertEqual(window.terminal_right.terminal_count(), 0)
+        window.titlebar.bottom_dock_button.clicked()
+        self.assertTrue(window.terminal_bottom.has_gitgraph())
+
+    def test_graph_settings_and_defaults_apply_to_open_and_new_panes(self):
+        window = self.window()
+        self.open_file(window, 'notes.md')
+        window.open_settings()
+        dialog = window._settings_dialog
+        dialog.hide()
+        dialog._changed('graph_default_type', 'note')
+        view = window.open_graph()
+        self.assertEqual(view.graph_type, 'note')
+        view.set_graph_type('local')
+        dialog._changed('graph_default_type', 'global')
+        self.assertEqual(view.graph_type, 'local')
+        window.terminal_bottom.add_graph()
+        other = window.terminal_bottom.graph_views()[0]
+        self.assertEqual(other.graph_type, 'global')
+        dialog._graph_changed('showTags', False)
+        graph = settings.get_graph()
+        for pane in (view, other):
+            self.assertEqual(pane._settings, graph)
+        view.emit('settings-changed', {**graph, 'showTags': True})
+        self.assertTrue(other._settings['showTags'])
+        self.assertTrue(dialog.values['graph']['showTags'])
+        # Settings survive a fresh window, including its new graph pane.
+        replacement = self.window()
+        fresh = replacement.open_graph()
+        self.assertEqual(fresh._settings, settings.get_graph())
+        self.assertEqual(fresh.graph_type, 'global')
+
+    def test_terminal_limit_shell_copy_and_bell_live_and_round_trip(self):
+        window = self.window()
+        panel = window.terminal_bottom
+        self.assertEqual(panel.max_panes, 6)
+        while not panel.is_full():
+            self.assertTrue(panel.new_terminal())
+        window.open_settings()
+        dialog = window._settings_dialog
+        dialog.hide()
+        for count in (2, 8):
+            dialog._changed('terminal_max_panes', count)
+            self.assertEqual(panel.pane_count(), 6)
+            self.assertEqual(panel.is_full(), count == 2)
+            if count == 2:
+                self.assertFalse(panel.new_terminal())
+                self.assertEqual(panel.toast.get_text(), 'Cannot add (limit 2)')
+                self.assertEqual(panel.add_button.get_tooltip_text(), 'Cannot add (limit 2)')
+            else:
+                self.assertTrue(panel.new_terminal())
+        original = panel._panes[0]
+        dialog._changed('terminal_shell', '/bin/sh')
+        dialog._changed('terminal_copy_on_select', True)
+        dialog._changed('terminal_bell', True)
+        self.assertTrue(panel.new_terminal())
+        self.assertEqual(panel._active.header.shell_name, 'sh')
+        for pane in panel._panes:
+            self.assertTrue(pane.terminal.get_audible_bell())
+        with patch.object(original.terminal, 'get_has_selection', return_value=True), \
+             patch.object(original.terminal, 'copy_clipboard_format') as copy:
+            original.terminal.emit('selection-changed')
+            copy.assert_called_once_with(Vte.Format.TEXT)
+        replacement = self.window()
+        self.assertEqual(replacement.terminal_bottom.max_panes, 8)
+        self.assertEqual(replacement.terminal_bottom._active.header.shell_name, 'sh')
+        self.assertTrue(replacement.terminal_bottom._bell)
+        self.assertTrue(replacement.terminal_bottom._copy_on_select)
+        dialog._changed('terminal_shell', '/missing/idgent-shell')
+        spin(.05)
+        self.assertEqual(panel._shell, '')
+        self.assertIn('using the default shell', window.overlay.notices[-1].text)
 
     def test_live_markdown_setting_dispatch(self):
         window = self.window()

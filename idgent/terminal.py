@@ -103,7 +103,7 @@ class TerminalPanel(Gtk.Box):
     def __init__(self, cwd: str, autostart: bool = True, stacked: bool = False,
                  font_size: int = 11):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
-        self.max_panes = settings.get_value("terminal_max_panes")
+        self.max_panes = settings.get_value("terminal_max_panes") or DEFAULT_MAX_PANES
         self._pane_kinds = ("terminal", "graph", "gitgraph")
         self._shell = ""
         self._copy_on_select = False

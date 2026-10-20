@@ -82,7 +82,7 @@ class GraphView(Gtk.Box):
         self._settings = preferences.normalize_graph(raw_settings)
         self._index = index if index is not None else GraphIndex(self.root)
         self._local_path = None
-        self._graph_type = 'global'
+        self._graph_type = preferences.get_value('graph_default_type')
         self._active_id = None
         self._options_timer = None
         self._lock = threading.Lock()
@@ -137,6 +137,7 @@ class GraphView(Gtk.Box):
         theme = get_theme(preferences.get_theme_id())
         self.set_theme(theme.ui, preferences.get_value('accent') or theme.ui['accent'])
         self.post('setSettings', self._settings)
+        self._post_graph_type()
         self.post('pause')
         self.webview.show()
         page_path = Path(__file__).parent / 'graph_web' / 'graph.html'
@@ -274,6 +275,8 @@ class GraphView(Gtk.Box):
 
     def set_settings(self, values: dict) -> None:
         """Apply the dialog's graph controls using the page controls' rebuild path."""
+        if self._closed:
+            return
         self._settings = preferences.normalize_graph(values)
         self.post('setSettings', self._settings)
         if self._options_timer is not None:

@@ -102,6 +102,64 @@ class WindowGitTests(unittest.TestCase):
     def send(self, page, message):
         page.js('webkit.messageHandlers.idgent.postMessage(' + json.dumps(message) + '); true')
 
+    def test_settings_orientation_icons_options_and_startup_round_trip(self):
+        w = self.window
+        view, page = self.graph()
+        w.open_settings()
+        dialog = w._settings_dialog
+        dialog.hide()
+        values = dict(gitgraph_orientation='vertical', gitgraph_max_commits=100,
+                      gitgraph_show_remotes=False, gitgraph_show_tags=False,
+                      gitgraph_time_format='absolute')
+        for key, value in values.items():
+            dialog._changed(key, value)
+            self.assertEqual(settings.get_value(key), value)
+        self.assertEqual(view.orientation, 'vertical')
+        self.assertEqual(view._max_commits, 100)
+        self.assertEqual(view._options, dict(showRemotes=False, showTags=False, timeFormat='absolute'))
+        page.wait_for("IDGit.stats().orientation === 'vertical'")
+        w.terminal_right.add_gitgraph()
+        w.terminal_right.show_all()
+        other = w.terminal_right.gitgraph_views()[0]
+        self.assertEqual(other.orientation, 'vertical')
+        self.assertEqual(other._options, view._options)
+        page.js("document.getElementById('b-horizontal').click(); true")
+        self.assertTrue(poll(lambda: settings.get_value('gitgraph_orientation') == 'horizontal'))
+        self.assertEqual(other.orientation, 'horizontal')
+        self.assertEqual(dialog.values['gitgraph_orientation'], 'horizontal')
+        w.destroy()
+        dialog.destroy()
+        self.window = MainWindow(self.app, str(self.root))
+        self.window.show_all()
+        fresh, _ = self.graph()
+        self.assertEqual(fresh.orientation, 'horizontal')
+        self.assertEqual(fresh._max_commits, 100)
+        self.assertEqual(fresh._options, dict(showRemotes=False, showTags=False, timeFormat='absolute'))
+
+    def test_disabling_gitgraph_preserves_open_commit_tabs(self):
+        w = self.window
+        view, _ = self.graph()
+        rev = self.repo.git('rev-parse', 'HEAD')
+        commit, page = self.commit(rev)
+        w.open_settings()
+        dialog = w._settings_dialog
+        dialog.hide()
+        dialog._changed('feature_gitgraph', False)
+        self.assertTrue(view._closed)
+        self.assertIsNone(view.webview)
+        self.assertFalse(commit._closed)
+        self.assertIn(commit, w._commit_views.values())
+        with patch.object(w, "notify") as notice:
+            self.command("Git graph: Close commit tabs").callback()
+            notice.assert_called_once()
+        self.assertIn(commit, w._commit_views.values())
+        page.wait_for("window.IDCommit && document.querySelector('.commit-header')")
+        self.assertTrue(poll(lambda: len(web_processes()) == 1))
+        dialog._changed('feature_gitgraph', True)
+        restored, _ = self.graph(w.terminal_bottom.gitgraph_views()[0])
+        self.assertIsNot(restored, view)
+        self.assertFalse(commit._closed)
+
     def test_menu_palette_accelerator_and_bottom_reuse(self):
         w = self.window
         entry = self.menu('Git graph')
@@ -179,8 +237,8 @@ class WindowGitTests(unittest.TestCase):
             self.assertEqual(panel.pane_count(), 1)
             panel.toggle_maximize(panel._panes[0])
             panel.restore()
-            w._toggle_terminal(panel)
-            w._toggle_terminal(panel)
+            w._toggle_dock(panel)
+            w._toggle_dock(panel)
             self.assertTrue(panel.get_visible())
             self.assertEqual(panel.terminal_count(), 0)
             self.assertFalse(view._closed)
