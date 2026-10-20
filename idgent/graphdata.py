@@ -488,3 +488,15 @@ class GraphIndex:
         result = self._finish({key: nodes[key] for key in seen}, [e for e in graph.links if e.source in seen and e.target in seen], graph.truncated, graph.stats['ambiguous'])
         result.stats['focus'] = focus
         return result
+
+    def folder(self, prefix, options=None):
+        """Only the files below ``prefix`` and the links between them."""
+        graph = self.build(options)
+        prefix = prefix.strip('/') + '/'
+        nodes = {n.id: n for n in graph.nodes
+                 if n.id.startswith(prefix) and n.kind not in ('tag', 'unresolved')}
+        links = [e for e in graph.links if e.source in nodes and e.target in nodes]
+        return self._finish(nodes, links, graph.truncated, graph.stats['ambiguous'])
+
+    def empty(self):
+        return self._finish({}, [])

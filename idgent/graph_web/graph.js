@@ -190,7 +190,7 @@
 
   function updateStatus(g) {
     if (!hasData) { statusEl.textContent = 'Mapping this project…'; statusEl.classList.remove('is-hidden'); return; }
-    if (N === 0) { statusEl.textContent = 'No files match this view'; statusEl.classList.remove('is-hidden'); }
+    if (N === 0) { statusEl.textContent = typeState.message || (typeState.type === 'note' ? 'No notes in the notes folder' : 'No files match this view'); statusEl.classList.remove('is-hidden'); }
     else statusEl.classList.add('is-hidden');
     const truncated = g && g.truncated;
     noticeEl.hidden = !truncated;
@@ -827,6 +827,7 @@
     wand: '<path d="m21.64 3.64-1.28-1.28a1.21 1.21 0 0 0-1.72 0L2.36 18.64a1.21 1.21 0 0 0 0 1.72l1.28 1.28a1.2 1.2 0 0 0 1.72 0L21.64 5.36a1.2 1.2 0 0 0 0-1.72"/><path d="m14 7 3 3"/><path d="M5 6v4"/><path d="M19 14v4"/><path d="M10 2v2"/><path d="M7 8H3"/><path d="M21 16h-4"/><path d="M11 3H9"/>',
     x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
     reset: '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>',
+    type: '<circle cx="6" cy="6" r="3"/><circle cx="18" cy="7" r="3"/><circle cx="12" cy="18" r="3"/><path d="m8.2 8.2 2.6 7.2"/><path d="m15.6 9.6-2.5 5.9"/>',
     chev: '<path d="m6 9 6 6 6-6"/>',
   };
   function el(tag, cls, attrs) {
@@ -902,11 +903,13 @@
     controlsEl.textContent = '';
     const chip = el('div', 'gc-chip');
     chip.appendChild(iconBtn('settings', 'Adjust project graph', () => setPanelOpen(true, true)));
+    chip.appendChild(typeButton());
     wandBtn = iconBtn('wand', 'Replay project history', () => startTimelapse());
     chip.appendChild(wandBtn);
     controlsEl.appendChild(chip);
     const panel = el('div', 'gc-panel');
     const head = el('div', 'gc-head');
+    head.appendChild(typeButton());
     head.appendChild(iconBtn('reset', 'Reset graph preferences', restoreDefaults));
     head.appendChild(iconBtn('x', 'Hide graph controls', () => setPanelOpen(false, true)));
     panel.appendChild(head);
@@ -1061,11 +1064,71 @@
     if (at >= 0 && again[at]) { again[at].focus(); try { again[at].setSelectionRange(caret, caret); } catch (e) { /* ignore */ } }
   }
   let panelTimer = 0;
+  // ------------------------------------------------------------ graph type selector
+  const TYPES = [
+    ['global', 'Global graph', 'Every file in the project'],
+    ['local', 'Local graph', 'The active file and its neighbours'],
+    ['note', 'Note graph', 'Only the files in the notes folder'],
+  ];
+  const typeEl = $('typemenu');
+  const typeState = { type: 'global', message: null, buttons: [] };
+  function typeButton() {
+    const b = iconBtn('type', 'Select graph type', () => toggleTypeMenu(b));
+    b.setAttribute('aria-haspopup', 'menu');
+    typeState.buttons.push(b);
+    return b;
+  }
+  function closeTypeMenu() {
+    if (typeEl.hidden) return;
+    typeEl.hidden = true;
+    typeState.buttons.forEach((b) => b.setAttribute('aria-expanded', 'false'));
+  }
+  function chooseType(t) {
+    closeTypeMenu();
+    if (t !== typeState.type) { setGraphTypeState(t, null); post({ type: 'graphType', value: t }); }
+  }
+  function toggleTypeMenu(btn) {
+    if (!typeEl.hidden) { closeTypeMenu(); return; }
+    closeMenu(); closePopup();
+    typeEl.textContent = '';
+    TYPES.forEach(([id, label, tip]) => {
+      const it = el('div', 'item', { role: 'menuitemradio', tabindex: '-1', 'aria-checked': String(id === typeState.type), 'data-type': id, title: tip });
+      it.appendChild(el('span', 'mark')); it.appendChild(el('span', '', { text: label }));
+      it.addEventListener('click', safe((e) => { e.stopPropagation(); chooseType(id); }));
+      typeEl.appendChild(it);
+    });
+    typeEl.hidden = false;
+    typeState.buttons.forEach((b) => b.setAttribute('aria-expanded', String(b === btn)));
+    const r = btn.getBoundingClientRect(), mw = typeEl.offsetWidth;
+    typeEl.style.left = Math.max(4, Math.min(r.right - mw, W - mw - 4)) + 'px';
+    typeEl.style.top = (r.bottom + 4) + 'px';
+    const cur = typeEl.querySelector('[aria-checked="true"]'); if (cur) cur.focus({ preventScroll: true });
+  }
+  typeEl.addEventListener('keydown', safe((e) => {
+    const items = Array.from(typeEl.children), i = items.indexOf(document.activeElement);
+    if (e.key === 'ArrowDown') { e.preventDefault(); items[(i + 1) % items.length].focus(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); items[(i - 1 + items.length) % items.length].focus(); }
+    else if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); if (i >= 0) items[i].click(); }
+    else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeTypeMenu(); canvas.focus(); }
+  }));
+  document.addEventListener('pointerdown', (e) => { if (!typeEl.hidden && !typeEl.contains(e.target) && !e.target.closest('[aria-haspopup]')) closeTypeMenu(); }, true);
+  function setGraphTypeState(type, message) {
+    typeState.type = type; typeState.message = message || null;
+    typeState.buttons.forEach((b) => b.classList.toggle('is-active', type !== 'global'));
+    if (hasData) updateStatus(rawData);
+  }
+  IDGraph.setGraphType = safe((o) => {
+    o = o || {};
+    if (!TYPES.some((t) => t[0] === o.type)) return;
+    setGraphTypeState(o.type, typeof o.message === 'string' ? o.message : null);
+    closeTypeMenu();
+  });
+
   function setPanelOpen(open, user) {
     const isOpen = !controlsEl.classList.contains('is-close') && !controlsEl.classList.contains('is-closing');
     if (open === isOpen) return;
     clearTimeout(panelTimer);
-    closePopup(); hideTip();
+    closePopup(); hideTip(); closeTypeMenu();
     settings.close = !open;
     if (user) emitSettings({ close: !open });
     if (open) {
@@ -1241,6 +1304,8 @@
     local: () => Object.assign({}, local),
     flush: () => { flushSettings(); if (optionsTimer) { clearTimeout(optionsTimer); post({ type: 'options', options: currentOptions() }); optionsTimer = 0; } },
     menuOpen: () => !menuEl.hidden,
+    typeMenuOpen: () => !typeEl.hidden,
+    graphType: () => ({ type: typeState.type, message: typeState.message }),
     panelOpen: () => !controlsEl.classList.contains('is-close'),
     timelapse: () => !!timelapseState,
     weight: (id) => { const i = nodeIndex(String(id)); return i < 0 ? null : weight[i]; },

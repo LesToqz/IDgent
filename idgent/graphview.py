@@ -12,9 +12,12 @@ gi.require_version('Gtk', '3.0')
 gi.require_version('Gdk', '3.0')
 from gi.repository import Gdk, Gio, GLib, GObject, Gtk
 
+from idgent import notes
 from idgent import settings as preferences
 from idgent.graphdata import GraphIndex, GraphOptions
 from idgent.themes import _legible, _luminance, _mix_color, get_theme
+
+GRAPH_TYPES = ('global', 'local', 'note')
 
 
 # Importing the dock must work on installations without WebKit's typelib.
@@ -45,12 +48,12 @@ window.IDGraph = {
  setData(g) { document.getElementById('stats').textContent =
    g.nodes.length + ' nodes / ' + g.links.length + ' links' + (g.truncated ? ' (truncated)' : ''); },
  setTheme(c) { document.body.style.background=c.background; document.body.style.color=c.text; },
- setSettings(s) {}, setActive(id) {}, focus(id) {}, pause() {}, resume() {}, setLocal(o) {}
+ setSettings(s) {}, setActive(id) {}, focus(id) {}, pause() {}, resume() {}, setLocal(o) {}, setGraphType(o) {}
 };
 window.webkit.messageHandlers.idgent.postMessage({type:'ready'});
 </script>'''
 _COMMANDS = frozenset(('setData', 'setTheme', 'setSettings', 'setActive', 'focus',
-                       'pause', 'resume', 'setLocal'))
+                       'pause', 'resume', 'setLocal', 'setGraphType'))
 _NO_PAYLOAD = object()
 
 
@@ -79,6 +82,7 @@ class GraphView(Gtk.Box):
         self._settings = preferences.normalize_graph(raw_settings)
         self._index = index if index is not None else GraphIndex(self.root)
         self._local_path = None
+        self._graph_type = 'global'
         self._active_id = None
         self._options_timer = None
         self._lock = threading.Lock()
@@ -247,12 +251,19 @@ class GraphView(Gtk.Box):
                             'localOutgoing': local.get('outgoing', self._settings['localOutgoing'])})
                     else:
                         self._local_path = self._active_id if local is True else None
+                    if self._local_path is not None:
+                        self._graph_type = 'local'
+                    elif self._graph_type == 'local':
+                        self._graph_type = 'global'
                     self.post('setLocal', dict(enabled=self._local_path is not None, path=self._local_path))
+                    self._post_graph_type()
                 if self._options_timer is not None:
                     GLib.source_remove(self._options_timer)
                 self._options_timer = GLib.timeout_add(80, self._options_changed)
             preferences.set_graph(self._settings)
             self.emit('settings-changed', dict(self._settings))
+        elif kind == 'graphType':
+            self.set_graph_type(message.get('value'))
         elif kind in ('search', 'create', 'context'):
             self.emit('page-action', message)
         elif kind == 'hover':
@@ -289,7 +300,9 @@ class GraphView(Gtk.Box):
             return
         self._active_id = self._node_id(path)
         self.post('setActive', self._active_id)
-        if self._local_path is not None:
+        if self._graph_type == 'local' and self._active_id is None:
+            self.set_graph_type('local')
+        elif self._local_path is not None or self._graph_type == 'local':
             self.show_local(path, self._settings['localDepth'])
 
     def refresh_file(self, path) -> None:
@@ -311,7 +324,9 @@ class GraphView(Gtk.Box):
         if self._closed or not self.available:
             return
         self._local_path = self._node_id(path)
+        self._graph_type = 'local' if self._local_path is not None else 'global'
         self._settings = preferences.normalize_graph({**self._settings, 'localDepth': depth})
+        self._post_graph_type()
         self.post('setLocal', dict(enabled=self._local_path is not None))
         self.post('setLocal', dict(path=self._local_path, depth=self._settings['localDepth'],
                                  incoming=self._settings['localIncoming'],
@@ -327,12 +342,35 @@ class GraphView(Gtk.Box):
         self._local_path = self._active_id = None
         self.post('setActive', None)
         self.post('setLocal', dict(enabled=False, path=None))
+        self._post_graph_type()
         self.rebuild()
 
     def show_global(self) -> None:
-        self._local_path = None
-        self.post('setLocal', dict(enabled=False, path=None))
+        self.set_graph_type('global')
+
+    @property
+    def graph_type(self) -> str:
+        return self._graph_type
+
+    def set_graph_type(self, value) -> None:
+        """Switch between the whole project, the active file's neighbourhood and the notes."""
+        if self._closed or not self.available or value not in GRAPH_TYPES:
+            return
+        self._graph_type = value
+        self._local_path = self._active_id if value == 'local' else None
+        self.post('setLocal', dict(enabled=self._local_path is not None, path=self._local_path))
+        self._post_graph_type()
         self.rebuild()
+
+    def _empty_message(self):
+        if self._graph_type == 'local' and self._local_path is None:
+            return 'Open a file to see its local graph'
+        if self._graph_type == 'note' and not os.path.isdir(notes.notes_dir(self.root)):
+            return 'No notes yet. Create a note to see the note graph'
+        return None
+
+    def _post_graph_type(self) -> None:
+        self.post('setGraphType', dict(type=self._graph_type, message=self._empty_message()))
 
     def rebuild(self) -> None:
         """Coalesce requests; the worker alone reads/mutates the index."""
@@ -351,6 +389,7 @@ class GraphView(Gtk.Box):
         updates, self._updates = self._updates, {}
         settings = dict(self._settings)
         local = self._local_path
+        graph_type = self._graph_type
         index = self._index
         options = GraphOptions(query=settings['search'], show_tags=settings['showTags'],
                                show_attachments=settings['showAttachments'],
@@ -372,10 +411,16 @@ class GraphView(Gtk.Box):
                         index.set_text(path, text)
                     else:
                         index.set_text(path, None)
-                graph = (index.local(local, depth=settings['localDepth'],
-                                          incoming=settings['localIncoming'],
-                                          outgoing=settings['localOutgoing'], options=options)
-                         if local is not None else index.build(options))
+                if graph_type == 'note':
+                    graph = index.folder(notes.NOTES_DIR.replace(os.sep, '/'), options)
+                elif local is not None:
+                    graph = index.local(local, depth=settings['localDepth'],
+                                        incoming=settings['localIncoming'],
+                                        outgoing=settings['localOutgoing'], options=options)
+                elif graph_type == 'local':
+                    graph = index.empty()
+                else:
+                    graph = index.build(options)
                 data = graph.to_json()
             except Exception as exc:
                 error = str(exc)
@@ -400,6 +445,7 @@ class GraphView(Gtk.Box):
             else:
                 self.last_data = data
                 self.post('setData', data)
+                self._post_graph_type()
         if self._dirty:
             self._start_worker()
         return GLib.SOURCE_REMOVE

@@ -201,3 +201,17 @@ input[type=range]::-moz-range-thumb { width: 14px; height: 14px; border: 0; bord
   pointer-events: none;
 }
 .tip[hidden] { display: none; }
+
+/* graph type selector */
+.type-menu { min-width: 200px; }
+.type-menu .item { gap: 8px; }
+.type-menu .mark {
+  flex: none; width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--track);
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.type-menu .item[aria-checked="true"] .mark { border-color: var(--accent); }
+.type-menu .item[aria-checked="true"] .mark::after {
+  content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--accent);
+}
+.type-menu .item:hover { background: var(--hover); }
+.icon-btn.is-active { color: var(--accent); }

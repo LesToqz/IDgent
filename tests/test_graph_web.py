@@ -582,6 +582,31 @@ class GraphPageTests(unittest.TestCase):
                          {'enabled': True, 'depth': 3, 'incoming': True, 'outgoing': True})
         p.call('setLocal', {'enabled': False})
 
+    def test_13b_graph_type_menu(self):
+        p = self.page
+        self._demo(40)
+        p.messages.clear()
+        self.assertEqual(p.js("document.querySelectorAll('.gc-chip .icon-btn').length"), 3)
+        p.js("document.querySelector('[aria-label=\"Select graph type\"]').click()")
+        p.pump(0.1)
+        self.assertTrue(p.js('IDGraph._debug.typeMenuOpen()'))
+        self.assertEqual(p.js("[...document.querySelectorAll('#typemenu [role=menuitemradio]')].map(e => e.textContent)"),
+                         ['Global graph', 'Local graph', 'Note graph'])
+        self.assertEqual(p.js("[...document.querySelectorAll('#typemenu [aria-checked=true]')].map(e => e.dataset.type)"),
+                         ['global'])
+        p.js("document.querySelector('#typemenu [data-type=note]').click()")
+        p.pump(0.1)
+        self.assertFalse(p.js('IDGraph._debug.typeMenuOpen()'))
+        self.assertEqual(p.of_type('graphType')[-1]['value'], 'note')
+        p.call('setGraphType', {'type': 'note', 'message': 'No notes yet'})
+        p.call('setData', {'nodes': [], 'links': []})
+        p.pump(0.1)
+        self.assertEqual(p.js("document.getElementById('status').textContent"), 'No notes yet')
+        p.snapshot('09-note-graph-empty')
+        p.call('setGraphType', {'type': 'global', 'message': None})
+        p.call('setData', {'nodes': [], 'links': []})
+        self.assertEqual(p.js('IDGraph._debug.graphType().type'), 'global')
+
     def test_14_narrow_pane(self):
         p = Page(280, 200)
         try:
