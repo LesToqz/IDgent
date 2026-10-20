@@ -570,7 +570,7 @@ class SettingsDialog(Gtk.Window):
         hint.get_style_context().add_class('idgent-setting-desc')
 
         def shell_hint(text):
-            hint.set_text('Empty uses your login shell.' if not text else
+            hint.set_text('' if not text else
                           'Shell will be checked when a terminal opens.' if
                           shutil.which(text) or (Path(text).is_file() and os.access(text, os.X_OK))
                           else 'Shell was not found; check its name or executable path.')
@@ -581,7 +581,7 @@ class SettingsDialog(Gtk.Window):
 
         entry.connect('changed', lambda e: (shell_hint(e.get_text()),
                                             self._changed('terminal_shell', e.get_text())))
-        shell = self._row('terminal_shell', 'Shell', 'Executable name or path; empty uses the login shell.',
+        shell = self._row('terminal_shell', 'Shell', 'Executable name or path. Leave empty to use your login shell.',
                           entry, shell_set, ('bash zsh command login executable',), reset=True)
         shell.desc_label.get_parent().pack_start(hint, False, False, 0)
         self.shell_hint = hint

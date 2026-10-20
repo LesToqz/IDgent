@@ -297,7 +297,9 @@ class GraphSettingsTest(unittest.TestCase):
         self.assertEqual(result['linkStrength'], 0.35)
         self.assertEqual(result['centerStrength'], settings.GRAPH_DEFAULTS['centerStrength'])
         self.assertEqual(result['colorGroups'], [{'query': 'tag:a', 'color': '#abcdef'}])
-        self.assertEqual(settings.load()['graph']['unknown'], 3)
+        self.assertNotIn('unknown', result)
+        self.assertNotIn('unknown', settings.load()['graph'])
+        self.assertNotIn('unknown', json.loads(settings.settings_path().read_text())['graph'])
         self.assertEqual(settings.load()['keep'], 7)
         self.assertNotIn('graph', settings.DEFAULTS)
         self.assertNotIn('graph', settings.get_values())
@@ -351,7 +353,7 @@ class GraphSettingsTest(unittest.TestCase):
                                              'scale': -10}}))
         graph = settings.load()['graph']
         self.assertTrue(graph['showTags'])
-        self.assertEqual(graph['unknown'], 3)
+        self.assertNotIn('unknown', graph)
         self.assertEqual(graph['scale'], settings.GRAPH_LIMITS['scale'][0])
 
     def test_every_numeric_bound_and_invalid_value(self):

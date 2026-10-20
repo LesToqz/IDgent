@@ -245,9 +245,12 @@ class SettingsDialogTest(unittest.TestCase):
             elif isinstance(control, (Gtk.Scale, Gtk.SpinButton)):
                 self.assertEqual(control.get_value(), value)
         self.dialog.set_values(dict.fromkeys(self.dialog._feature_pages.values(), True))
-        graph = {**settings.GRAPH_DEFAULTS, 'search': 'path:src', 'future': {'x': 2}}
+        groups = [{'query': 'tag:a', 'color': '#abcdef'}]
+        graph = {**settings.GRAPH_DEFAULTS, 'search': 'path:src', 'colorGroups': groups,
+                 'future': {'x': 2}}
         self.dialog.set_values({'graph': graph})
         self.assertEqual(changes, [])
+        self.assertNotIn('future', self.dialog.values['graph'])
         for row_key, control in self.dialog.controls.items():
             if not row_key.startswith('graph.'):
                 continue
@@ -258,13 +261,14 @@ class SettingsDialogTest(unittest.TestCase):
                 control.set_value(settings.GRAPH_LIMITS[key][1])
             self.assertEqual(changes[-1][0], 'graph')
             self.assertEqual(changes[-1][1], settings.get_graph())
-            self.assertEqual(changes[-1][1]['future'], {'x': 2})
+            self.assertNotIn('future', changes[-1][1])
             self.assertEqual(changes[-1][1]['search'], 'path:src')
+            self.assertEqual(changes[-1][1]['colorGroups'], groups)
             self.dialog.reset_buttons[row_key].clicked()
             self.assertEqual(self.dialog.values['graph'][key], settings.GRAPH_DEFAULTS[key])
         snapshot = self.dialog.values
-        snapshot['graph']['future']['x'] = 9
-        self.assertEqual(self.dialog.values['graph']['future'], {'x': 2})
+        snapshot['graph']['colorGroups'][0]['query'] = 'changed'
+        self.assertEqual(self.dialog.values['graph']['colorGroups'], groups)
         self.dialog.controls['terminal_shell'].set_text('/missing/idgent-shell')
         self.assertIn('not found', self.dialog.shell_hint.get_text())
         self.assertEqual(changes[-1], ('terminal_shell', '/missing/idgent-shell'))
@@ -274,7 +278,7 @@ class SettingsDialogTest(unittest.TestCase):
         self.dialog.controls['graph.showTags'].clicked()
         self.assertEqual(settings.get_graph()['linkDistance'], 220)
         self.assertEqual(settings.get_graph()['search'], 'new query')
-        self.assertEqual(settings.get_graph()['future'], 7)
+        self.assertNotIn('future', settings.get_graph())
         self.assertTrue(settings.get_graph()['showTags'])
 
     def test_set_values_is_silent_and_validated(self):

@@ -1,7 +1,7 @@
 """Small, failure-tolerant JSON settings store, resolved at call time.
 
 IDgent graph defaults and control ranges are defined in docs/graph-spec.md.
-Unknown graph keys survive; numeric values clamp to bounds, and only hop
+Unknown graph keys are dropped; numeric values clamp to bounds, and only hop
 counts round to integers. Each normalization returns independent colour rules.
 """
 from __future__ import annotations
@@ -289,9 +289,9 @@ GRAPH_STEPS = {'textFadeMultiplier': 0.1,
  'localDepth': 1}
 
 def normalize_graph(value: object) -> dict:
-    """Return independent, JSON-safe graph preferences, preserving unknown keys."""
+    """Return independent, validated graph preferences, dropping unknown keys."""
     value = value if isinstance(value, dict) else {}
-    result = {key: raw for key, raw in value.items() if key not in GRAPH_DEFAULTS}
+    result = {}
     for key, default in GRAPH_DEFAULTS.items():
         raw = value.get(key, default)
         if isinstance(default, bool):
