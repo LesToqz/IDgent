@@ -55,8 +55,13 @@ class ResizeGate(Gtk.Bin):
         self._timer = None
         # Terminals whose program has not yet answered our last grid change.
         self._answers = []
-        # Terminal -> PTY watch source until its program writes, then None.
-        self._output = {}
+        # Terminal -> PTY watch until its program writes; then it is _written.
+        self._watches = {}
+        self._written = set()
+        # The release timeout was extended for an answer VTE had not parsed.
+        self._extended = False
+        # commit_when_answered() arrived while waiting.
+        self._commit_requested = False
         self._release = None
         self._destroyed = False
         self._background_provider = None
@@ -212,13 +217,15 @@ class ResizeGate(Gtk.Bin):
             # on the same descriptor has seen the program's first bytes. Without
             # a PTY, any parsed (fed) output is the answer.
             pty = terminal.get_pty()
-            self._output[terminal] = None if pty is None else GLib.unix_fd_add_full(
-                GLib.PRIORITY_HIGH, pty.get_fd(), GLib.IOCondition.IN, self._wrote, terminal)
+            if pty is not None:
+                self._watches[terminal] = GLib.unix_fd_add_full(
+                    GLib.PRIORITY_HIGH, pty.get_fd(), GLib.IOCondition.IN, self._wrote, terminal)
+        self._extended = False
         self._release = GLib.timeout_add(max(1, int(self.PACE_MS)), self._released)
 
     def _wrote(self, _fd, _condition, terminal):
-        if terminal in self._output:
-            self._output[terminal] = None
+        if self._watches.pop(terminal, None) is not None:
+            self._written.add(terminal)
         return GLib.SOURCE_REMOVE
 
     def _stop_waiting(self):
@@ -226,10 +233,10 @@ class ResizeGate(Gtk.Bin):
             if terminal.handler_is_connected(handler):
                 terminal.disconnect(handler)
         self._answers = []
-        for source in self._output.values():
-            if source is not None:
-                GLib.source_remove(source)
-        self._output = {}
+        for source in self._watches.values():
+            GLib.source_remove(source)
+        self._watches = {}
+        self._written = set()
         if self._release is not None:
             GLib.source_remove(self._release)
             self._release = None
@@ -250,7 +257,7 @@ class ResizeGate(Gtk.Bin):
     def _answered(self, terminal):
         # Ignore VTE's signal for the resize itself, and an answer VTE has
         # only partly parsed: the rest would be interpreted at the next grid.
-        if self._output.get(terminal, None) is not None or self._unread(terminal):
+        if terminal in self._watches or self._unread(terminal):
             return
         for index, (other, handler) in enumerate(self._answers):
             if other is terminal:
@@ -265,6 +272,13 @@ class ResizeGate(Gtk.Bin):
 
     def _released(self):
         self._release = None
+        if not self._extended and any(terminal in self._written
+                                      for terminal, _handler in self._answers):
+            # The answer is in flight (VTE reads its PTY lazily); releasing now
+            # would let VTE parse it at the next grid. Wait once more.
+            self._extended = True
+            self._release = GLib.timeout_add(max(1, int(self.PACE_MS)), self._released)
+            return GLib.SOURCE_REMOVE
         self._stop_waiting()
         self._settled()
         return GLib.SOURCE_REMOVE
@@ -276,18 +290,22 @@ class ResizeGate(Gtk.Bin):
 
     def _settled(self):
         self._timer = None
-        if not self._answers and self._target is not None and self._target != self._committed:
+        if not self._answers and self._target is not None and (
+                self._target != self._committed or self._commit_requested):
             self.commit()
         return GLib.SOURCE_REMOVE
 
     def commit_when_answered(self):
         """Apply the latest size now, or once the terminals have redrawn."""
-        if not self._answers:
+        if self._answers:
+            self._commit_requested = True
+        else:
             self.commit()
 
     def commit(self):
         """Apply the latest size now, cancelling any outstanding timeout."""
         self._cancel_timer()
+        self._commit_requested = False
         if self._destroyed:
             return
         if self._target is None:
