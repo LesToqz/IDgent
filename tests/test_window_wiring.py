@@ -15,7 +15,7 @@ gi.require_version('Gdk', '3.0')
 gi.require_version('Vte', '2.91')
 from gi.repository import Gdk, Gio, Gtk, Vte
 
-from idgent import motion, settings, style
+from idgent import motion, notes, settings, style
 from idgent.palette import CommandPalette, QuickSwitcher
 from idgent.themes import THEMES, get_theme
 from idgent.window import MainWindow
@@ -456,6 +456,115 @@ class WindowWiringTest(unittest.TestCase):
                 window.destroy()
                 self.windows.remove(window)
                 spin(.1)
+
+    # Titlebar toggles and notes ------------------------------------------------
+
+    def test_titlebar_toggles_explorer_and_bottom_dock_and_stay_synced(self):
+        window = self.window()
+        bar = window.titlebar
+        for button, widget, toggle in (
+                (bar.explorer_button, window.explorer, window.toggle_explorer),
+                (bar.bottom_dock_button, window.terminal_bottom, window.toggle_terminal_bottom)):
+            with self.subTest(button=button.get_accessible().get_name()):
+                self.assertTrue(widget.get_visible())
+                self.assertTrue(button.get_active())
+                button.clicked()
+                spin(.05)
+                self.assertFalse(widget.get_visible())
+                self.assertFalse(button.get_active())
+                toggle()  # menu, hotkey and palette paths keep the icon in sync
+                spin(.05)
+                self.assertTrue(widget.get_visible())
+                self.assertTrue(button.get_active())
+        self.assertTrue(window.explorer.tree.get_mapped())
+
+    def test_right_dock_toggle_opens_a_graph_view_by_default(self):
+        window = self.window()
+        panel = window.terminal_right
+        window.titlebar.dock_button.clicked()
+        spin(.2)
+        self.assertTrue(panel.get_visible())
+        self.assertTrue(window.titlebar.dock_button.get_active())
+        self.assertEqual((panel.graph_count(), panel.terminal_count()), (1, 0))
+        window.titlebar.dock_button.clicked()
+        spin(.05)
+        self.assertFalse(panel.get_visible())
+        self.assertFalse(window.titlebar.dock_button.get_active())
+        # Reopening shows the existing graph instead of adding panes.
+        window.titlebar.dock_button.clicked()
+        spin(.05)
+        self.assertEqual(panel.pane_count(), 1)
+        self.assertTrue(panel.has_graph())
+
+    def test_note_toolbar_only_on_notes_and_buttons_insert_markdown(self):
+        window = self.window()
+        main = self.open_file(window)
+        self.assertIsNone(getattr(window.editor._current(), '_note_toolbar', None))
+        with patch.object(window.explorer, '_name_dialog',
+                          side_effect=lambda title, initial, action: action('coffi shop')):
+            window.new_note()
+        spin()
+        path = str(self.root / '.IDgent' / 'Notes' / 'coffi shop.md')
+        self.assertEqual(window.explorer.current_tab, 'notes')
+        self.assertEqual(window.editor.current_path(), path)
+        tab = window.editor._current()
+        toolbar = tab._note_toolbar
+        self.assertTrue(toolbar.get_mapped())
+        self.assertEqual(tab.md_stack.get_margin_top(), toolbar.get_allocated_height())
+        y = toolbar.translate_coordinates(tab.page, 0, 0)[1]
+        self.assertEqual(y, 0)
+        self.assertIs(tab.page.get_parent(), window.editor.notebook)
+        tab.buffer.place_cursor(tab.buffer.get_end_iter())
+        toolbar.buttons['table'].clicked()
+        self.assertEqual(window.editor.buffer_text(path), '# coffi shop\n\n' + notes.TABLE)
+        selection = tab.buffer.get_selection_bounds()
+        self.assertEqual(tab.buffer.get_text(*selection, True), 'Column 1')
+        tab.undo()
+        self.assertEqual(window.editor.buffer_text(path), '# coffi shop\n\n')
+        # From the preview, a command returns to the source to insert there.
+        window.editor.set_markdown_mode('preview')
+        tab.buffer.place_cursor(tab.buffer.get_end_iter())
+        tab._source_cursor = tab.buffer.get_char_count()
+        toolbar.buttons['checklist'].clicked()
+        self.assertEqual(tab.md_mode, 'source')
+        self.assertEqual(window.editor.buffer_text(path), '# coffi shop\n\n- [ ] ')
+        # Other files keep the plain editor; the toolbar leaves a renamed-away note.
+        self.assertIsNone(getattr(window.editor.tabs[0], '_note_toolbar', None))
+        window.explorer._rename(path, 'coffi shop.txt')
+        spin(.05)
+        self.assertIsNone(tab._note_toolbar)
+        self.assertEqual(tab.md_stack.get_margin_top(), 0)
+        self.assertIs(main, window.editor.tabs[0].view)
+
+    def test_palette_lists_note_commands_and_runs_them(self):
+        window = self.window()
+        labels = [command.label for command in window.commands()]
+        expected = ['Notes: New note', 'Notes: Show notes'] + [
+            f'Notes: {label}' for label in ('Heading', 'Bold', 'Italic', 'Bullet list',
+                                            'Numbered list', 'Checklist', 'Table', 'Code block',
+                                            'Link', 'Horizontal rule')]
+        self.assertEqual(labels[-len(expected):], expected)
+        self.open_file(window, 'notes.md')
+        tab = window.editor._current()
+        tab.buffer.set_text('')
+        self.press(window, Gdk.KEY_P, CTRL | SHIFT)
+        prompt = window.overlay.prompt
+        prompt.set_query('notes checklist')
+        self.assertEqual(prompt.selected_item.label, 'Notes: Checklist')
+        self.press(window, Gdk.KEY_Return)
+        self.assertEqual(window.editor.buffer_text(str(self.root / 'notes.md')), '- [ ] ')
+        # Plain files are left alone, with a notice.
+        self.open_file(window, 'main.py')
+        commands = {command.label: command for command in window.commands()}
+        commands['Notes: Bold'].callback()
+        spin(.1)
+        self.assertEqual(window.editor.buffer_text(str(self.root / 'main.py')), 'print("hi")\n')
+        self.assertIn('Open a note or Markdown file to use note commands.',
+                      [notice.text for notice in window.overlay.notices])
+        window.toggle_explorer()
+        commands['Notes: Show notes'].callback()
+        self.assertTrue(window.explorer.get_visible())
+        self.assertEqual(window.explorer.current_tab, 'notes')
 
 
 if __name__ == '__main__':

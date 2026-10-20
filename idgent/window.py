@@ -23,7 +23,7 @@ gi.require_version("Gdk", "3.0")
 gi.require_version("Vte", "2.91")
 from gi.repository import Gdk, GLib, Gtk, Vte
 
-from idgent import fsops, gitlog, motion, settings, style
+from idgent import fsops, gitlog, motion, notes, settings, style
 from idgent.graphdata import SEMANTICS
 from idgent.graphview import GraphView
 from idgent.gitviews import CommitView, GitGraphView
@@ -118,6 +118,8 @@ class MainWindow(Gtk.ApplicationWindow):
         self.connect("focus-in-event", lambda *_: (self.explorer.refresh_git(), False)[1])
         self.explorer.set_text_provider(self.editor.buffer_text)
         self.explorer.connect('path-renamed', self._graph_paths_changed)
+        for signal in ('path-renamed', 'path-deleted'):
+            self.explorer.connect(signal, lambda *_: self._sync_note_toolbars())
         self.explorer.connect('path-deleted', self._graph_paths_changed)
         # Explorer create/refresh rebuilds its model without a path-created signal.
         # Coalesce those notifications so one operation performs one index scan.
@@ -149,10 +151,14 @@ class MainWindow(Gtk.ApplicationWindow):
 
         self.titlebar = TitleBar(self._build_menu())
         self.titlebar.connect("settings-requested", lambda _: self.open_settings())
-        self.titlebar.connect("dock-toggle-requested", lambda _: self.toggle_terminal_right())
-        self.terminal_right.connect("notify::visible", lambda panel, _:
-                                    self.titlebar.set_dock_active(panel.get_visible()))
-        self.titlebar.set_dock_active(self.terminal_right.get_visible())
+        self.titlebar.connect("dock-toggle-requested", lambda _: self.toggle_right_dock())
+        self.titlebar.connect("bottom-dock-toggle-requested", lambda _: self.toggle_terminal_bottom())
+        self.titlebar.connect("explorer-toggle-requested", lambda _: self.toggle_explorer())
+        for widget, sync in ((self.terminal_right, self.titlebar.set_dock_active),
+                             (self.terminal_bottom, self.titlebar.set_bottom_dock_active),
+                             (self.explorer, self.titlebar.set_explorer_active)):
+            widget.connect("notify::visible", lambda widget, _, sync=sync: sync(widget.get_visible()))
+            sync(widget.get_visible())
         self.set_titlebar(self.titlebar)
         layout = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         layout.pack_start(self.sidebar, True, True, 0)
@@ -243,6 +249,11 @@ class MainWindow(Gtk.ApplicationWindow):
             ("Editor: Zoom out", lambda: self._editor_zoom(-1), ("Ctrl+-",)),
             ("Editor: Reset zoom",
              self._editor_zoom, ("Ctrl+0",)),
+            ("Notes: New note", self.new_note, ()),
+            ("Notes: Show notes", self.show_notes, ()),
+            *((f"Notes: {command.label}",
+               lambda command_id=command.id: self.apply_note_command(command_id), ())
+              for command in notes.NOTE_COMMANDS),
         ):
             self._commands.append(Command(label, callback, keys))
 
@@ -281,7 +292,59 @@ class MainWindow(Gtk.ApplicationWindow):
         return self._recent_files + [path for path in open_paths
                                      if path not in self._recent_files]
 
+    # Notes ---------------------------------------------------------------------
+
+    def show_notes(self) -> None:
+        """Show the sidebar's Notes tab."""
+        self._restore_terminal_fullscreen()
+        if not self.explorer.get_visible():
+            self._toggle(self.explorer)
+        self.explorer.show_tab("notes")
+
+    def new_note(self) -> None:
+        self.show_notes()
+        self.explorer.new_note_dialog()
+
+    def _editor_tab(self, path: str | None):
+        return next((tab for tab in self.editor.tabs if path and tab.path == path), None)
+
+    def apply_note_command(self, command_id: str, tab=None):
+        """Insert a note command's Markdown into a Markdown tab (default: the active one)."""
+        tab = tab or self._editor_tab(self.editor.current_path())
+        if tab is None or tab.md_toggle is None:
+            self.notify("Open a note or Markdown file to use note commands.")
+            return None
+        if tab.md_mode == "preview":
+            tab.set_markdown_mode("source")
+        edit = notes.apply_to_buffer(command_id, tab.buffer)
+        tab.view.scroll_to_mark(tab.buffer.get_insert(), 0, False, 0, 0)
+        tab.view.grab_focus()
+        return edit
+
+    def _sync_note_toolbars(self) -> None:
+        """Give every open note tab the insert toolbar above its editor (and only those)."""
+        for tab in self.editor.tabs:
+            toolbar = getattr(tab, "_note_toolbar", None)
+            wanted = not tab.deleted and notes.is_note(self.root, tab.path)
+            if wanted and toolbar is None:
+                toolbar = tab._note_toolbar = notes.NoteToolbar()
+                toolbar.connect("command", lambda _, command_id, tab=tab:
+                                self.apply_note_command(command_id, tab))
+                # Keep the editor's Markdown pill above the toolbar, at its right.
+                toolbar.connect("size-allocate", lambda _, rect, tab=tab:
+                                tab.md_stack.set_margin_top(rect.height))
+                tab.page.add_overlay(toolbar)
+                tab.page.reorder_overlay(toolbar, 0)
+                tab.page.set_overlay_pass_through(toolbar, False)
+                toolbar.show_all()
+                tab.md_stack.set_margin_top(toolbar.get_preferred_height().natural_height)
+            elif not wanted and toolbar is not None:
+                toolbar.destroy()
+                tab._note_toolbar = None
+                tab.md_stack.set_margin_top(0)
+
     def _current_file_changed(self, _editor: EditorPanel, path: str) -> None:
+        self._sync_note_toolbars()
         self.explorer.set_current_file(path or None)
         self.explorer.refresh_git()
         for tab in self.editor.tabs:
@@ -911,6 +974,15 @@ class MainWindow(Gtk.ApplicationWindow):
     def toggle_terminal_right(self) -> None:
         self._toggle_terminal(self.terminal_right)
 
+    def toggle_right_dock(self) -> None:
+        """The titlebar toggle: an empty right dock opens with a graph view pane."""
+        self._restore_terminal_fullscreen()
+        panel = self.terminal_right
+        if panel.get_visible():
+            self._hide_terminal(panel)
+        elif panel.pane_count() or self.open_graph() is None:
+            self._show_terminal(panel)
+
     def split_terminal(self) -> None:
         focus = self.get_focus()
         panel = (self.terminal_right if focus is not None
@@ -960,6 +1032,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self.close_commit_tabs()
         self.root = str(root)
         self.explorer.set_root(self.root)
+        self._sync_note_toolbars()
         self.terminal_bottom.set_cwd(self.root)
         self.terminal_right.set_cwd(self.root)
         for view in self._graph_views():
