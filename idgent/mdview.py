@@ -42,6 +42,24 @@ _INLINE = re.compile(r'\\([!"#$%&\'()*+,\-./:;<=>?@\[\]\\^_`{|}~]|\n)|'
                      r'(!?)\[([^\]\n]*)\]\((<[^>\n]*>|[^\s()]*(?:\([^()]*\)[^\s()]*)*)(?:\s+"[^"\n]*")?\)|'
                      r'<((?:https?://|mailto:)[^<>\s]+)>|'
                      r'(\*\*\*|___|\*\*|__|~~|\*|_)(?=\S)(.+?)\8| {2,}\n', re.DOTALL)
+_TEXT_LINK = re.compile(r'\[\[([^\]\n|]+)(?:\|([^\]\n]*))?\]\]|https?://[^\s<>]+')
+
+
+def _plain_spans(text, styles):
+    pos = 0
+    for match in _TEXT_LINK.finditer(text):
+        if match.start() > pos:
+            yield Span(text[pos:match.start()].replace('\n', ' '), styles)
+        if match[1] is not None:
+            yield Span(match[2] if match[2] is not None else match[1], styles + ('link',), '[[' + match[1] + ']]')
+        else:
+            target = match[0].rstrip('.,;!?)')
+            yield Span(target, styles + ('link',), target)
+            if len(target) < len(match[0]):
+                yield Span(match[0][len(target):], styles)
+        pos = match.end()
+    if pos < len(text):
+        yield Span(text[pos:].replace('\n', ' '), styles)
 
 
 def parse_inline(text: str, styles: tuple[str, ...] = (), depth: int = 0) -> list[Span]:
@@ -49,9 +67,12 @@ def parse_inline(text: str, styles: tuple[str, ...] = (), depth: int = 0) -> lis
     if depth > 12:
         return [Span(text, styles)]
     result, pos = [], 0
+    links = [(match.start(), match.end()) for match in _TEXT_LINK.finditer(text)]
     for match in _INLINE.finditer(text):
+        if match[8] and any(a <= match.start() < b for a, b in links):
+            continue
         if match.start() > pos:
-            result.append(Span(text[pos:match.start()].replace('\n', ' '), styles))
+            result.extend(_plain_spans(text[pos:match.start()], styles))
         escape, ticks, code, image, label, target, auto, delimiter, body = match.groups()
         if escape is not None:
             result.append(Span(escape, styles))
@@ -73,7 +94,7 @@ def parse_inline(text: str, styles: tuple[str, ...] = (), depth: int = 0) -> lis
             result.append(Span('\n', styles))
         pos = match.end()
     if pos < len(text):
-        result.append(Span(text[pos:].replace('\n', ' '), styles))
+        result.extend(_plain_spans(text[pos:], styles))
     return result
 
 

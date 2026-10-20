@@ -1,29 +1,9 @@
-"""Pure subset parsing, inert resources, incremental GTK painting and links."""
-import os
-os.environ['GDK_BACKEND'] = 'x11'
+"""Pure Markdown parsing, table cells and safe link resolution."""
 from pathlib import Path
 import tempfile
-import time
 import unittest
-import warnings
-from unittest.mock import patch
 
-from idgent import mdview, highlight, gutter
-from gi.repository import Gtk, GLib
-
-
-def drain(predicate=lambda: False, timeout=3):
-    with warnings.catch_warnings():
-        warnings.filterwarnings('ignore', category=DeprecationWarning, module=r'gi\.events')
-        end = time.monotonic() + timeout
-        while time.monotonic() < end:
-            if predicate():
-                return
-            if Gtk.events_pending():
-                Gtk.main_iteration_do(False)
-            else:
-                time.sleep(.002)
-    raise AssertionError('GTK operation did not complete')
+from idgent import mdview
 
 
 class ParserTest(unittest.TestCase):
@@ -110,194 +90,18 @@ class ParserTest(unittest.TestCase):
             self.assertGreater(len(blocks), 10)
             self.assertLessEqual(max(len(b.text) for b in blocks), mdview.CHUNK * 2)
 
-
-class RendererTest(unittest.TestCase):
-    def setUp(self):
-        self.opened = []
-        self.preview = mdview.MarkdownView(self.opened.append, lambda: '/tmp/source.md')
-        self.preview.set_style(highlight.DARK_PLUS, gutter.DEFAULT_CHROME, 11)
-        self.addCleanup(self.preview.view.destroy)
-
-    def render(self, text):
-        self.preview.render(text)
-        drain(lambda: self.preview._idle == 0)
-        b = self.preview.buffer
-        return b.get_text(b.get_start_iter(), b.get_end_iter(), True)
-
-    def test_rendered_text_tags_and_readonly(self):
-        text = self.render('# Title\n\n**strong** and `code`\n\n> quote\n\n---')
-        self.assertIn('Title', text)
-        self.assertIn('strong and code', text)
-        self.assertNotIn('**', text)
-        self.assertIn('─', text)
-        self.assertFalse(self.preview.view.get_editable())
-        at = self.preview.buffer.get_iter_at_offset(text.index('strong'))
-        self.assertTrue(at.has_tag(self.preview.tags['strong']))
-        self.assertFalse(self.preview.tags['rule'].get_property('strikethrough'))
-        self.assertLess(self.preview.tags['container-0-0'].get_priority(), self.preview.tags['strong'].get_priority())
-
-    def test_heading_scales_and_static_font_weights(self):
-        self.render('# H1\n\n## H2\n\n### H3\n\n#### H4\n\n##### H5\n\n###### H6')
-        for level, scale in enumerate((1.618, 1.462, 1.318, 1.188, 1.076, 1), 1):
-            tag = self.preview.tags['h' + str(level)]
-            self.assertAlmostEqual(tag.get_property('scale'), scale)
-            self.assertEqual(tag.get_property('weight'), 700 if level <= 3 else 600)
-
-    def test_optional_code_highlighting(self):
-        self.render('```python\ndef f():\n    return 123\n```')
-        if highlight.AVAILABLE:
-            b = self.preview.buffer
-            start = b.get_slice(b.get_start_iter(), b.get_end_iter(), True).index('def')
-            self.assertTrue(b.get_iter_at_offset(start).has_tag(self.preview.tags['syntax-keyword']) or
-                            b.get_iter_at_offset(start).has_tag(self.preview.tags['syntax-control']))
-        with patch.object(highlight, 'AVAILABLE', False):
-            self.assertIn('return 123', self.render('```python\nreturn 123\n```'))
-
-    def test_table_renders_bordered_cells_with_inline_styles_and_alignment(self):
-        self.render('| A | B | C |\n| :--- | :---: | ---: |\n| **bold** | left \\| right | `command` |\n| next | [web](https://example.org) | 2 |')
-        rows = [w for w in self.preview._widgets if isinstance(w, Gtk.Grid)]
-        self.assertEqual(len(rows), 3)
-        self.assertEqual([rows[0].get_child_at(c, 0).get_text() for c in range(3)], ['A', 'B', 'C'])
-        for c, align in enumerate((0, .5, 1)):
-            label = rows[1].get_child_at(c, 0)
-            self.assertEqual(label.get_xalign(), align)
-            self.assertTrue(label.get_line_wrap())
-            self.assertEqual(label.get_style_context().get_border(Gtk.StateFlags.NORMAL).right, 1)
-            self.assertTrue(rows[0].get_child_at(c, 0).get_style_context().has_class('md-header'))
-        self.assertIn('<b>bold</b>', rows[1].get_child_at(0, 0).get_label())
-        self.assertEqual(rows[1].get_child_at(1, 0).get_text(), 'left | right')
-        with patch.object(self.preview, 'activate_link') as activate:
-            rows[2].get_child_at(1, 0).emit('activate-link', 'https://example.org')
-            activate.assert_called_once_with('https://example.org')
-
-    def test_table_width_tracks_readable_column_and_window_resize(self):
-        window = Gtk.Window()
-        self.addCleanup(window.destroy)
-        window.set_default_size(1000, 500)
-        scroll = Gtk.ScrolledWindow()
-        scroll.add(self.preview.view)
-        window.add(scroll)
-        self.preview.set_readable_width(True)
-        self.render('| A | B |\n| --- | --- |\n| ' + 'long text ' * 40 + ' | ' + 'command_' * 40 + ' |')
-        window.show_all()
-        rows = [w for w in self.preview._widgets if isinstance(w, Gtk.Grid)]
-        drain(lambda: rows[1].get_allocated_width() > 600)
-        self.assertLessEqual(rows[1].get_allocated_width(), 700)
-        self.assertGreater(rows[1].get_allocated_height(), 40)
-        window.resize(560, 500)
-        drain(lambda: rows[1].get_allocated_width() < 510)
-        self.assertEqual(rows[0].get_allocated_width(), rows[1].get_allocated_width())
-        for c in range(2):
-            self.assertEqual(rows[0].get_child_at(c, 0).get_allocated_width(),
-                             rows[1].get_child_at(c, 0).get_allocated_width())
-        self.assertLessEqual(scroll.get_hadjustment().get_upper(), scroll.get_hadjustment().get_page_size())
-
-    def test_each_fence_has_copy_button_including_empty_and_chunked_code(self):
-        large = 'x' * (mdview.CHUNK * 3) + '\n'
-        self.render('```sh\n\tprintf "<&>"\n```\n~~~\n' + large + '~~~\n```\n```')
-        tools = [w for w in self.preview._widgets if isinstance(w, Gtk.Box)]
-        self.assertEqual(len(tools), 3)
-        from gi.repository import Gdk
-        clipboard = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
-        for box, expected in zip(tools, ('\tprintf "<&>"\n', large, '')):
-            button = box.get_children()[0]
-            self.assertIsInstance(button.get_image(), Gtk.Image)
-            self.assertEqual(button.get_accessible().get_name(), 'Copy code')
-            button.clicked()
-            self.assertEqual(clipboard.wait_for_text() or '', expected)
-            self.assertEqual(button.get_tooltip_text(), 'Copied!')
-        drain(lambda: all(b.get_children()[0].get_tooltip_text() == 'Copy code' for b in tools))
-
-    def test_copy_controls_follow_code_when_scrolling_and_resizing(self):
-        window = Gtk.Window()
-        self.addCleanup(window.destroy)
-        window.set_default_size(900, 400)
-        scroll = Gtk.ScrolledWindow()
-        scroll.add(self.preview.view)
-        window.add(scroll)
-        self.preview.set_readable_width(True)
-        window.show_all()
-        self.render('paragraph\n\n' * 20 + '```sh\necho hi\n```\n' + 'after\n\n' * 40)
-        control, mark = self.preview._code_controls[0]
-
-        def positioned():
-            rect = self.preview.view.get_iter_location(self.preview.buffer.get_iter_at_mark(mark))
-            _, y = self.preview.view.buffer_to_window_coords(Gtk.TextWindowType.WIDGET, rect.x, rect.y)
-            allocation = control.get_allocation()
-            return (allocation.y == y and allocation.x + allocation.width ==
-                    self.preview.view.get_allocated_width() - self.preview.view.get_right_margin())
-
-        drain(lambda: not control.get_visible() and scroll.get_vadjustment().get_upper() > 1500)
-        self.preview.view.get_vadjustment().set_value(550)
-        drain(lambda: positioned() and 0 < control.get_allocation().y < 200)
-        window.resize(550, 400)
-        drain(lambda: positioned() and self.preview.view.get_allocated_width() < 600)
-        self.preview.view.get_vadjustment().set_value(0)
-        drain(lambda: not control.get_visible())
-
-    def test_tasks_are_readonly_checkbox_widgets_and_rerender_cleans_up(self):
-        self.render('- [ ] **todo**\n  - [x] done\n- [X] also done\n- ordinary')
-        checks = [w for w in self.preview._widgets if isinstance(w, Gtk.CheckButton)]
-        self.assertEqual([w.get_active() for w in checks], [False, True, True])
-        self.assertTrue(all(not w.get_sensitive() for w in checks))
-        self.render('```\necho hi\n```')
-        self.preview._widgets[0].get_children()[0].clicked()
-        self.assertTrue(self.preview._feedback)
-        self.render('replacement')
-        self.assertEqual(self.preview._widgets, [])
-        self.assertEqual(self.preview._wide_widgets, [])
-        self.assertEqual(self.preview._feedback, set())
-
-    def test_links_open_only_allowed_destinations(self):
-        with patch.object(Gtk, 'show_uri_on_window') as show:
-            self.assertTrue(self.preview.activate_link('https://example.org'))
-            self.assertTrue(self.preview.activate_link('mailto:a@b.c'))
-            self.assertFalse(self.preview.activate_link('javascript:alert(1)'))
-            self.assertEqual(show.call_count, 2)
+    def test_wiki_note_resolution_and_alias(self):
+        spans = mdview.parse_inline('[[note]] [[note|alias]] https://example.org/a_b_c.')
+        self.assertEqual([span.text for span in spans if span.link], ['note', 'alias', 'https://example.org/a_b_c'])
+        self.assertEqual([span.link for span in spans if span.link], ['[[note]]', '[[note]]', 'https://example.org/a_b_c'])
         with tempfile.TemporaryDirectory() as directory:
-            p = Path(directory) / 'target.md'
-            p.touch()
-            self.preview.source_path = lambda: str(Path(directory) / 'source.md')
-            self.assertTrue(self.preview.activate_link('target.md'))
-            self.assertEqual(self.opened, [str(p)])
-
-    def test_single_click_opens_link_without_control(self):
-        self.render('[web](https://example.org)')
-        from types import SimpleNamespace
-        event = SimpleNamespace(button=1, x=4, y=4)
-        with patch.object(self.preview.view, 'window_to_buffer_coords', return_value=(0, 0)), \
-             patch.object(self.preview.view, 'get_iter_at_location', return_value=(True, self.preview.buffer.get_start_iter())), \
-             patch.object(Gtk, 'show_uri_on_window') as show:
-            self.assertTrue(self.preview._release(self.preview.view, event))
-            show.assert_called_once()
-            self.preview.buffer.select_range(self.preview.buffer.get_start_iter(), self.preview.buffer.get_end_iter())
-            self.assertFalse(self.preview._release(self.preview.view, event))
-
-    def test_resources_never_fetched(self):
-        with patch('urllib.request.urlopen', side_effect=AssertionError('network')), patch.object(Gtk, 'show_uri_on_window') as show:
-            text = self.render('![secret](https://example.org/secret.png) <img src="https://example.org/a">')
-            self.assertIn('[image: secret]', text)
-            self.assertIn('<img src=', text)
-            show.assert_not_called()
-
-    def test_live_style_zoom_and_cancellation(self):
-        self.render('# Heading\n\n`code`')
-        styles = dict(highlight.DARK_PLUS, heading=highlight.SyntaxStyle('#abcdef', True))
-        self.preview.set_style(styles, dict(gutter.DEFAULT_CHROME, current_line_bg='#123456'), 17)
-        self.assertAlmostEqual(self.preview.tags['h1'].get_property('foreground-rgba').red, 0xab / 255)
-        self.assertAlmostEqual(self.preview.tags['code'].get_property('background-rgba').red, 0x12 / 255)
-        self.assertEqual(self.preview.size, 17)
-        self.preview.render('word\n\n' * 10000)
-        self.assertNotEqual(self.preview._idle, 0)
-        self.preview.destroy()
-        self.assertEqual(self.preview._idle, 0)
-        self.assertIsNone(self.preview._work)
-
-    def test_large_document_yields_and_completes(self):
-        self.preview.render(('# heading\n\nparagraph *text*\n\n' * 5000))
-        started = time.perf_counter()
-        self.preview._step()
-        self.assertLess(time.perf_counter() - started, .1)
-        self.assertNotEqual(self.preview._idle, 0)
-        drain(lambda: self.preview._idle == 0, timeout=15)
-        self.assertGreater(self.preview.buffer.get_char_count(), 100000)
+            root = Path(directory)
+            notes = root / '.IDgent' / 'Notes'
+            notes.mkdir(parents=True)
+            target = notes / 'other.md'
+            target.touch()
+            source = str(notes / 'source.md')
+            self.assertEqual(mdview.link_target('[[other]]', source), ('file', str(target)))
+            self.assertEqual(mdview.link_target('[[other|alias]]', source), ('file', str(target)))
+            self.assertIsNone(mdview.link_target('[[missing]]', source))
+            self.assertIsNone(mdview.link_target('[[/etc/passwd]]', source))

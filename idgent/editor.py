@@ -698,6 +698,8 @@ class EditorPanel(Gtk.Box):
         tab = next((tab for tab in self.tabs if tab.path == path), None)
         if tab is None:
             return
+        if tab.md_renderer and tab.md_mode == 'preview':
+            tab.set_markdown_mode('source')
         buffer = tab.buffer
         start = buffer.get_iter_at_line(max(0, min(line, buffer.get_line_count() - 1)))
         limit = start.copy()

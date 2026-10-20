@@ -32,7 +32,7 @@ CHANGES = {
     'reduce_motion': True, 'accent': '#22a55b', 'ui_font': 'DejaVu Serif',
     'editor_font': 'DejaVu Sans Mono', 'terminal_autostart': False,
 }
-EDITOR_ATTRS = ('line_numbers', 'highlight_line', 'md_default_preview', 'md_readable_width',
+EDITOR_ATTRS = ('line_numbers', 'highlight_line', 'md_readable_width',
                 'indent_tabs', 'indent_width', 'auto_pair')
 EXPLORER_ATTRS = ('show_hidden', 'confirm_delete')
 VTE_SHAPES = {'block': Vte.CursorShape.BLOCK, 'ibeam': Vte.CursorShape.IBEAM,
@@ -238,7 +238,7 @@ class WindowWiringTest(unittest.TestCase):
         self.assertEqual(labels[labels.index('View: Terminal on Right') + 1],
                          'Settings: Open settings')
         for label in ('Settings: Open settings', 'Theme: Next theme', 'View: Search in Files',
-                      'Editor: Toggle Markdown preview', 'Editor: Zoom in', 'Editor: Zoom out',
+                      'Markdown: Toggle source mode', 'Editor: Zoom in', 'Editor: Zoom out',
                       'Editor: Reset zoom', 'View: Split Terminal', 'View: Terminal on Right'):
             self.assertIn(label, commands)
             self.assertTrue(commands[label])
@@ -256,7 +256,7 @@ class WindowWiringTest(unittest.TestCase):
         commands['Editor: Reset zoom'].callback()
         self.assertEqual(window.editor.font_size, window.editor.default_font_size)
         mode = window.editor.markdown_mode()
-        commands['Editor: Toggle Markdown preview'].callback()
+        commands['Markdown: Toggle source mode'].callback()
         self.assertNotEqual(window.editor.markdown_mode(), mode)
         theme = window.theme.id
         commands['Theme: Next theme'].callback()
@@ -342,6 +342,17 @@ class WindowWiringTest(unittest.TestCase):
         spin()
         self.assert_live(window, 'terminal_cursor', 'underline')
         self.assert_live(window, 'terminal_scrollback', 5000)
+
+    def test_live_markdown_setting_dispatch(self):
+        window = self.window()
+        window._values['md_live_preview'] = False
+        window._apply_setting('md_live_preview')
+        self.assertFalse(window.editor.md_live_preview)
+        self.open_file(window, 'notes.md')
+        self.assertEqual(window.editor.markdown_mode(), 'source')
+        window._values['md_live_preview'] = True
+        window._apply_setting('md_live_preview')
+        self.assertTrue(window.editor.md_live_preview)
 
     def test_startup_applies_stored_values(self):
         stored = dict(CHANGES, theme='idgent-light', editor_font_size=14)
@@ -510,30 +521,30 @@ class WindowWiringTest(unittest.TestCase):
         tab = window.editor._current()
         toolbar = tab._note_toolbar
         self.assertTrue(toolbar.get_mapped())
-        self.assertEqual(tab.md_stack.get_margin_top(), toolbar.get_allocated_height())
+        self.assertEqual(tab.source_scroll.get_margin_top(), toolbar.get_allocated_height())
         y = toolbar.translate_coordinates(tab.page, 0, 0)[1]
         self.assertEqual(y, 0)
         self.assertIs(tab.page.get_parent(), window.editor.notebook)
         tab.buffer.place_cursor(tab.buffer.get_end_iter())
         toolbar.buttons['table'].clicked()
         self.assertEqual(window.editor.buffer_text(path), '# coffi shop\n\n' + notes.TABLE)
-        selection = tab.buffer.get_selection_bounds()
-        self.assertEqual(tab.buffer.get_text(*selection, True), 'Column 1')
+        self.assertFalse(tab.buffer.get_has_selection())
+        spin(.1)
+        self.assertTrue(any(block.kind == 'table' and block.widgets for block in tab.md_renderer.blocks))
         tab.undo()
         self.assertEqual(window.editor.buffer_text(path), '# coffi shop\n\n')
-        # From the preview, a command returns to the source to insert there.
+        # A toolbar command edits the same buffer while retaining live mode.
         window.editor.set_markdown_mode('preview')
         tab.buffer.place_cursor(tab.buffer.get_end_iter())
-        tab._source_cursor = tab.buffer.get_char_count()
         toolbar.buttons['checklist'].clicked()
-        self.assertEqual(tab.md_mode, 'source')
+        self.assertEqual(tab.md_mode, 'preview')
         self.assertEqual(window.editor.buffer_text(path), '# coffi shop\n\n- [ ] ')
         # Other files keep the plain editor; the toolbar leaves a renamed-away note.
         self.assertIsNone(getattr(window.editor.tabs[0], '_note_toolbar', None))
         window.explorer._rename(path, 'coffi shop.txt')
         spin(.05)
         self.assertIsNone(tab._note_toolbar)
-        self.assertEqual(tab.md_stack.get_margin_top(), 0)
+        self.assertEqual(tab.source_scroll.get_margin_top(), 0)
         self.assertIs(main, window.editor.tabs[0].view)
 
     def test_palette_lists_note_commands_and_runs_them(self):

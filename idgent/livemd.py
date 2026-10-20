@@ -34,7 +34,6 @@ class Decoration:
     widgets: list = field(default_factory=list)
     tags: list = field(default_factory=list)
     links: list = field(default_factory=list)
-    visible: bool = False
 
 
 class LiveMarkdown:
@@ -53,11 +52,14 @@ class LiveMarkdown:
         self.max_slice_time = 0
         self.painted_blocks = 0
         self.provider = Gtk.CssProvider()
+        self.accent_provider = Gtk.CssProvider()
+        self._accent = None
         self._handlers = [(self.buffer, self.buffer.connect('insert-text', self._insert)),
                           (self.buffer, self.buffer.connect('delete-range', self._delete)),
                           (self.buffer, self.buffer.connect('changed', self._changed)),
                           (self.buffer, self.buffer.connect('mark-set', self._mark_set)),
                           (view, view.connect('size-allocate', self._resize)),
+                          (view, view.connect('style-updated', self._sync_accent)),
                           (view, view.connect('button-press-event', self._press)),
                           (view, view.connect('motion-notify-event', self._motion)),
                           (view, view.connect('realize', self._realize)),
@@ -74,7 +76,7 @@ class LiveMarkdown:
 
     def tag(self, name, **properties):
         if name not in self.tags:
-            self.tags[name] = self.buffer.create_tag('live-md-' + name)
+            self.tags[name] = self.buffer.get_tag_table().lookup('live-md-' + name) or self.buffer.create_tag('live-md-' + name)
         tag = self.tags[name]
         for key, value in properties.items():
             tag.set_property(key.replace('_', '-'), value)
@@ -118,12 +120,27 @@ textview.live-markdown, textview.live-markdown text {{background:{bg}; color:{fg
             self.tag('syntax-' + kind, foreground=color(kind), foreground_set=valid,
                      weight=Pango.Weight.BOLD if style and style.bold else Pango.Weight.NORMAL,
                      style=Pango.Style.ITALIC if style and style.italic else Pango.Style.NORMAL)
+        self._sync_accent()
         self._resize()
         if self.enabled:
             for block in self.blocks:
                 for tag in block.tags:
                     tag.set_property('foreground', bg)
             self._queue_layout()
+
+    def _sync_accent(self, *_):
+        from idgent import style
+        theme = style.current_theme()
+        if theme is None or 'link' not in self.tags:
+            return
+        accent = theme.ui['accent'], theme.ui['accent_text'], theme.ui['bg']
+        self.tags['link'].set_property('foreground', accent[1])
+        if accent != self._accent:
+            self._accent = accent
+            self.accent_provider.load_from_data(f'''
+.live-md-task check:checked {{background:{accent[0]}; border-color:{accent[0]}; color:{accent[2]};}}
+.live-md-cell link {{color:{accent[1]};}}
+'''.encode())
 
     def set_readable_width(self, enabled):
         self.readable_width = bool(enabled)
@@ -208,7 +225,8 @@ textview.live-markdown, textview.live-markdown text {{background:{bg}; color:{fg
             end = max(end, self._offset(self._dirty_end))
             self.buffer.delete_mark(self._dirty)
             self.buffer.delete_mark(self._dirty_end)
-        self._dirty, self._dirty_end = self._mark(start), self._mark(end)
+        self._dirty = self._mark(start)
+        self._dirty_end = self.buffer.create_mark(None, self.buffer.get_iter_at_offset(end), False)
 
     def _insert(self, _buffer, at, text, _length):
         self._invalidate(at.get_offset(), at.get_offset())
@@ -261,6 +279,9 @@ textview.live-markdown, textview.live-markdown text {{background:{bg}; color:{fg
         for obj, handler in self._handlers:
             obj.disconnect(handler)
         self._handlers.clear()
+        for tag in self.tags.values():
+            self.buffer.get_tag_table().remove(tag)
+        self.tags.clear()
         self.destroyed = True
 
     def _line(self, offset):
@@ -305,7 +326,9 @@ textview.live-markdown, textview.live-markdown text {{background:{bg}; color:{fg
         start = self._offset(self._dirty)
         stop = self._offset(self._dirty_end)
         index = self._index(start) if self.blocks else 0
-        if self.blocks and self._offset(self.blocks[index].end) <= start:
+        while index and self._offset(self.blocks[index - 1].start) == start:
+            index -= 1
+        if self.blocks and self._offset(self.blocks[index].start) < start and self._offset(self.blocks[index].end) <= start:
             index += 1
         for parsed in self._parse(start):
             if parsed is None:
@@ -379,6 +402,7 @@ textview.live-markdown, textview.live-markdown text {{background:{bg}; color:{fg
     def _widget(self, block, widget, offset, role, data=None):
         widget.set_no_show_all(True)
         widget.get_style_context().add_provider(self.provider, Gtk.STYLE_PROVIDER_PRIORITY_USER + 1)
+        widget.get_style_context().add_provider(self.accent_provider, Gtk.STYLE_PROVIDER_PRIORITY_USER + 2)
         self.view.add_child_in_window(widget, Gtk.TextWindowType.WIDGET, 0, 0)
         block.widgets.append((widget, offset - self._offset(block.start), role, data))
         return widget
@@ -386,8 +410,7 @@ textview.live-markdown, textview.live-markdown text {{background:{bg}; color:{fg
     def _paint(self, block):
         a, b = self._offset(block.start), self._offset(block.end)
         cursor = self.buffer.get_iter_at_mark(self.buffer.get_insert())
-        active = a <= cursor.get_offset() < b or b == cursor.get_offset() == self.buffer.get_char_count()
-        block.visible = active
+        active = a <= cursor.get_offset() < b or (b == cursor.get_offset() == self.buffer.get_char_count() and not block.text.endswith('\n'))
         if active:
             self._active.add(block)
         self.painted_blocks += 1
@@ -396,7 +419,7 @@ textview.live-markdown, textview.live-markdown text {{background:{bg}; color:{fg
             return
         if block.kind == 'table':
             if not active:
-                self._table(block)
+                yield from self._table(block)
             return
         line = block.text.rstrip('\n')
         self._apply(block, 'body', a, b)
@@ -437,6 +460,7 @@ textview.live-markdown, textview.live-markdown text {{background:{bg}; color:{fg
                 self._apply(block, 'hidden', a, a + content)
                 if item[3] is not None:
                     check = Gtk.CheckButton()
+                    check.get_style_context().add_class('live-md-task')
                     check.set_active(item[3].lower() == 'x')
                     check.set_can_focus(False)
                     check.set_tooltip_text('Toggle task')
@@ -453,9 +477,12 @@ textview.live-markdown, textview.live-markdown text {{background:{bg}; color:{fg
         if depth > 12:
             return
         covered = []
+        urls = [(match.start(), match.end()) for match in URL.finditer(text)]
         for match in mdview._INLINE.finditer(text):
             a, b = base + match.start(), base + match.end()
             escape, ticks, code, image, label, target, auto, delimiter, body = match.groups()
+            if delimiter and any(first <= match.start() < last for first, last in urls):
+                continue
             covered.append((match.start(), match.end()))
             if escape is not None:
                 if not active:
@@ -613,11 +640,13 @@ textview.live-markdown, textview.live-markdown text {{background:{bg}; color:{fg
                 if column == 0:
                     label.get_style_context().add_class('live-md-first')
                 label.get_style_context().add_provider(self.provider, Gtk.STYLE_PROVIDER_PRIORITY_USER + 1)
+                label.get_style_context().add_provider(self.accent_provider, Gtk.STYLE_PROVIDER_PRIORITY_USER + 2)
                 box = Gtk.EventBox()
                 box.add(label)
                 cell_offset = offsets[row] + max(0, line.find(cell))
                 box.connect('button-press-event', lambda _w, event, at=cell_offset: self._enter_table(block, at, event))
                 grid.attach(box, column, row, 1, 1)
+                yield
         grid.show_all()
         width = self._column_width()
         self._size_grid(grid, width)
@@ -636,16 +665,18 @@ textview.live-markdown, textview.live-markdown text {{background:{bg}; color:{fg
         if not resolved or resolved[0] != 'file':
             return
         try:
-            pixbuf = GdkPixbuf.Pixbuf.new_from_file(resolved[1])
             width = self._column_width()
-            if pixbuf.get_width() > width:
-                pixbuf = pixbuf.scale_simple(width, max(1, round(pixbuf.get_height() * width / pixbuf.get_width())), GdkPixbuf.InterpType.BILINEAR)
+            info, natural_width, _height = GdkPixbuf.Pixbuf.get_file_info(resolved[1])
+            if info is None:
+                return
+            pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(resolved[1], min(width, natural_width), -1, True)
         except GLib.Error:
             return
         image = Gtk.Image.new_from_pixbuf(pixbuf)
         self._apply(block, 'hidden', a + 1, b)
         tag = self.buffer.create_tag(None, size_points=1, foreground=self.chrome['gutter_bg'], pixels_above_lines=pixbuf.get_height() + 8)
         block.tags.append(tag)
+        image._md_image = resolved[1], natural_width, tag
         self.buffer.apply_tag(tag, self.buffer.get_iter_at_offset(a), self.buffer.get_iter_at_offset(a + 1))
         # Override the link delimiter's hidden tag for the reserved image line.
         self.buffer.remove_tag(self.tags['hidden'], self.buffer.get_iter_at_offset(a), self.buffer.get_iter_at_offset(a + 1))
@@ -679,7 +710,8 @@ textview.live-markdown, textview.live-markdown text {{background:{bg}; color:{fg
         offset = self._offset(self.buffer.get_insert())
         index = self._index(offset)
         block = self.blocks[index]
-        active = {block} if self._offset(block.start) <= offset <= self._offset(block.end) else set()
+        active = {block} if self._offset(block.start) <= offset < self._offset(block.end) or (
+            offset == self._offset(block.end) == self.buffer.get_char_count() and not block.text.endswith('\n')) else set()
         for current in self._active.symmetric_difference(active).copy():
             self._clear_paint(current)
             # Large code blocks need the same bounded work as initial painting.
@@ -718,6 +750,16 @@ textview.live-markdown, textview.live-markdown text {{background:{bg}; color:{fg
                     height = widget.get_preferred_height_for_width(self._column_width())[1]
                     if block.tags:
                         block.tags[0].set_property('pixels-above-lines', height)
+                elif role == 'image':
+                    path, natural_width, tag = widget._md_image
+                    width = min(natural_width, self._column_width())
+                    if widget.get_pixbuf().get_width() != width:
+                        try:
+                            pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(path, width, -1, True)
+                        except GLib.Error:
+                            continue
+                        widget.set_from_pixbuf(pixbuf)
+                        tag.set_property('pixels-above-lines', pixbuf.get_height() + 8)
         self._position()
         return False
 
@@ -740,7 +782,8 @@ textview.live-markdown, textview.live-markdown text {{background:{bg}; color:{fg
                 elif role == 'marker':
                     x += data
                 elif role in ('table', 'image', 'rule'):
-                    height = block.tags[0].get_property('pixels-above-lines') if role == 'table' else data
+                    height = (block.tags[0].get_property('pixels-above-lines') if role == 'table' else
+                              widget.get_pixbuf().get_height() if role == 'image' else data)
                     y -= height
                     widget.set_size_request(width if role != 'image' else -1, height)
                 elif role == 'heading-rule':
@@ -803,10 +846,12 @@ textview.live-markdown, textview.live-markdown text {{background:{bg}; color:{fg
         return True
 
     def edit_key(self, event, indent_tabs=False, indent_width=4):
-        if not self.enabled or self.buffer.get_has_selection():
+        if not self.enabled:
             return False
         if event.state & (Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.MOD1_MASK | Gdk.ModifierType.SUPER_MASK):
             return False
+        if self.buffer.get_has_selection():
+            return self._indent_selection(event, indent_tabs, indent_width)
         cursor = self.buffer.get_iter_at_mark(self.buffer.get_insert())
         block = self.blocks[self._index(cursor.get_offset())] if self.blocks else None
         if block and block.kind in ('codeblock', 'table'):
@@ -853,6 +898,38 @@ textview.live-markdown, textview.live-markdown text {{background:{bg}; color:{fg
             self.buffer.insert(self.buffer.get_iter_at_offset(a), replacement)
             position = a + len(replacement) if key in (Gdk.KEY_Return, Gdk.KEY_KP_Enter, Gdk.KEY_BackSpace) else old_cursor + len(replacement) - (b - a)
             self.buffer.place_cursor(self.buffer.get_iter_at_offset(max(a, position)))
+        finally:
+            self.buffer.end_user_action()
+        return True
+
+    def _indent_selection(self, event, tabs, width):
+        if event.keyval not in (Gdk.KEY_Tab, Gdk.KEY_ISO_Left_Tab):
+            return False
+        first, last = self.buffer.get_selection_bounds()
+        first.set_line_offset(0)
+        if last.get_line_offset() == 0:
+            last.backward_char()
+        last.forward_to_line_end()
+        text = self.buffer.get_text(first, last, True)
+        lines = text.split('\n')
+        if not all(not line.strip() or LIST.match(line) for line in lines):
+            return False
+        outdent = event.keyval == Gdk.KEY_ISO_Left_Tab or event.state & Gdk.ModifierType.SHIFT_MASK
+        def replace(line):
+            if not line.strip():
+                return line
+            if outdent:
+                amount = 1 if line.startswith('\t') else min(width, len(line) - len(line.lstrip(' ')))
+                return line[amount:]
+            return ('\t' if tabs else ' ' * width) + line
+        replacement = '\n'.join(replace(line) for line in lines)
+        offset = first.get_offset()
+        self.buffer.begin_user_action()
+        try:
+            self.buffer.delete(first, last)
+            self.buffer.insert(self.buffer.get_iter_at_offset(offset), replacement)
+            self.buffer.select_range(self.buffer.get_iter_at_offset(offset + len(replacement)),
+                                     self.buffer.get_iter_at_offset(offset))
         finally:
             self.buffer.end_user_action()
         return True

@@ -315,6 +315,8 @@ class MainWindow(Gtk.ApplicationWindow):
             self.notify("Open a note or Markdown file to use note commands.")
             return None
         edit = notes.apply_to_buffer(command_id, tab.buffer)
+        if command_id == "table" and tab.md_mode == "preview":
+            tab.buffer.place_cursor(tab.buffer.get_iter_at_offset(edit.start + len(edit.text)))
         tab.view.scroll_to_mark(tab.buffer.get_insert(), 0, False, 0, 0)
         tab.view.grab_focus()
         return edit

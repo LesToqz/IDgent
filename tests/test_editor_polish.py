@@ -418,19 +418,20 @@ class TabsPolishTest(unittest.TestCase):
 
     def test_markdown_defaults_readable_width_and_new_tab_preview(self):
         tab = self.open('note.md', '# Heading\n\n' + 'readable text ' * 100)
-        self.assertEqual(tab.md_mode, 'source')
+        self.assertEqual(tab.md_mode, 'preview')
+        self.panel.set_md_readable_width(False)
         self.panel.set_markdown_mode('preview')
         self.settle()
-        self.assertEqual(tab.md_preview_view.get_left_margin(), 32)
+        self.assertEqual(tab.view.get_left_margin(), 32)
         self.panel.set_md_readable_width(True)
         self.settle()
-        view = tab.md_preview_view
+        view = tab.view
         self.assertLessEqual(view.get_allocated_width() - view.get_left_margin() - view.get_right_margin(), 700)
-        self.panel.set_md_default_preview(True)
+        self.panel.set_md_live_preview(True)
         other = self.open('next.md', '# New preview')
         self.assertEqual(other.md_mode, 'preview')
         self.assertTrue(other.md_renderer.readable_width)
-        self.panel.set_md_default_preview(False)
+        self.panel.set_md_live_preview(False)
         self.assertEqual(other.md_mode, 'preview', 'changing the default preserves an existing choice')
         self.panel.set_md_readable_width(False)
         self.assertEqual(view.get_left_margin(), 32)
@@ -440,21 +441,24 @@ class TabsPolishTest(unittest.TestCase):
         self.window.resize(500, 600)
         self.panel.set_markdown_mode('preview')
         self.settle()
-        self.assertEqual(new.md_preview_view.get_left_margin(), 32)
+        self.assertEqual(new.view.get_left_margin(), 32)
 
     def test_readable_width_positions_rendered_paragraphs_on_toggle_and_resize(self):
         text = 'body ' * 200 + '\n\n> quoted text\n\n```\n' + 'code ' * 100 + '\n```'
         tab = self.open('width.md', text)
+        tab.buffer.place_cursor(tab.buffer.get_end_iter())
         self.panel.set_markdown_mode('preview')
         self.panel.set_md_readable_width(True)
         self.settle()
-        view, buffer = tab.md_preview_view, tab.md_renderer.buffer
+        view, buffer = tab.view, tab.md_renderer.buffer
 
         def assert_positions():
             margin = view.get_left_margin()
             rendered = editor._text(buffer)
             for word, inset in (('body', 0), ('quoted', 22), ('code', 16)):
                 at = buffer.get_iter_at_offset(rendered.index(word))
+                if word == 'quoted':
+                    at.set_line_offset(0)
                 self.assertEqual(view.get_iter_location(at).x, margin + inset)
             # Check actual glyph positions, not just the TextView properties:
             # paragraph TextTags take precedence over view-level margins.
@@ -475,28 +479,6 @@ class TabsPolishTest(unittest.TestCase):
         self.settle()
         self.assertEqual(view.get_left_margin(), 32)
         assert_positions()
-
-    def test_markdown_icon_pixels_follow_active_mode_and_theme(self):
-        from idgent import style
-        from idgent.themes import get_theme
-        tab = self.open('note.md', '# Title')
-        for theme_id in ('idgent-dark', 'idgent-light'):
-            theme = get_theme(theme_id)
-            style.apply_theme(theme)
-            for mode in ('source', 'preview'):
-                self.panel.set_markdown_mode(mode)
-                self.settle()
-                button = tab.md_buttons[mode]
-                color = button.get_style_context().get_color(button.get_state_flags())
-                expected = self.rgb(theme.ui['accent_text'])
-                self.assertEqual(tuple(round(v * 255) for v in (color.red, color.green, color.blue)), expected)
-                image = button.get_child()
-                x, y = image.translate_coordinates(self.window, 0, 0)
-                pixels = self.pixels()
-                colors = [self.pixel(pixels, x + dx, y + dy) for dx in range(20) for dy in range(20)]
-                self.assertIn(expected, colors, 'the actual icon stroke must use the accent colour')
-        self.key(tab, Gdk.KEY_V, Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.SHIFT_MASK)
-        self.assertEqual(tab.md_mode, 'source')
 
     def test_close_reflow_motion_and_reduced_motion(self):
         from idgent import motion
