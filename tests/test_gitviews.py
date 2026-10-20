@@ -27,7 +27,7 @@ def stub(api):
     return '''<!doctype html><meta charset="utf-8"><body><script>
 window.calls=[];window.API={};
 for(const name of ['setData','setCommit','setState','setTheme','setSettings',
-'select','focus','pause','resume','provideContext'])
+'select','focus','pause','resume','provideContext','setOrientation','setOptions'])
 API[name]=(...args)=>calls.push([name,...args]);
 window.send=obj=>webkit.messageHandlers.idgent.postMessage(obj);
 setTimeout(()=>send({type:'ready'}),120);
@@ -161,6 +161,50 @@ class HostTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             view.post('eval', 'bad')
 
+    def test_orientation_options_and_reload(self):
+        view = self.make(show=False)
+        events = []
+        view.connect('orientation-changed', lambda _v, value: events.append(value))
+        self.assertEqual(view.orientation, 'horizontal')
+        view.set_orientation('vertical')
+        view.set_options(False, False, 'absolute')
+        self.windows[-1].show_all()
+        self.ready()
+        self.assertIn(['setOrientation', 'vertical'], self.js('calls'))
+        self.assertIn(['setOptions', dict(showRemotes=False, showTags=False, timeFormat='absolute')], self.js('calls'))
+        self.assertEqual(events, [])
+        view.set_orientation('horizontal')
+        self.assertTrue(poll(lambda: self.js('calls.at(-1)') == ['setOrientation', 'horizontal']))
+        self.assertEqual(events, [])
+        self.send({'type': 'orientation', 'value': 'vertical'})
+        self.send({'type': 'orientation', 'value': 'invalid'})
+        self.assertEqual(events, ['vertical'])
+        self.assertEqual(view.orientation, 'vertical')
+        with self.assertRaises(ValueError):
+            view.set_orientation('invalid')
+        with self.assertRaises(ValueError):
+            view.set_options(True, True, 'invalid')
+        view.webview.reload()
+        self.assertTrue(poll(lambda: not view._ready))
+        self.assertTrue(poll(lambda: view._ready))
+        self.assertIn(['setOrientation', 'vertical'], self.js('calls'))
+        self.assertIn(['setOptions', dict(showRemotes=False, showTags=False, timeFormat='absolute')], self.js('calls'))
+        self.assertEqual(events, ['vertical'])
+
+    def test_commit_limit_clamps_and_refreshes_once(self):
+        view = self.make()
+        self.ready()
+        original = gitviews.gitlog.collect_graph
+        with patch.object(gitviews.gitlog, 'collect_graph', wraps=original) as collect:
+            for value, expected in ((1, 100), (20000, 10000), (1750, 1750)):
+                collect.reset_mock()
+                view.set_max_commits(value)
+                self.assertTrue(poll(lambda: not view._worker_running))
+                collect.assert_called_once_with(view.root, limit=expected)
+                view.set_max_commits(value)
+                self.assertEqual(collect.call_count, 1)
+        self.assertEqual(self.errors, [])
+
     def test_error_and_empty_states(self):
         GitRepo(self.root / 'empty')
         for root, state in ((self.root / 'empty', 'empty'), (self.root, 'not-a-repo')):
@@ -181,16 +225,16 @@ class HostTest(unittest.TestCase):
         entered, release = threading.Event(), threading.Event()
         calls = []
         active = []
-        def collect(root):
+        def collect(root, limit=1500):
             self.assertFalse(active)
             active.append(True)
             calls.append(True)
             if len(calls) == 1:
                 entered.set()
                 release.wait(3)
-                data = dict(original(root), total=999)
+                data = dict(original(root, limit=limit), total=999)
             else:
-                data = original(root)
+                data = original(root, limit=limit)
             active.pop()
             return data
         with patch.object(gitviews.gitlog, 'collect_graph', side_effect=collect):
@@ -400,11 +444,11 @@ class HostTest(unittest.TestCase):
         other = build_linear(self.root / 'other', 4)
         original = gitviews.gitlog.collect_graph
         entered, release = threading.Event(), threading.Event()
-        def collect(root):
+        def collect(root, limit=1500):
             if root == str(self.repo.path):
                 entered.set()
                 release.wait(3)
-            return original(root)
+            return original(root, limit=limit)
         with patch.object(gitviews.gitlog, 'collect_graph', side_effect=collect):
             view.refresh()
             self.assertTrue(entered.wait(2))

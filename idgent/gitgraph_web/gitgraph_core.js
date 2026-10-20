@@ -161,7 +161,7 @@
    * { nodes[], byHash: Map, lanes[], edges[], stubs[], runs[], head, mainLane, maxCol, minSlot, maxSlot, bySlot }.
    * nodes[i] mirrors commits[i] (newest first) plus col/lane/slot; lanes[0] is the default branch (slot 0).
    */
-  function layout(data) {
+  function layout(data, orientation) {
     const commits = (data && Array.isArray(data.commits)) ? data.commits : [];
     const nodes = [];
     const byHash = new Map();
@@ -353,11 +353,18 @@
     for (const list of bySlot.values()) list.sort((a, b) => nodes[a].col - nodes[b].col);
 
     return {
+      orientation: orientation === 'vertical' ? 'vertical' : 'horizontal',
       nodes, byHash, lanes, edges, stubs, runs, bySlot, maxCol, minSlot, maxSlot,
       head: headIdx, detached: !!head.detached, headBranch: curBranch, mainLane: lanes.length && lanes[0].main ? 0 : -1,
       dirty: data && data.dirty && +data.dirty.changed > 0 ? +data.dirty.changed : 0,
       truncated: !!(data && data.truncated), total: data && +data.total || n,
     };
+  }
+
+  /** Project the same lane/order assignment into either view. Newest is at the top vertically. */
+  function position(L, i, gap, colW) {
+    const nd = L.nodes[i], t = nd.col * (colW || C.colW), lane = nd.slot * (gap || C.laneGap);
+    return L.orientation === 'vertical' ? { x: lane, y: L.maxCol * (colW || C.colW) - t } : { x: t, y: lane };
   }
 
   /** Colour index per lane: from the branch name / base hash, skipping `skip`, avoiding a neighbour's colour. */
@@ -384,7 +391,21 @@
 
   // ---------------------------------------------------------------- edge geometry
   /** Horizontal run + cubic S-curve with horizontal tangents. Returns [{t:'L',x0,y0,x1,y1}|{t:'C',x0,y0,c1x,c1y,c2x,c2y,x1,y1}]. */
-  function edgeSegments(px, py, cx, cy, route, colW) {
+  function edgeSegments(px, py, cx, cy, route, colW, orientation) {
+    if (orientation === 'vertical') {
+      return edgeSegments(-py, px, -cy, cx, route, colW).map((s) => {
+        const out = { t: s.t, x0: s.y0, y0: -s.x0, x1: s.y1, y1: -s.x1 };
+        if (s.t === 'C') Object.assign(out, { c1x: s.c1y, c1y: -s.c1x, c2x: s.c2y, c2y: -s.c2x });
+        return out;
+      });
+    }
+    if (cx < px) {
+      return edgeSegments(-px, py, -cx, cy, route, colW).map((s) => {
+        const out = Object.assign({}, s, { x0: -s.x0, x1: -s.x1 });
+        if (s.t === 'C') { out.c1x = -s.c1x; out.c2x = -s.c2x; }
+        return out;
+      });
+    }
     if (route === 'straight' || Math.abs(py - cy) < 0.5) return [{ t: 'L', x0: px, y0: py, x1: cx, y1: cy }];
     const dx = cx - px, dy = Math.abs(cy - py);
     const w = Math.max(1, Math.min(dx, clamp(dy * 0.9, colW * 0.95, colW * 2.2)));
@@ -485,7 +506,8 @@
     const measure = o.measure || ((t, size) => t.length * size * 0.58);
     const k = clamp(gap / C.laneGap, 0.8, 1);
     const showRemote = o.showRemote !== false, showTags = o.showTags !== false;
-    const X = (i) => L.nodes[i].col * colW, Y = (i) => L.nodes[i].slot * gap;
+    const vertical = L.orientation === 'vertical';
+    const X = (i) => position(L, i, gap, colW).x, Y = (i) => position(L, i, gap, colW).y;
     const want = [];
     const S = { pill: 13 * k, callout: 12 * k, tag: 11 * k, head: 11.5 * k };
 
@@ -509,7 +531,7 @@
       if (extra) w += measure('+' + extra, 11 * k, 600) + 12;
       if (lane.current) w += 10;
       const h = 24 * k;
-      const anchor = lane.base, ax = X(anchor), ay = Y(anchor);
+      const anchor = vertical ? lane.tipIdx : lane.base, ax = X(anchor), ay = Y(anchor);
       const side = lane.slot > 0 ? 1 : -1;
       const yFor = (sd) => ay + sd * gap / 2 - h / 2;
       const cands = [];
@@ -562,6 +584,20 @@
       want.push({ kind: 'stub', node: st.node, lane: L.nodes[st.node].lane, text, full: 'History is truncated here: older commits are not shown', w, h, ax, ay, cands, priority: PRIORITY.stub });
     }
 
+    if (vertical) {
+      for (const lb of want) {
+        const { ax, ay, w, h } = lb;
+        lb.vertical = true;
+        lb.cands = [];
+        if (lb.kind === 'pill') {
+          for (const dy of [38, 68, 98]) lb.cands.push({ x: ax - w / 2, y: ay - dy - h, side: -1 });
+        }
+        for (const sd of [1, -1]) for (const dy of [0, -28, 28, -56, 56]) {
+          lb.cands.push({ x: sd > 0 ? ax + 25 : ax - 25 - w, y: ay - h / 2 + dy, side: sd });
+        }
+      }
+    }
+
     // obstacles: dots (hard), curve boxes (soft)
     const hard = new Grid(64), soft = new Grid(64);
     for (const nd of L.nodes) {
@@ -571,7 +607,7 @@
     for (const e of L.edges) {
       if (e.kind === 'lane') continue;
       const p = L.nodes[e.p], c = L.nodes[e.c];
-      const segs = edgeSegments(X(e.p), Y(e.p), X(e.c), Y(e.c), e.route, colW);
+      const segs = edgeSegments(X(e.p), Y(e.p), X(e.c), Y(e.c), e.route, colW, L.orientation);
       for (const s of segs) {
         if (s.t !== 'C') continue;
         // sample the curve: labels should not cover the line itself (its bounding box is fine)
@@ -586,8 +622,8 @@
     }
     if (L.head >= 0) {                                    // the tail
       const ax = X(L.head), ay = Y(L.head);
-      hard.add({ x: ax + 12, y: ay - 3, w: C.tail, h: 6 });
-      hard.add({ x: ax + C.tail - 9, y: ay - 9, w: 18 + (L.dirty ? 16 : 0), h: 18 });
+      hard.add(vertical ? { x: ax - 3, y: ay - C.tail, w: 6, h: C.tail - 12 } : { x: ax + 12, y: ay - 3, w: C.tail, h: 6 });
+      hard.add(vertical ? { x: ax - 9, y: ay - C.tail - 9, w: 34, h: 18 } : { x: ax + C.tail - 9, y: ay - 9, w: 18 + (L.dirty ? 16 : 0), h: 18 });
     }
     want.sort((a, b) => b.priority - a.priority);
     const placed = new Grid(64);
@@ -612,6 +648,7 @@
   // ---------------------------------------------------------------- navigation
   function navigate(L, idx, dir) {
     if (!L || !L.nodes.length) return -1;
+    if (L.orientation === 'vertical') dir = ({ up: 'right', down: 'left', left: 'up', right: 'down' })[dir] || dir;
     const N = L.nodes;
     if (dir === 'home') {
       let best = -1;
@@ -696,7 +733,7 @@
   const api = {
     C, clamp, hashStr, rng, ease, approach, ellipsize, shortMerge, absTime, relTime,
     parseColor, toHex, rgba, mix, luminance, contrast, legible, nearestColorIdx,
-    layout, assignColors, edgeSegments, segLength, splitCubic, partialSegments, rectsOverlap, placeLabels, navigate, synth,
+    layout, position, assignColors, edgeSegments, segLength, splitCubic, partialSegments, rectsOverlap, placeLabels, navigate, synth,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.GitGraphCore = api;

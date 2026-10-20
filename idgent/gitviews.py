@@ -377,12 +377,16 @@ class _WebHost(Gtk.Box):
 
 
 class GitGraphView(_WebHost):
+    __gsignals__ = {'orientation-changed': (GObject.SignalFlags.RUN_LAST, None, (str,))}
     _api = 'IDGit'
     _page = 'gitgraph_web/gitgraph.html'
-    _commands = frozenset(('setData', 'setState', 'setTheme', 'setSettings', 'select',
+    _commands = frozenset(('setData', 'setState', 'setTheme', 'setSettings', 'setOrientation', 'setOptions', 'select',
                            'focus', 'pause', 'resume'))
 
     def __init__(self, root: str, *, page: str | None = None):
+        self._orientation = 'horizontal'
+        self._options = dict(showRemotes=True, showTags=True, timeFormat='relative')
+        self._max_commits = 1500
         self._worker_running = False
         self._dirty = False
         self._digest = None
@@ -397,6 +401,33 @@ class GitGraphView(_WebHost):
             self._connect(self, 'hierarchy-changed', self._hierarchy_changed)
             self._generation += 1
             self._start_collection()
+
+    @property
+    def orientation(self):
+        return self._orientation
+
+    def set_orientation(self, orientation: str):
+        if orientation not in ('horizontal', 'vertical'):
+            raise ValueError('Orientation must be horizontal or vertical')
+        self._orientation = orientation
+        self.post('setOrientation', orientation)
+
+    def set_options(self, show_remotes: bool, show_tags: bool, time_format: str):
+        if time_format not in ('relative', 'absolute'):
+            raise ValueError('Time format must be relative or absolute')
+        self._options = dict(showRemotes=bool(show_remotes), showTags=bool(show_tags), timeFormat=time_format)
+        self.post('setOptions', self._options)
+
+    def set_max_commits(self, limit: int):
+        limit = max(100, min(10000, int(limit)))
+        if limit != self._max_commits:
+            self._max_commits = limit
+            self.refresh()
+
+    def _settings(self):
+        super()._settings()
+        self.post('setOrientation', self._orientation)
+        self.post('setOptions', self._options)
 
     def set_theme(self, ui: dict, accent: str):
         self._apply_theme(git_colors(ui, accent))
@@ -456,9 +487,9 @@ class GitGraphView(_WebHost):
         self._worker_running = True
         self._dirty = False
         generation = self._generation
-        root = self.root
+        root, limit = self.root, self._max_commits
         def collect():
-            data = gitlog.collect_graph(root)
+            data = gitlog.collect_graph(root, limit=limit)
             directories = set()
             # Linked worktrees keep HEAD locally and refs in the common Git dir.
             for arg in ('--absolute-git-dir', '--git-common-dir'):
@@ -548,8 +579,15 @@ class GitGraphView(_WebHost):
             self._start_collection()
 
     def _page_message(self, message):
+        if self._closed:
+            return
         if message.get('type') == 'refresh':
             self.refresh()
+        elif message.get('type') == 'orientation':
+            value = message.get('value')
+            if value in ('horizontal', 'vertical') and value != self._orientation:
+                self._orientation = value
+                self.emit('orientation-changed', value)
 
     def shutdown(self):
         if self._closed:

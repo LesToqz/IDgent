@@ -303,3 +303,48 @@ test('synthetic 1500 commits: bounded lanes, invariants, layout budget', () => {
   assert.ok(L.runs.every((r) => r.count >= G.C.runMin));
   console.log(`# layout(1500) ${ms.toFixed(1)} ms, labels ${lms.toFixed(1)} ms, ${slots} lanes, ${L.runs.length} runs`);
 });
+
+test('both orientations share lanes and order, transpose nodes and edge tangents', () => {
+  const detached = clone(SHOW);
+  detached.head = { hash: detached.commits[3].hash, detached: true, branch: null };
+  const cases = [SHOW, DELETED, detached, build([['one', [], [{ name: 'master', kind: 'branch', current: true }]]]), { commits: [] }];
+  for (const data of cases) {
+    const H = G.layout(data, 'horizontal'), V = G.layout(data, 'vertical');
+    invariants(V, 'vertical');
+    assert.deepEqual(V.nodes.map((n) => [n.hash, n.col, n.slot, n.lane]), H.nodes.map((n) => [n.hash, n.col, n.slot, n.lane]));
+    const seen = new Set();
+    for (const nd of V.nodes) {
+      const h = G.position(H, nd.i, 76), v = G.position(V, nd.i, 76);
+      assert.equal(v.x, h.y);
+      assert.equal(v.y, V.maxCol * G.C.colW - h.x);
+      assert.ok(!seen.has(v.x + ',' + v.y)); seen.add(v.x + ',' + v.y);
+      for (const p of nd.parents) assert.ok(G.position(V, p, 76).y > v.y);
+      if (nd.lane === V.mainLane) assert.equal(v.x, 0);
+    }
+    for (const e of V.edges) {
+      const p = G.position(V, e.p, 76), c = G.position(V, e.c, 76);
+      const segs = G.edgeSegments(p.x, p.y, c.x, c.y, e.route, 56, 'vertical');
+      assert.deepEqual([segs[0].x0, segs[0].y0], [p.x, p.y]);
+      assert.deepEqual([segs.at(-1).x1, segs.at(-1).y1], [c.x, c.y]);
+      for (const s of segs.filter((s) => s.t === 'C')) {
+        assert.equal(s.c1x, s.x0); assert.equal(s.c2x, s.x1);
+      }
+    }
+    for (const gap of [34, 76, 190]) {
+      const labels = G.placeLabels(V, { gap });
+      const vis = labels.filter((l) => !l.hidden);
+      for (let i = 0; i < vis.length; i++) for (let j = i + 1; j < vis.length; j++) assert.ok(!G.rectsOverlap(vis[i], vis[j], 0));
+      if (V.head >= 0) assert.ok(vis.some((l) => l.kind === 'head'));
+      if (data === SHOW) assert.equal(vis.filter((l) => l.kind === 'pill').length, 6, 'all showcase branch pills stay visible');
+      for (const lb of vis) for (const nd of V.nodes) {
+        const p = G.position(V, nd.i, gap);
+        assert.ok(!G.rectsOverlap(lb, { x: p.x - G.C.dotR, y: p.y - G.C.dotR, w: G.C.dotR * 2, h: G.C.dotR * 2 }, 0), 'labels leave the dots clear');
+      }
+      for (const pill of labels.filter((l) => l.kind === 'pill')) assert.equal(pill.node, V.lanes[pill.lane].tipIdx);
+    }
+  }
+  const V = G.layout(SHOW, 'vertical');
+  const head = V.head;
+  assert.equal(G.navigate(V, head, 'down'), V.nodes[head].parents[0]);
+  assert.equal(G.navigate(V, V.nodes[head].parents[0], 'up'), head);
+});
