@@ -114,9 +114,14 @@ class SearchWiringTest(unittest.TestCase):
         children = self.explorer.get_children()
         self.assertEqual(len(children), 2)
         self.assertIn('idgent-explorer-header', [c for c in children[0].get_style_context().list_classes()])
-        self.assertIs(children[1], self.search)
+        split = children[1]
+        self.assertIsInstance(split, Gtk.Paned)
+        self.assertEqual(split.get_orientation(), Gtk.Orientation.VERTICAL)
+        self.assertIs(split.get_child1(), self.search)
+        self.assertIs(split.get_child2(), self.explorer.notes_section)
         row = self.search.get_children()[0]
         self.assertIs(row.get_children()[0], self.search.entry)
+        self.assertIs(self.search.get_children()[1], self.search.stack)
         self.assertEqual(self.search.stack.get_visible_child_name(), 'content')
         self.assertTrue(self.explorer.tree.is_ancestor(self.search))
 

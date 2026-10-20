@@ -192,17 +192,22 @@ class HostTest(unittest.TestCase):
         self.assertEqual(events, ['vertical'])
 
     def test_commit_limit_clamps_and_refreshes_once(self):
-        view = self.make()
-        self.ready()
-        original = gitviews.gitlog.collect_graph
-        with patch.object(gitviews.gitlog, 'collect_graph', wraps=original) as collect:
-            for value, expected in ((1, 100), (20000, 10000), (1750, 1750)):
-                collect.reset_mock()
-                view.set_max_commits(value)
-                self.assertTrue(poll(lambda: not view._worker_running))
-                collect.assert_called_once_with(view.root, limit=expected)
-                view.set_max_commits(value)
-                self.assertEqual(collect.call_count, 1)
+        view = self.make(show=False)
+        # Window focus schedules an independent refresh after 300 ms. Keep it
+        # out of these setter counts; test_monitor_focus_and_hidden_dirty covers it.
+        with self.windows[-1].handler_block(view._focus_handler):
+            self.windows[-1].show_all()
+            self.ready()
+            self.assertTrue(poll(lambda: not view._worker_running))
+            original = gitviews.gitlog.collect_graph
+            with patch.object(gitviews.gitlog, 'collect_graph', wraps=original) as collect:
+                for value, expected in ((1, 100), (20000, 10000), (1750, 1750)):
+                    collect.reset_mock()
+                    view.set_max_commits(value)
+                    self.assertTrue(poll(lambda: not view._worker_running))
+                    collect.assert_called_once_with(view.root, limit=expected)
+                    view.set_max_commits(value)
+                    self.assertEqual(collect.call_count, 1)
         self.assertEqual(self.errors, [])
 
     def test_error_and_empty_states(self):
