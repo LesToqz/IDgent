@@ -822,20 +822,17 @@ class MainWindow(Gtk.ApplicationWindow):
         if extent <= 1:
             return
         if shown:
-            # Not allocated yet: the handle is not measurable from the children.
-            handle = dock.style_get_property("handle-size")
-        else:
-            first, second = dock.get_child1().get_allocation(), panel.get_allocation()
-            handle = max(0, extent - (first.width + second.width if right
-                                      else first.height + second.height))
-        available = extent - handle
-        if not shown and self._size_pending[panel] == ("shown", extent):
-            self._size_pending[panel] = False
+            # Allocate the newly visible child so the size-allocate handler can
+            # measure the separator, including its CSS borders, from live sizes.
+            dock.size_allocate(allocation)
             return
+        first, second = dock.get_child1().get_allocation(), panel.get_allocation()
+        handle = max(0, extent - (first.width + second.width if right
+                                  else first.height + second.height))
+        available = extent - handle
         size = (min(max(round(extent * .4), 380), int(extent * .6), available - 300)
                 if right else min(max(round(extent * .3), 150), available - 150))
-        # A show-time size is confirmed by the first allocation at the same extent.
-        self._size_pending[panel] = ("shown", extent) if shown else False
+        self._size_pending[panel] = (second.width if right else second.height) != max(0, size)
         # The initial allocation may precede this queued divider move by a
         # frame. New shells must wait until the panel receives this extent.
         panel._initial_dock_extent = (right, max(0, size))
