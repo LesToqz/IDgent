@@ -277,9 +277,11 @@ class NotesSectionTests(unittest.TestCase):
         self.assertTrue(wait_for(lambda: self.names() == []))
         # F5 and window focus also refresh a list even if a monitor event is missed.
         with patch.object(p, 'refresh', wraps=p.refresh) as refresh:
-            self.key(Gdk.KEY_F5)
-            self.window.emit('focus-in-event', Gdk.Event.new(Gdk.EventType.FOCUS_CHANGE))
-        self.assertGreaterEqual(refresh.call_count, 2)
+            with patch.object(p, 'refresh_notes', wraps=p.refresh_notes) as refresh_notes:
+                self.key(Gdk.KEY_F5)
+                self.window.emit('focus-in-event', Gdk.Event.new(Gdk.EventType.FOCUS_CHANGE))
+        refresh.assert_called_once_with()
+        self.assertGreaterEqual(refresh_notes.call_count, 2)
         self.assertEqual(p.notes_count.get_text(), '0')
 
     def test_feature_gate_prevents_show_all_and_restores_visibility(self):

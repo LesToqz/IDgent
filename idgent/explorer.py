@@ -327,7 +327,7 @@ class ExplorerPanel(Gtk.Box):
             self._notes_window.disconnect(self._notes_focus_signal)
         top = self.get_toplevel()
         self._notes_window = top if isinstance(top, Gtk.Window) else None
-        self._notes_focus_signal = (top.connect("focus-in-event", lambda *_: (self.refresh(), False)[1])
+        self._notes_focus_signal = (top.connect("focus-in-event", lambda *_: (self.refresh_notes(), False)[1])
                                     if self._notes_window else None)
 
     def _rename_note(self) -> None:
