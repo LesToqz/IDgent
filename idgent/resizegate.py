@@ -5,6 +5,10 @@ geometry together.
 """
 from __future__ import annotations
 
+import array
+import fcntl
+import termios
+
 import gi
 
 gi.require_version("Gtk", "3.0")
@@ -19,9 +23,12 @@ class ResizeGate(Gtk.Bin):
     descendant changed its grid in the previous commit and its program has not
     redrawn yet: a shell's SIGWINCH redraw is computed for one width, and VTE
     would otherwise interpret it at the next one (overwritten prompts, erased
-    history lines). Such a commit waits for the terminal's next contents change,
-    or ``PACE_MS`` for a program which does not redraw. Meanwhile the private
-    Gdk window clips the child, or our background fills the extra space.
+    history lines, stacked copies of a prompt's first row). Such a commit waits
+    until the program has written to its PTY and VTE has read all of it, or
+    ``PACE_MS`` for a program which does not redraw. VTE's own
+    ``contents-changed`` for the resize is not an answer: it arrives a frame
+    later even when the program has written nothing. Meanwhile the private Gdk
+    window clips the child, or our background fills the extra space.
 
     ``commit()`` applies the latest allocation immediately; it never changes
     terminal contents or sends input to a child process.
@@ -48,6 +55,13 @@ class ResizeGate(Gtk.Bin):
         self._timer = None
         # Terminals whose program has not yet answered our last grid change.
         self._answers = []
+        # Terminal -> PTY watch until its program writes; then it is _written.
+        self._watches = {}
+        self._written = set()
+        # The release timeout was extended for an answer VTE had not parsed.
+        self._extended = False
+        # commit_when_answered() arrived while waiting.
+        self._commit_requested = False
         self._release = None
         self._destroyed = False
         self._background_provider = None
@@ -199,18 +213,52 @@ class ResizeGate(Gtk.Bin):
         for terminal in terminals:
             handler = terminal.connect("contents-changed", self._answered)
             self._answers.append((terminal, handler))
+            # VTE reads its PTY from the main loop, after a high-priority watch
+            # on the same descriptor has seen the program's first bytes. Without
+            # a PTY, any parsed (fed) output is the answer.
+            pty = terminal.get_pty()
+            if pty is not None:
+                self._watches[terminal] = GLib.unix_fd_add_full(
+                    GLib.PRIORITY_HIGH, pty.get_fd(), GLib.IOCondition.IN, self._wrote, terminal)
+        self._extended = False
         self._release = GLib.timeout_add(max(1, int(self.PACE_MS)), self._released)
+
+    def _wrote(self, _fd, _condition, terminal):
+        if self._watches.pop(terminal, None) is not None:
+            self._written.add(terminal)
+        return GLib.SOURCE_REMOVE
 
     def _stop_waiting(self):
         for terminal, handler in self._answers:
             if terminal.handler_is_connected(handler):
                 terminal.disconnect(handler)
         self._answers = []
+        for source in self._watches.values():
+            GLib.source_remove(source)
+        self._watches = {}
+        self._written = set()
         if self._release is not None:
             GLib.source_remove(self._release)
             self._release = None
 
+    @staticmethod
+    def _unread(terminal):
+        """Bytes the program wrote which VTE has not read yet."""
+        pty = terminal.get_pty()
+        if pty is None:
+            return 0
+        count = array.array("i", [0])
+        try:
+            fcntl.ioctl(pty.get_fd(), termios.FIONREAD, count)
+        except OSError:
+            return 0
+        return count[0]
+
     def _answered(self, terminal):
+        # Ignore VTE's signal for the resize itself, and an answer VTE has
+        # only partly parsed: the rest would be interpreted at the next grid.
+        if terminal in self._watches or self._unread(terminal):
+            return
         for index, (other, handler) in enumerate(self._answers):
             if other is terminal:
                 terminal.disconnect(handler)
@@ -224,6 +272,13 @@ class ResizeGate(Gtk.Bin):
 
     def _released(self):
         self._release = None
+        if not self._extended and any(terminal in self._written
+                                      for terminal, _handler in self._answers):
+            # The answer is in flight (VTE reads its PTY lazily); releasing now
+            # would let VTE parse it at the next grid. Wait once more.
+            self._extended = True
+            self._release = GLib.timeout_add(max(1, int(self.PACE_MS)), self._released)
+            return GLib.SOURCE_REMOVE
         self._stop_waiting()
         self._settled()
         return GLib.SOURCE_REMOVE
@@ -235,13 +290,22 @@ class ResizeGate(Gtk.Bin):
 
     def _settled(self):
         self._timer = None
-        if not self._answers and self._target is not None and self._target != self._committed:
+        if not self._answers and self._target is not None and (
+                self._target != self._committed or self._commit_requested):
             self.commit()
         return GLib.SOURCE_REMOVE
+
+    def commit_when_answered(self):
+        """Apply the latest size now, or once the terminals have redrawn."""
+        if self._answers:
+            self._commit_requested = True
+        else:
+            self.commit()
 
     def commit(self):
         """Apply the latest size now, cancelling any outstanding timeout."""
         self._cancel_timer()
+        self._commit_requested = False
         if self._destroyed:
             return
         if self._target is None:

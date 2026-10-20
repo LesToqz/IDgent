@@ -151,6 +151,8 @@ class TerminalPanel(Gtk.Box):
 
         Map/unmap also covers View menu dock changes and fullscreen ancestors.
         The frame clock runs this after painting; divider motion never schedules this.
+        Opening or closing one dock resizes the other one's shells too, so a gate
+        still waiting for its shell's redraw commits after that redraw instead.
         """
         toplevel = self.get_toplevel()
         if not isinstance(toplevel, Gtk.Widget) or self._destroyed:
@@ -172,7 +174,7 @@ class TerminalPanel(Gtk.Box):
 
             def commit_descendants(child):
                 if isinstance(child, ResizeGate) and child.get_mapped():
-                    child.commit()
+                    child.commit_when_answered()
                 elif isinstance(child, Gtk.Container):
                     for descendant in child.get_children():
                         commit_descendants(descendant)
