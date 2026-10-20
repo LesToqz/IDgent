@@ -65,18 +65,27 @@ class ParserTest(unittest.TestCase):
         self.assertEqual(blocks[0].text, 'first\ncontinuation')
         self.assertEqual(blocks[1].indent, 2)
 
-    def test_tables_are_aligned(self):
-        blocks = list(mdview.parse_blocks('| A | Bee |\n| --- | :---: |\n| longer | x |'))
+    def test_tables_preserve_cells_headers_and_alignment(self):
+        blocks = list(mdview.parse_blocks('| A | Bee | C |\n| :--- | :---: | ---: |\n| longer | x | 1 |\n| end | y | 2 |'))
         self.assertTrue(all(b.kind == 'table' for b in blocks))
-        rows = [b.text.rstrip('\n') for b in blocks]
-        self.assertEqual(len(rows[0]), len(rows[-1]))
-        self.assertIn('longer', rows[-1])
-        self.assertIn('─', rows[1])
+        self.assertEqual([b.header for b in blocks], [True, False, False])
+        self.assertEqual(blocks[0].cells, ('A', 'Bee', 'C'))
+        self.assertEqual(blocks[1].cells, ('longer', 'x', '1'))
+        self.assertEqual(blocks[2].cells, ('end', 'y', '2'))
+        self.assertTrue(all(b.alignments == ('left', 'center', 'right') for b in blocks))
         long_table = list(mdview.parse_blocks('| A | B |\n| --- | --- |\n' + '| row | cell |\n' * 300))
-        self.assertTrue(all(b.kind == 'table' for b in long_table))
-        self.assertEqual(sum('row' in b.text for b in long_table), 300)
+        self.assertEqual(len(long_table), 301)
+        self.assertTrue(all(b.cells == ('row', 'cell') for b in long_table[1:]))
         wide_table = list(mdview.parse_blocks('| A | B |\n| --- | --- |\n| ' + 'x' * 1000 + ' | tail |'))
-        self.assertEqual(sum(b.text.count('x') for b in wide_table), 1000)
+        self.assertEqual(wide_table[1].cells, ('x' * 1000, 'tail'))
+
+    def test_table_escaped_pipes_and_optional_outer_separators(self):
+        blocks = list(mdview.parse_blocks('A | B\n--- | ---:\nleft \\| middle | `right \\| end`\nonly |'))
+        self.assertEqual(blocks[1].cells, (r'left \| middle', r'`right \| end`'))
+        self.assertEqual(''.join(s.text for s in mdview.parse_inline(blocks[1].cells[0])), 'left | middle')
+        self.assertEqual(blocks[2].cells, ('only', ''))
+        self.assertEqual(mdview._cells(r'| a\\ | b |'), [r'a\\', 'b'])
+        self.assertFalse(any(b.kind == 'table' for b in mdview.parse_blocks('| A | B | C |\n| --- | --- |')))
 
     def test_raw_html_and_images_remain_inert(self):
         spans = mdview.parse_inline('<script>alert(1)</script> ![a cat](https://invalid/image.png)')
@@ -138,10 +147,79 @@ class RendererTest(unittest.TestCase):
         self.render('```python\ndef f():\n    return 123\n```')
         if highlight.AVAILABLE:
             b = self.preview.buffer
-            self.assertTrue(b.get_iter_at_offset(0).has_tag(self.preview.tags['syntax-keyword']) or
-                            b.get_iter_at_offset(0).has_tag(self.preview.tags['syntax-control']))
+            start = b.get_slice(b.get_start_iter(), b.get_end_iter(), True).index('def')
+            self.assertTrue(b.get_iter_at_offset(start).has_tag(self.preview.tags['syntax-keyword']) or
+                            b.get_iter_at_offset(start).has_tag(self.preview.tags['syntax-control']))
         with patch.object(highlight, 'AVAILABLE', False):
             self.assertIn('return 123', self.render('```python\nreturn 123\n```'))
+
+    def test_table_renders_bordered_cells_with_inline_styles_and_alignment(self):
+        self.render('| A | B | C |\n| :--- | :---: | ---: |\n| **bold** | left \\| right | `command` |\n| next | [web](https://example.org) | 2 |')
+        rows = [w for w in self.preview._widgets if isinstance(w, Gtk.Grid)]
+        self.assertEqual(len(rows), 3)
+        self.assertEqual([rows[0].get_child_at(c, 0).get_text() for c in range(3)], ['A', 'B', 'C'])
+        for c, align in enumerate((0, .5, 1)):
+            label = rows[1].get_child_at(c, 0)
+            self.assertEqual(label.get_xalign(), align)
+            self.assertTrue(label.get_line_wrap())
+            self.assertEqual(label.get_style_context().get_border(Gtk.StateFlags.NORMAL).right, 1)
+            self.assertTrue(rows[0].get_child_at(c, 0).get_style_context().has_class('md-header'))
+        self.assertIn('<b>bold</b>', rows[1].get_child_at(0, 0).get_label())
+        self.assertEqual(rows[1].get_child_at(1, 0).get_text(), 'left | right')
+        with patch.object(self.preview, 'activate_link') as activate:
+            rows[2].get_child_at(1, 0).emit('activate-link', 'https://example.org')
+            activate.assert_called_once_with('https://example.org')
+
+    def test_table_width_tracks_readable_column_and_window_resize(self):
+        window = Gtk.Window()
+        self.addCleanup(window.destroy)
+        window.set_default_size(1000, 500)
+        scroll = Gtk.ScrolledWindow()
+        scroll.add(self.preview.view)
+        window.add(scroll)
+        self.preview.set_readable_width(True)
+        self.render('| A | B |\n| --- | --- |\n| ' + 'long text ' * 40 + ' | ' + 'command_' * 40 + ' |')
+        window.show_all()
+        rows = [w for w in self.preview._widgets if isinstance(w, Gtk.Grid)]
+        drain(lambda: rows[1].get_allocated_width() > 600)
+        self.assertLessEqual(rows[1].get_allocated_width(), 700)
+        self.assertGreater(rows[1].get_allocated_height(), 40)
+        window.resize(560, 500)
+        drain(lambda: rows[1].get_allocated_width() < 510)
+        self.assertEqual(rows[0].get_allocated_width(), rows[1].get_allocated_width())
+        for c in range(2):
+            self.assertEqual(rows[0].get_child_at(c, 0).get_allocated_width(),
+                             rows[1].get_child_at(c, 0).get_allocated_width())
+        self.assertLessEqual(scroll.get_hadjustment().get_upper(), scroll.get_hadjustment().get_page_size())
+
+    def test_each_fence_has_copy_button_including_empty_and_chunked_code(self):
+        large = 'x' * (mdview.CHUNK * 3) + '\n'
+        self.render('```sh\nprintf "<&>"\n```\n~~~\n' + large + '~~~\n```\n```')
+        tools = [w for w in self.preview._widgets if isinstance(w, Gtk.Box)]
+        self.assertEqual(len(tools), 3)
+        from gi.repository import Gdk
+        clipboard = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
+        for box, expected in zip(tools, ('printf "<&>"\n', large, '')):
+            button = box.get_children()[0]
+            self.assertIsInstance(button.get_image(), Gtk.Image)
+            self.assertEqual(button.get_accessible().get_name(), 'Copy code')
+            button.clicked()
+            self.assertEqual(clipboard.wait_for_text() or '', expected)
+            self.assertEqual(button.get_tooltip_text(), 'Copied!')
+        drain(lambda: all(b.get_children()[0].get_tooltip_text() == 'Copy code' for b in tools))
+
+    def test_tasks_are_readonly_checkbox_widgets_and_rerender_cleans_up(self):
+        self.render('- [ ] **todo**\n  - [x] done\n- [X] also done\n- ordinary')
+        checks = [w for w in self.preview._widgets if isinstance(w, Gtk.CheckButton)]
+        self.assertEqual([w.get_active() for w in checks], [False, True, True])
+        self.assertTrue(all(not w.get_sensitive() for w in checks))
+        self.render('```\necho hi\n```')
+        self.preview._widgets[0].get_children()[0].clicked()
+        self.assertTrue(self.preview._feedback)
+        self.render('replacement')
+        self.assertEqual(self.preview._widgets, [])
+        self.assertEqual(self.preview._wide_widgets, [])
+        self.assertEqual(self.preview._feedback, set())
 
     def test_links_open_only_allowed_destinations(self):
         with patch.object(Gtk, 'show_uri_on_window') as show:

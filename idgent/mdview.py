@@ -32,6 +32,10 @@ class Block:
     quote: int = 0
     marker: str = ''
     language: str = ''
+    cells: tuple[str, ...] = ()
+    alignments: tuple[str, ...] = ()
+    header: bool = False
+    continuation: bool = False
 
 
 _INLINE = re.compile(r'\\([!"#$%&\'()*+,\-./:;<=>?@\[\]\\^_`{|}~]|\n)|'
@@ -93,16 +97,27 @@ def _quote(line, limit=32):
 
 
 def _cells(line):
-    # Bound grid expansion (one very wide cell must not multiply a huge table).
-    return [part.strip().replace('\\|', '|')
-            for part in re.split(r'(?<!\\)\|', line.strip().strip('|'), maxsplit=31)]
+    # Split only unescaped separators; retain escapes for the inline parser.
+    parts = re.split(r'(?<!\\)((?:\\\\)*)\|', line.strip())
+    cells = [parts[0]]
+    for index in range(1, len(parts), 2):
+        cells[-1] += parts[index]
+        if len(cells) < 32:
+            cells.append(parts[index + 1])
+        else:
+            cells[-1] += '|' + parts[index + 1]
+    if line.lstrip().startswith('|'):
+        cells.pop(0)
+    if len(cells) > 1 and not cells[-1].strip():
+        cells.pop()
+    return [cell.strip() for cell in cells]
 
 
 def parse_blocks(text: str):
     """Yield flat structural blocks; indent and quote retain container nesting.
 
     At most CHUNK characters are accumulated per paragraph/code block. Tables
-    are emitted in batches of 128 rows, which bounds work on untrusted input.
+    are emitted one row at a time so painting can yield between rows.
     """
     lines = text.replace('\r\n', '\n').expandtabs(4).split('\n')
     i, count = 0, len(lines)
@@ -116,7 +131,7 @@ def parse_blocks(text: str):
             token, info = fence.groups()
             language = info.strip().split()[0] if info.strip() else ''
             i += 1
-            content, size = [], 0
+            content, size, continuation = [], 0, False
             while i < count:
                 q, current = _quote(lines[i], quote)
                 if re.fullmatch(r' {0,3}' + re.escape(token[0]) + '{' + str(len(token)) + r',}\s*', current):
@@ -127,11 +142,11 @@ def parse_blocks(text: str):
                     content.append(part + ('\n' if start + CHUNK >= len(current) else ''))
                     size += len(part) + 1
                     if size >= CHUNK:
-                        yield Block('codeblock', ''.join(content), quote=quote, language=language)
-                        content, size = [], 0
+                        yield Block('codeblock', ''.join(content), quote=quote, language=language, continuation=continuation)
+                        content, size, continuation = [], 0, True
                 i += 1
-            if content:
-                yield Block('codeblock', ''.join(content), quote=quote, language=language)
+            if content or not continuation:
+                yield Block('codeblock', ''.join(content), quote=quote, language=language, continuation=continuation)
             continue
         heading = _HEADING.match(line)
         if heading:
@@ -148,23 +163,21 @@ def parse_blocks(text: str):
             continue
         if i + 1 < count and '|' in line and _TABLE_RULE.fullmatch(_quote(lines[i + 1])[1]):
             header = _cells(line)
-            i += 2
-            while True:
-                rows = [header]
-                while i < count and '|' in lines[i] and lines[i].strip() and len(rows) < 128:
-                    rows.append(_cells(_quote(lines[i])[1]))
+            rules = _cells(_quote(lines[i + 1])[1])
+            if len(header) == len(rules):
+                alignments = tuple('center' if cell.startswith(':') and cell.endswith(':') else
+                                   'right' if cell.endswith(':') else 'left' for cell in rules)
+                yield Block('table', line, quote=quote, cells=tuple(header), alignments=alignments, header=True)
+                i += 2
+                while i < count:
+                    q, current = _quote(lines[i])
+                    if q != quote or not current.strip() or '|' not in current:
+                        break
+                    cells = _cells(current)[:len(header)]
+                    cells += [''] * (len(header) - len(cells))
+                    yield Block('table', current, quote=quote, cells=tuple(cells), alignments=alignments)
                     i += 1
-                columns = max(map(len, rows))
-                widths = [min(120, max((len(row[c]) if c < len(row) else 0) for row in rows)) for c in range(columns)]
-                for n, row in enumerate(rows):
-                    grid = '│ ' + ' │ '.join((row[c] if c < len(row) else '').ljust(widths[c]) for c in range(columns)) + ' │'
-                    for start in range(0, len(grid), CHUNK):
-                        yield Block('table', grid[start:start + CHUNK] + '\n', quote=quote)
-                    if n == 0:
-                        yield Block('table', '├─' + '─┼─'.join('─' * w for w in widths) + '─┤\n', quote=quote)
-                if i >= count or '|' not in lines[i] or not lines[i].strip():
-                    break
-            continue
+                continue
         item = _LIST.match(line)
         if item:
             spaces, marker, body = item.groups()
@@ -255,6 +268,9 @@ class MarkdownView:
         self.view.set_bottom_margin(28)
         self.buffer = self.view.get_buffer()
         self.tags, self.links = {}, []
+        self._widgets = []
+        self._wide_widgets = []
+        self._feedback = set()
         self._idle = 0
         self._work = None
         self._done = None
@@ -279,6 +295,8 @@ class MarkdownView:
             if name.startswith('container-'):
                 _, quote, inset = name.split('-')
                 tag.set_property('left-margin', margin + int(quote) * 22 + int(inset))
+        for widget, quote, inset in self._wide_widgets:
+            self._size_widget(widget, quote, inset)
         if 'codeblock' in self.tags:
             self.tags['codeblock'].set_property('right-margin', max(48, margin))
 
@@ -302,7 +320,16 @@ class MarkdownView:
                     else chrome['gutter_fg_active'])
         bg, fg = chrome['gutter_bg'], color('operator')
         self.foreground = fg
-        self.provider.load_from_data(f'textview, textview text {{background-color:{bg}; color:{fg}; font-family:sans-serif; font-size:{size}pt;}}'.encode())
+        self.provider.load_from_data(f'''
+textview, textview text {{background-color:{bg}; color:{fg}; font-family:sans-serif; font-size:{size}pt;}}
+.md-cell {{color:{fg}; font-family:sans-serif; font-size:{size}pt;
+    border-right:1px solid {chrome['gutter_fg']}; border-bottom:1px solid {chrome['gutter_fg']}; padding:6px 8px;}}
+.md-first-cell {{border-left:1px solid {chrome['gutter_fg']};}}
+.md-header {{background-color:{chrome['current_line_bg']}; border-top:1px solid {chrome['gutter_fg']}; font-weight:bold;}}
+.md-code-tools {{background-color:{chrome['current_line_bg']}; color:{fg};}}
+.md-code-tools button {{background:transparent; color:{chrome['gutter_fg']}; border:0; box-shadow:none; padding:3px; min-width:20px; min-height:20px;}}
+.md-code-tools button:hover {{background:{bg}; color:{fg};}}
+'''.encode())
         p = self.Pango
         self.tag('body', pixels_above_lines=3, pixels_below_lines=8)
         for level, scale in enumerate((1.618, 1.462, 1.318, 1.188, 1.076, 1), 1):
@@ -314,7 +341,7 @@ class MarkdownView:
         self.tag('code', family='monospace', background=chrome['current_line_bg'], foreground=color('string'))
         self.tag('codeblock', family='monospace', paragraph_background=chrome['current_line_bg'],
                  foreground=fg, right_margin=max(48, self.view.get_right_margin()), pixels_above_lines=5, pixels_below_lines=5)
-        self.tag('table', family='monospace', foreground=fg, pixels_below_lines=0)
+        self.tag('table', pixels_above_lines=0, pixels_below_lines=0)
         self.tag('link', foreground=color('link'), underline=p.Underline.SINGLE)
         self.tag('image', foreground=chrome['gutter_fg'])
         self.tag('rule', foreground=chrome['gutter_fg'], scale=.65, pixels_above_lines=0, pixels_below_lines=8)
@@ -336,12 +363,14 @@ class MarkdownView:
 
     def destroy(self):
         self.cancel()
+        self._clear_widgets()
         self.destroyed = True
 
     def render(self, text, done=None):
         self.cancel()
         if self.destroyed:
             return
+        self._clear_widgets()
         self.buffer.set_text('')
         self.links = []
         self._work, self._done = self._operations(text), done
@@ -349,6 +378,7 @@ class MarkdownView:
 
     def _operations(self, text):
         from idgent import highlight
+        code_parts = []
         for block in parse_blocks(text):
             inset = block.indent * 5 + (16 if block.kind == 'codeblock' else 12 if block.kind == 'list' else 0)
             container = f'container-{block.quote}-{inset}'
@@ -361,9 +391,18 @@ class MarkdownView:
             base = ('body', container)
             if block.kind == 'heading':
                 base += ('h' + str(block.level),)
-            elif block.kind in ('codeblock', 'table'):
-                yield block.text, base + (block.kind,), None
-                if block.kind == 'codeblock' and block.language and highlight.AVAILABLE:
+            elif block.kind == 'table':
+                yield self._table_row(block), ('table', container), None
+                yield '\n', ('table', container), None
+                continue
+            elif block.kind == 'codeblock':
+                if not block.continuation:
+                    code_parts = []
+                    yield self._code_tools(code_parts, block), base, None
+                    yield '\n', base + ('codeblock',), None
+                code_parts.append(block.text)
+                yield block.text, base + ('codeblock',), None
+                if block.language and highlight.AVAILABLE:
                     # Bounded snippets avoid pathological long-line lexing in Pygments.
                     try:
                         from pygments.lexers import get_lexer_by_name
@@ -377,7 +416,14 @@ class MarkdownView:
             elif block.kind == 'rule':
                 yield '─' * 64 + '\n', ('rule',), None
                 continue
-            if block.marker:
+            if block.marker in ('☐', '☑'):
+                checkbox = self.Gtk.CheckButton()
+                checkbox.set_active(block.marker == '☑')
+                checkbox.set_sensitive(False)
+                checkbox.set_tooltip_text('Completed task' if checkbox.get_active() else 'Incomplete task')
+                yield checkbox, base, None
+                yield ' ', base, None
+            elif block.marker:
                 yield block.marker + '  ', base, None
             for start in range(0, len(block.text), CHUNK):
                 for span in parse_inline(block.text[start:start + CHUNK]):
@@ -386,11 +432,106 @@ class MarkdownView:
             if block.kind == 'heading' and block.level < 3:
                 yield '─' * 64 + '\n', ('rule',), None
 
+    def _clear_widgets(self):
+        for source in self._feedback:
+            self.GLib.source_remove(source)
+        self._feedback.clear()
+        for widget in self._widgets:
+            widget.destroy()
+        self._widgets.clear()
+        self._wide_widgets.clear()
+
+    def _style_widget(self, widget, *classes):
+        context = widget.get_style_context()
+        context.add_provider(self.provider, self.Gtk.STYLE_PROVIDER_PRIORITY_USER + 1)
+        for name in classes:
+            context.add_class(name)
+
+    def _size_widget(self, widget, quote, inset):
+        width = max(32, self.view.get_allocated_width() - self.view.get_left_margin() -
+                    self.view.get_right_margin() - quote * 22 - inset - 2)
+        widget.set_size_request(width, -1)
+        if isinstance(widget, self.Gtk.Grid):
+            columns = len(widget.get_children())
+            for label in widget.get_children():
+                label.set_size_request(max(1, width // columns - 18), -1)
+
+    def _wide_widget(self, widget, block, inset=0):
+        self._wide_widgets.append((widget, block.quote, inset))
+        self._size_widget(widget, block.quote, inset)
+        return widget
+
+    def _table_row(self, block):
+        grid = self.Gtk.Grid(column_homogeneous=True)
+        for column, (cell, alignment) in enumerate(zip(block.cells, block.alignments)):
+            label = self.Gtk.Label()
+            label.set_selectable(True)
+            label.set_line_wrap(True)
+            label.set_line_wrap_mode(self.Pango.WrapMode.WORD_CHAR)
+            label.set_width_chars(1)
+            label.set_max_width_chars(1)
+            label.set_xalign({'left': 0, 'center': .5, 'right': 1}[alignment])
+            label.set_yalign(0)
+            label.set_justify({'left': self.Gtk.Justification.LEFT, 'center': self.Gtk.Justification.CENTER,
+                               'right': self.Gtk.Justification.RIGHT}[alignment])
+            markup = []
+            for span in parse_inline(cell):
+                value = self.GLib.markup_escape_text(span.text)
+                for name in span.styles:
+                    if name in ('strong', 'emphasis', 'strike', 'code'):
+                        tag = {'strong': 'b', 'emphasis': 'i', 'strike': 's', 'code': 'tt'}[name]
+                        value = f'<{tag}>{value}</{tag}>'
+                if span.link:
+                    value = f'<a href="{self.GLib.markup_escape_text(span.link)}">{value}</a>'
+                markup.append(value)
+            label.set_markup(''.join(markup))
+            label.connect('activate-link', lambda _label, uri: (self.activate_link(uri), True)[1])
+            self._style_widget(label, 'md-cell', *(['md-header'] if block.header else []),
+                               *(['md-first-cell'] if column == 0 else []))
+            grid.attach(label, column, 0, 1, 1)
+        return self._wide_widget(grid, block)
+
+    def _code_tools(self, parts, block):
+        box = self.Gtk.Box()
+        self._style_widget(box, 'md-code-tools')
+        button = self.Gtk.Button()
+        button.set_image(mode_icon('copy'))
+        button.set_tooltip_text('Copy code')
+        button.get_accessible().set_name('Copy code')
+        self._style_widget(button)
+        box.pack_end(button, False, False, 0)
+        button.connect('clicked', lambda *_: self._copy_code(button, parts))
+        return self._wide_widget(box, block, 16)
+
+    def _copy_code(self, button, parts):
+        self.Gtk.Clipboard.get(self.Gdk.SELECTION_CLIPBOARD).set_text(''.join(parts), -1)
+        button.set_image(mode_icon('copied'))
+        button.set_tooltip_text('Copied!')
+        button.get_accessible().set_name('Copied!')
+        source = 0
+
+        def reset():
+            self._feedback.discard(source)
+            if not self.destroyed:
+                button.set_image(mode_icon('copy'))
+                button.set_tooltip_text('Copy code')
+                button.get_accessible().set_name('Copy code')
+            return False
+
+        source = self.GLib.timeout_add(1200, reset)
+        self._feedback.add(source)
+
     def _step(self):
         deadline = time.perf_counter() + .008
         try:
             while time.perf_counter() < deadline:
                 value, tags, link = next(self._work)
+                if isinstance(value, self.Gtk.Widget):
+                    anchor = self.buffer.create_child_anchor(self.buffer.get_end_iter())
+                    self.view.add_child_at_anchor(value, anchor)
+                    self._widgets.append(value)
+                    value.show_all()
+                    continue
                 if isinstance(value, tuple):
                     a, b, name = value
                     self.buffer.apply_tag(self.tags[name], self.buffer.get_iter_at_offset(self._block_start + a),
@@ -445,6 +586,8 @@ def mode_icon(mode):
     """
     from gi.repository import Gtk, GdkPixbuf
     paths = {
+        'copy': '<rect x="7" y="7" width="10" height="11" rx="1.5"/><path d="M13 7V3H3v11h4"/>',
+        'copied': '<path d="m4 10 4 4 8-9"/>',
         'preview': '<path d="M2 10s3.5-6 8-6 8 6 8 6-3.5 6-8 6-8-6-8-6Z"/><circle cx="10" cy="10" r="2.7"/>',
         'source': '<path d="m6 5-5 5 5 5m8-10 5 5-5 5M12 3 8 17"/>',
     }
