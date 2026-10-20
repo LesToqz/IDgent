@@ -2,8 +2,9 @@
  * Pure layout/maths live in gitgraph_core.js (window.GitGraphCore).
  *
  * API (contract B), host -> page:   IDGit.setData(data)  setState(kind, message)  setTheme(colors)
+ *   setOrientation('horizontal'|'vertical')  setOptions({showRemotes, showTags, timeFormat})
  *   setSettings({reduceMotion, showRemote?, showTags?})  select(hash|null)  focus(hash|'HEAD')  pause()  resume()
- * page -> host (webkit.messageHandlers.idgent):  {type:'ready'} {type:'open-commit', hash} {type:'refresh'} {type:'error', message}
+ * page -> host (webkit.messageHandlers.idgent):  {type:'ready'} {type:'open-commit', hash} {type:'refresh'} {type:'orientation', value} {type:'error', message}
  * Rendering is on demand: a requestAnimationFrame loop runs only while something moves and stops by itself;
  * the HEAD "breathing" ring is a CSS animation on one small element that sleeps after a few seconds of no interaction. */
 (function () {
@@ -50,7 +51,6 @@
   let anim = [];                      // per node: {fx, fy, pt0, pd, at0, ad, ak, sx}
   let ghosts = [];                    // vanished commits fading out
   let labelT0 = 0, labelD = 0;        // global label fade-in
-  let headGlide = null;               // {fx, fy, t0, d}: HEAD badge offset glide
   let animUntil = 0;
   let edgeCache = null;               // per edge segments when nothing moves
   let W = 0, H = 0, dpr = 1;
@@ -219,7 +219,8 @@
     else y = G.clamp(L.head >= 0 ? ny(L.head) : 0, b.y0 + vh / 2, b.y1 - vh / 2);
     if (vertical()) {
       x = (b.x0 + b.x1) / 2;
-      y = b.y1 - b.y0 <= vh ? (b.y0 + b.y1) / 2 : b.y0 + vh / 2 - 10;
+      const hy = L.head >= 0 ? ny(L.head) : 0;
+      y = b.y1 - b.y0 <= vh ? (b.y0 + b.y1) / 2 : Math.max(b.y0 + vh / 2, hy - C.tail - 50 + vh / 2);
     }
     return { x, y, s };
   }
@@ -613,12 +614,6 @@
       labelGlides.delete(labelKey(lb));
     }
     if (D && lb.node >= 0 && lb.node < D.x.length) { x += D.x[lb.node] - lb.ax; y += D.y[lb.node] - lb.ay; }
-    if (lb.kind === 'head' && headGlide) {
-      const t = reduce() ? 1 : G.clamp((now - headGlide.t0) / headGlide.d, 0, 1);
-      const e = G.ease.inOutCubic(t);
-      x += (headGlide.fx - lb.x) * (1 - e); y += (headGlide.fy - lb.y) * (1 - e);
-      if (t >= 1) headGlide = null;
-    }
     return { x, y };
   }
   function labelVisible(lb, s) {
@@ -758,6 +753,15 @@
         const x = D.x[r.from], y0 = D.y[r.from], y1 = D.y[r.to], c = laneCol(r.lane);
         ctx.strokeStyle = c.css; ctx.lineWidth = 4.2 / s; ctx.lineCap = 'round';
         ctx.beginPath(); ctx.moveTo(x, y0); ctx.lineTo(x, y1); ctx.stroke();
+        const text = r.count + ' commits', h = 15 / s, cy = (y0 + y1) / 2;
+        ctx.font = '600 ' + (10.5 / s).toFixed(2) + 'px ' + pal.ui;
+        const w = ctx.measureText(text).width + 12 / s;
+        if (Math.abs(y1 - y0) > h + 10 / s) {
+          ctx.fillStyle = pal.tagBg; ctx.strokeStyle = c.soft; ctx.lineWidth = 1 / s;
+          ctx.beginPath(); rr(x + 8 / s, cy - h / 2, w, h, h / 2); ctx.fill(); ctx.stroke();
+          ctx.fillStyle = c.text; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+          ctx.fillText(text, x + 14 / s, cy + .5 / s);
+        }
         continue;
       }
       const xa = D.x[r.from], xb = D.x[r.to];
@@ -838,7 +842,7 @@
       const kind = t.i === L.head ? 'HEAD' : (nd.merge ? (nd.parents.length + nd.absent.length > 2 ? 'octopus merge' : 'merge') : '');
       return '<div class="t-hash"><span>' + esc(nd.short) + '</span>' + (kind ? '<span class="t-kind">' + esc(kind) + '</span>' : '') + '</div>' +
         '<div class="t-subj">' + esc(nd.subject || '(no message)') + '</div>' +
-        '<div class="t-time"><b>' + esc(settings.timeFormat === 'absolute' ? G.absTime(nd.ts) : G.relTime(nd.ts, nowS)) + '</b>' + '</div>' +
+        '<div class="t-time"><b>' + esc(settings.timeFormat === 'absolute' ? G.absTime(nd.ts) : G.relTime(nd.ts, nowS)) + '</b></div>' +
         '<div class="t-meta">' + esc(nd.author) + (refs.length ? ' · ' + esc(refs.slice(0, 4).join(', ')) + (refs.length > 4 ? ' …' : '') : '') + '</div>';
     }
     if (t.kind === 'label') {
@@ -1067,7 +1071,7 @@
 
   function labelKey(lb) { return lb.kind + ':' + lb.full + ':' + lb.lane; }
   function setOrientation(value) {
-    if (value !== 'horizontal' && value !== 'vertical' || value === orientation) return;
+    if ((value !== 'horizontal' && value !== 'vertical') || value === orientation) return;
     const now = performance.now(), angle = viewAngle(now);
     const prev = new Map(), oldLabels = new Map();
     if (L && L.nodes.length) {
@@ -1081,7 +1085,7 @@
     hideTip(); hover = unhover = -1;
     if (!L || !L.nodes.length) return;
     L.orientation = value; gap = computeGap(); relabel();
-    anim = new Array(L.nodes.length); labelGlides.clear(); ghosts = []; headGlide = null; labelD = 0;
+    anim = new Array(L.nodes.length); labelGlides.clear(); ghosts = []; labelD = 0;
     if (!reduce()) {
       for (const nd of L.nodes) {
         const p = prev.get(nd.hash);
@@ -1172,13 +1176,11 @@
     perf.layoutMs = performance.now() - t0;
     const now = performance.now();
     // previous display positions by hash
-    const prev = new Map();
-    let prevHeadLabel = null;
+    const prev = new Map(), previousLabels = new Map();
     if (L && L.nodes.length && viewState === 'data') {
       computeDisplay(now);
       for (let i = 0; i < L.nodes.length; i++) prev.set(L.nodes[i].hash, { x: D.x[i], y: D.y[i], a: D.a[i], lane: L.nodes[i].lane });
-      const hl = labels.find((l) => l.kind === 'head');
-      if (hl) { const p = labelPos(hl, now); prevHeadLabel = { x: p.x, y: p.y, hash: L.nodes[L.head].hash }; }
+      for (const lb of labels) previousLabels.set(labelKey(lb), labelPos(lb, now));
     }
     const oldL = L;
     const selHash = hashAt(selected), curHash = hashAt(cursor);
@@ -1194,7 +1196,7 @@
     hideTip();
     anim = new Array(L.nodes.length);
     ghosts = [];
-    headGlide = null;
+    labelGlides.clear();
     const wasData = viewState === 'data';
     hideState();
     viewState = 'data';
@@ -1205,7 +1207,8 @@
       cam.x = v.x; cam.y = v.y; cam.s = v.s; camTw = null; zoomT = null; inertia = null; camHome = true;
       if (!rm) {
         const n = L.nodes.length;
-        const vx0 = toWX(0), vx1 = toWX(W);
+        const vx0 = vertical() ? L.maxCol * C.colW - toWY(H) : toWX(0);
+        const vx1 = vertical() ? L.maxCol * C.colW - toWY(0) : toWX(W);
         const c0 = Math.max(0, Math.floor(vx0 / C.colW)), c1 = Math.max(c0 + 1, Math.ceil(vx1 / C.colW));
         const stagger = n <= C.staggerMax;
         for (let i = 0; i < n; i++) {
@@ -1232,9 +1235,9 @@
           const oi = oldL.byHash.get(h);
           ghosts.push({ x: p.x, y: p.y, r: C.dotR, color: oldL ? colorOfOld(oldL, oi) : pal.main.css, t0: now });
         }
-        const hl = labels.find((l) => l.kind === 'head');
-        if (prevHeadLabel && hl && (Math.abs(prevHeadLabel.x - hl.x) > 0.5 || Math.abs(prevHeadLabel.y - hl.y) > 0.5)) {
-          headGlide = { fx: prevHeadLabel.x, fy: prevHeadLabel.y, t0: now, d: C.headMs };
+        for (const lb of labels) {
+          const p = previousLabels.get(labelKey(lb));
+          if (p) labelGlides.set(labelKey(lb), { x: p.x, y: p.y, t0: now });
         }
         animUntil = now + Math.max(C.moveMs + 80, C.headMs, C.fadeMs) + 20;
       }
@@ -1278,7 +1281,7 @@
     if (hiddenDoc) { if (raf) { cancelAnimationFrame(raf); raf = 0; } updateOverlays(); }
     else { lastTs = 0; draw(); kick(); }
   }));
-  if (mql && mql.addEventListener) mql.addEventListener('change', safe(() => { document.body.classList.toggle('reduce', reduce()); draw(); }));
+  if (mql && mql.addEventListener) mql.addEventListener('change', safe(() => IDGit.setSettings({})));
 
   function hashAt(i) { return L && i >= 0 && i < L.nodes.length ? L.nodes[i].hash : null; }
 
@@ -1304,7 +1307,7 @@
       document.body.classList.toggle('reduce', reduce());
       if (reduce()) {
         turn = null; labelGlides.clear();
-        anim = L ? new Array(L.nodes.length) : []; ghosts = []; labelD = 0; headGlide = null; animUntil = 0;
+        anim = L ? new Array(L.nodes.length) : []; ghosts = []; labelD = 0; animUntil = 0;
         if (camTw) { cam.x = camTw.tx; cam.y = camTw.ty; cam.s = camTw.ts; camTw = null; }
         if (zoomT) { cam.s = zoomT.s; zoomT = null; }
         inertia = null; pulseOn = false; clearTimeout(pulseTimer);

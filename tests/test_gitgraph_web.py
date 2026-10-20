@@ -641,6 +641,15 @@ class GitGraphPageTests(unittest.TestCase):
         p.call('setData', SHOW)
         p.settle()
         self.assertEqual(p.stats()['orientation'], 'vertical')
+        new = dict(SHOW['commits'][0], hash='e' * 40, short='eeeeeee', parents=[SHOW['head']['hash']],
+                   subject='Live vertical update', refs=[{'name': 'master', 'kind': 'branch', 'current': True}])
+        commits = [new] + [dict(c, refs=[r for r in c['refs'] if r['name'] != 'master']) for c in SHOW['commits']]
+        p.call('setData', dict(SHOW, commits=commits, head={'hash': new['hash'], 'branch': 'master'}))
+        self.assertEqual(p.js('IDGit._debug.nodeAlpha(%s)' % json.dumps(SHOW['head']['hash'])), 1)
+        p.settle()
+        self.assertEqual(p.stats()['orientation'], 'vertical')
+        p.call('setData', SHOW)
+        p.settle()
         self.assertEqual(p.js('IDGit._debug.nodeAlpha(%s)' % json.dumps(SHOW['head']['hash'])), 1)
         x, y = p.pos(SHOW['head']['hash'])
         p.pointer('pointermove', x, y, buttons=0)
@@ -717,6 +726,10 @@ class GitGraphShots(unittest.TestCase):
                         p.snapshot('gg-orientation-mid')
                     p.settle()
                     p.snapshot('gg-' + name + '-' + orientation)
+                    if orientation == 'vertical':
+                        p.js('IDGit._debug.fit(); true')
+                        p.settle()
+                        p.snapshot('gg-' + name + '-vertical-fit')
             self.assertEqual(p.errors(), [])
         finally:
             p.destroy()
