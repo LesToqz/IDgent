@@ -209,10 +209,11 @@ class ResizeGate(Gtk.Bin):
             handler = terminal.connect("contents-changed", self._answered)
             self._answers.append((terminal, handler))
             # VTE reads its PTY from the main loop, after a high-priority watch
-            # on the same descriptor has seen the program's first bytes.
-            self._output[terminal] = GLib.unix_fd_add_full(
-                GLib.PRIORITY_HIGH, terminal.get_pty().get_fd(), GLib.IOCondition.IN,
-                self._wrote, terminal)
+            # on the same descriptor has seen the program's first bytes. Without
+            # a PTY, any parsed (fed) output is the answer.
+            pty = terminal.get_pty()
+            self._output[terminal] = None if pty is None else GLib.unix_fd_add_full(
+                GLib.PRIORITY_HIGH, pty.get_fd(), GLib.IOCondition.IN, self._wrote, terminal)
         self._release = GLib.timeout_add(max(1, int(self.PACE_MS)), self._released)
 
     def _wrote(self, _fd, _condition, terminal):
