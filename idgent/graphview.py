@@ -312,7 +312,6 @@ class GraphView(Gtk.Box):
             return
         self._local_path = self._node_id(path)
         self._settings = preferences.normalize_graph({**self._settings, 'localDepth': depth})
-        self._sync_local_settings()
         self.post('setLocal', dict(enabled=self._local_path is not None))
         self.post('setLocal', dict(path=self._local_path, depth=self._settings['localDepth'],
                                  incoming=self._settings['localIncoming'],
