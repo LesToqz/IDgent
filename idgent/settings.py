@@ -1,7 +1,7 @@
 """Small, failure-tolerant JSON settings store, resolved at call time.
 
 IDgent graph defaults and control ranges are defined in docs/graph-spec.md.
-Unknown graph keys are dropped; numeric values clamp to bounds, and only hop
+Unknown graph keys survive; numeric values clamp to bounds, and only hop
 counts round to integers. Each normalization returns independent colour rules.
 """
 from __future__ import annotations
@@ -128,19 +128,47 @@ ACCENT_PRESETS = ('#8a5cf5', '#3b82f6', '#0ea5a4', '#22a55b',
 CHOICES = {
     'delete_mode': ('trash', 'permanent'),
     'terminal_cursor': ('block', 'ibeam', 'underline'),
+    'graph_default_type': ('global', 'local', 'note'),
+    'gitgraph_orientation': ('horizontal', 'vertical'),
+    'gitgraph_time_format': ('relative', 'absolute'),
+    'notes_sort': ('name', 'modified'),
 }
 LIMITS = {
     'indent_width': (2, 8),
+    'terminal_max_panes': (1, 8),
+    'gitgraph_max_commits': (100, 10000),
     'terminal_scrollback': (1000, 100000),
 }
 NEW_DEFAULTS = {
+    'feature_explorer': True,
+    'feature_terminal': True,
+    'feature_graph': True,
+    'feature_gitgraph': True,
+    'feature_notes': True,
+    'explorer_git_colors': True,
+    'explorer_folders_first': True,
+    'explorer_compact': False,
+    'terminal_max_panes': 6,
+    'terminal_shell': '',
+    'terminal_copy_on_select': False,
+    'terminal_bell': False,
+    'graph_default_type': 'global',
+    'gitgraph_orientation': 'horizontal',
+    'gitgraph_max_commits': 1500,
+    'gitgraph_show_remotes': True,
+    'gitgraph_show_tags': True,
+    'gitgraph_time_format': 'relative',
+    'notes_slash_commands': True,
+    'notes_toolbar': True,
+    'notes_sort': 'name',
+    'notes_open_after_create': True,
     'accent': None,  # None follows the theme's own accent.
     'reduce_motion': False,
     'ui_font': '',  # Empty means the GTK/system interface font.
     'editor_font': '',  # Empty means the default monospace font.
     'line_numbers': True,
     'highlight_line': True,
-    'md_default_preview': False,
+    'md_live_preview': True,
     'md_readable_width': True,
     'indent_tabs': False,
     'indent_width': 4,
@@ -261,9 +289,9 @@ GRAPH_STEPS = {'textFadeMultiplier': 0.1,
  'localDepth': 1}
 
 def normalize_graph(value: object) -> dict:
-    """Return independent, JSON-safe graph preferences, dropping unknown keys."""
+    """Return independent, JSON-safe graph preferences, preserving unknown keys."""
     value = value if isinstance(value, dict) else {}
-    result = {}
+    result = {key: raw for key, raw in value.items() if key not in GRAPH_DEFAULTS}
     for key, default in GRAPH_DEFAULTS.items():
         raw = value.get(key, default)
         if isinstance(default, bool):

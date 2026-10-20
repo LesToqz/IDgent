@@ -216,26 +216,34 @@ immediately to open tabs, the explorer and both terminal docks, and are saved at
 once. Search the left pane to filter settings across pages; Esc clears the search,
 then closes the window.
 
+Pages are Appearance, Editor, File explorer, Notes, Terminal, Graph view, Git graph,
+Hotkeys and About. Each feature page begins with an Enable switch; switching it
+off dims its remaining settings. Notes includes live Markdown preview, slash commands,
+toolbar and sorting. Terminal includes a shell override and a per-dock pane limit
+(default 6, range 1–8), counting terminals, graph and Git graph panes together.
+Graph view includes display preferences; Git graph includes orientation, history
+limits, branch visibility and timestamp formatting.
+
 | Page | Setting | Default | Key |
 | --- | --- | --- | --- |
 | Appearance | Color theme | IDgent Dark | `theme` |
 | | Accent color (swatches, Reset = theme accent) | theme accent | `accent` |
 | | Reduce motion (turns off interface animations) | off | `reduce_motion` |
 | | Interface font (Restore = system font) | system | `ui_font` |
-| | Explorer text size, 8–24 pt (also search results) | 10 | `explorer_font_size` |
 | Editor | Editor text size, 7–32 pt | 11 | `editor_font_size` |
 | | Editor font (Restore = monospace; not the Markdown preview) | monospace | `editor_font` |
 | | Line numbers | on | `line_numbers` |
 | | Highlight current line | on | `highlight_line` |
-| | Markdown: open in preview (newly opened tabs) | off | `md_default_preview` |
-| | Markdown: readable line length (700 px preview column) | on | `md_readable_width` |
 | | Indent using tabs | off | `indent_tabs` |
 | | Indent width, 2–8 | 4 | `indent_width` |
 | | Auto-pair brackets and quotes | on | `auto_pair` |
-| Files | Show hidden files (explorer and Quick Switcher) | on | `show_hidden` |
+| File explorer | Show hidden files (explorer and Quick Switcher) | on | `show_hidden` |
+| | Explorer text size, 8–24 pt | 10 | `explorer_font_size` |
 | | Confirm before deleting | on | `confirm_delete` |
 | | Deleted files: Move to system trash / Delete permanently | Delete permanently | `delete_mode` |
 | | Ignored folders (read-only list) | — | — |
+| Notes | Edit Markdown with live preview | on | `md_live_preview` |
+| | Readable line length | on | `md_readable_width` |
 | Terminal | Terminal text size, 7–32 pt | 11 | `terminal_font_size` |
 | | Cursor shape: block / I-beam / underline | block | `terminal_cursor` |
 | | Blinking cursor | on | `terminal_blink` |

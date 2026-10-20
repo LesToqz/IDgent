@@ -54,7 +54,7 @@ class SettingsDialogTest(unittest.TestCase):
         self.assertEqual(dialog.sizes, settings.DEFAULT_FONT_SIZES)
         self.assertEqual([row[1] for row in dialog.theme_combo.get_model()], [t.id for t in THEMES])
         self.assertTrue(all(not b.get_sensitive() for b in dialog.reset_buttons.values()))
-        self.assertEqual(dialog.values, settings.DEFAULTS)
+        self.assertEqual(dialog.values, {**settings.DEFAULTS, 'graph': settings.GRAPH_DEFAULTS})
         self.assertEqual(dialog.stack.get_transition_type(), Gtk.StackTransitionType.NONE)
         self.assertEqual([r.page_id for r in dialog.nav_list.get_children()], [p for p, _, _ in PAGES])
 
@@ -161,6 +161,9 @@ class SettingsDialogTest(unittest.TestCase):
             elif key == 'accent':
                 self.dialog.accent_picker.buttons['#22a55b'].clicked()
                 expected[key] = '#22a55b'
+            elif isinstance(control, Gtk.Entry):
+                control.set_text('/bin/bash')
+                expected[key] = '/bin/bash'
             elif isinstance(control, Gtk.FontButton):
                 control.set_font('Serif 12')
                 control.emit('font-set')
@@ -185,6 +188,85 @@ class SettingsDialogTest(unittest.TestCase):
         count = len(changes)
         controls['indent_width'].set_value(2)  # No change, no emission.
         self.assertEqual(len(changes), count)
+
+    def test_feature_page_order_sensitivity_search_and_keyboard(self):
+        self.assertEqual([title for _, title, _ in PAGES],
+                         ['Appearance', 'Editor', 'File explorer', 'Notes', 'Terminal',
+                          'Graph view', 'Git graph', 'Hotkeys', 'About'])
+        self.show()
+        changes = self.changes()
+        for page, feature in self.dialog._feature_pages.items():
+            rows = [r for _, card in self.dialog._groups[page] for r in card.rows]
+            self.assertEqual(rows[0].key, feature)
+            self.dialog.nav_list.select_page(page)
+            self.assertTrue(self.dialog.focus_content())
+            self.assertIs(self.dialog.get_focus(), rows[0])
+            send_key(self.dialog, Gdk.KEY_Down)
+            self.assertIs(self.dialog.get_focus(), rows[1])
+            self.dialog.controls[feature].clicked()
+            self.assertEqual(changes[-1], (feature, False))
+            self.assertTrue(all(not r.get_sensitive() for r in rows[1:]))
+            self.assertTrue(rows[0].get_sensitive())
+            self.dialog.search(rows[1].name)
+            self.assertTrue(rows[1].get_visible())
+            self.dialog.search('')
+            self.dialog.set_values({feature: True})
+            self.assertTrue(all(r.get_sensitive() for r in rows))
+        for query, key in (('slash', 'notes_slash_commands'), ('login executable', 'terminal_shell'),
+                           ('connection width', 'graph.lineSizeMultiplier'),
+                           ('remote refs', 'gitgraph_show_remotes'),
+                           ('density', 'explorer_compact')):
+            self.dialog.search(query)
+            self.assertTrue(self.dialog.rows[key].get_visible())
+        self.dialog.search('')
+
+    def test_all_controls_silent_initialization_and_graph_roundtrip(self):
+        changes = self.changes()
+        values = {}
+        for key, default in settings.NEW_DEFAULTS.items():
+            if isinstance(default, bool):
+                values[key] = not default
+            elif key in settings.CHOICES:
+                values[key] = settings.CHOICES[key][-1]
+            elif key in settings.LIMITS:
+                values[key] = settings.LIMITS[key][1]
+            else:
+                values[key] = default
+        self.dialog.set_values(values)
+        self.assertEqual(changes, [])
+        self.assertEqual({k: self.dialog.values[k] for k in values}, values)
+        for key, value in values.items():
+            control = self.dialog.controls[key]
+            if isinstance(control, Toggle):
+                self.assertEqual(control.get_active(), value)
+            elif isinstance(control, Gtk.ComboBoxText):
+                self.assertEqual(control.get_active_id(), value)
+            elif isinstance(control, (Gtk.Scale, Gtk.SpinButton)):
+                self.assertEqual(control.get_value(), value)
+        self.dialog.set_values(dict.fromkeys(self.dialog._feature_pages.values(), True))
+        graph = {**settings.GRAPH_DEFAULTS, 'search': 'path:src', 'future': {'x': 2}}
+        self.dialog.set_values({'graph': graph})
+        self.assertEqual(changes, [])
+        for row_key, control in self.dialog.controls.items():
+            if not row_key.startswith('graph.'):
+                continue
+            key = row_key.split('.', 1)[1]
+            if isinstance(control, Toggle):
+                control.clicked()
+            else:
+                control.set_value(settings.GRAPH_LIMITS[key][1])
+            self.assertEqual(changes[-1][0], 'graph')
+            self.assertEqual(changes[-1][1], settings.get_graph())
+            self.assertEqual(changes[-1][1]['future'], {'x': 2})
+            self.assertEqual(changes[-1][1]['search'], 'path:src')
+            self.dialog.reset_buttons[row_key].clicked()
+            self.assertEqual(self.dialog.values['graph'][key], settings.GRAPH_DEFAULTS[key])
+        snapshot = self.dialog.values
+        snapshot['graph']['future']['x'] = 9
+        self.assertEqual(self.dialog.values['graph']['future'], {'x': 2})
+        self.dialog.controls['terminal_shell'].set_text('/missing/idgent-shell')
+        self.assertIn('not found', self.dialog.shell_hint.get_text())
+        self.assertEqual(changes[-1], ('terminal_shell', '/missing/idgent-shell'))
 
     def test_set_values_is_silent_and_validated(self):
         changes = self.changes()
@@ -346,7 +428,7 @@ class SettingsDialogTest(unittest.TestCase):
         self.assertEqual(dialog.stack.get_visible_child_name(), 'appearance')
         self.assertFalse(dialog.empty_label.get_visible())
         self.assertIs(dialog._bodies['appearance'].get_parent(), dialog._columns['appearance'])
-        self.assertEqual(len(dialog._visible_rows()), 5)
+        self.assertEqual(len(dialog._visible_rows()), 4)
         dialog.show_all()  # show_all() must not resurrect filtered widgets.
         self.assertFalse(dialog.empty_label.get_visible())
         send_key(dialog, Gdk.KEY_Escape)  # ...then closes.
