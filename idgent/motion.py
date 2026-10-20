@@ -16,7 +16,7 @@ from gi.repository import Gdk, GLib, Gtk
 # IDgent motion: immediate feedback, short state changes, unhurried entrances.
 DURATIONS = {
     "instant": 0, "feedback": 96, "state": 128, "travel": 224,
-    "settle": 352, "pause": 640,
+    "settle": 352, "pause": 640, "notice_hold": 3840,
 }
 # Established shorthand remains available to callers of the animation helpers.
 DURATIONS.update({
@@ -26,8 +26,10 @@ DURATIONS.update({
     "toggle": DURATIONS["state"], "notice_in": DURATIONS["travel"],
     "notice_out": DURATIONS["state"], "reflow": DURATIONS["travel"],
     "resize_handle": DURATIONS["state"],
+    "notice_autohide": DURATIONS["notice_hold"],
+    "notice_enter": DURATIONS["travel"],
+    "notice_exit": DURATIONS["state"],
 })
-# Short semantic names used by the motion alignment spec (WP-2).
 # Curves chosen for IDgent. Default motion stays within the endpoints.
 _EASING_POINTS = {
     "linear": (0.0, 0.0, 1.0, 1.0),
