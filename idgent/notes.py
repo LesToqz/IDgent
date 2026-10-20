@@ -96,7 +96,7 @@ def list_notes(root: str) -> list[str]:
                      if entry.name.lower().endswith(NOTE_SUFFIX) and entry.is_file()]
     except OSError:
         return []
-    return sorted(paths, key=lambda path: (os.path.basename(path).casefold(), path))
+    return sorted(paths, key=lambda path: (os.path.basename(path)[:-len(NOTE_SUFFIX)].casefold(), path))
 
 
 def is_note(root: str, path: str | None) -> bool:
