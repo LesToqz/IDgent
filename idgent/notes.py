@@ -13,6 +13,7 @@ renders the result.
 """
 
 import os
+import re
 from dataclasses import dataclass
 from typing import Callable
 
@@ -25,6 +26,8 @@ from . import fsops
 
 NOTES_DIR = os.path.join(".IDgent", "Notes")
 NOTE_SUFFIX = ".md"
+# An existing list marker, which a list command replaces rather than nests.
+LIST_MARKER = re.compile(r"[-*+] \[[ xX]\] |[-*+] |\d+[.)] ")
 TABLE = ("| Column 1 | Column 2 | Column 3 |\n"
          "| --- | --- | --- |\n"
          "|  |  |  |\n")
@@ -129,10 +132,10 @@ def _line_bounds(document: str, start: int, end: int) -> tuple[int, int]:
     return first, len(document) if last < 0 else last
 
 
-def _prefix_lines(document, start, end, prefix: Callable[[int, str], str]) -> Edit:
+def _prefix_lines(document, start, end, transform: Callable[[int, str], str]) -> Edit:
     first, last = _line_bounds(document, start, end)
     lines = document[first:last].split("\n")
-    edited = [prefix(index, line) + line for index, line in enumerate(lines)]
+    edited = [transform(index, line) for index, line in enumerate(lines)]
     text = "\n".join(edited)
     if start == end:
         cursor = start + len(edited[0]) - len(lines[0])
@@ -141,10 +144,20 @@ def _prefix_lines(document, start, end, prefix: Callable[[int, str], str]) -> Ed
 
 
 def _heading(_index: int, line: str) -> str:
+    """'# ' on a plain line; one level deeper (up to six) on a heading."""
     level = len(line) - len(line.lstrip("#"))
     if 0 < level < 6 and line[level:level + 1] in (" ", ""):
-        return "#"
-    return "" if level else "# "
+        return "#" + line
+    return line if level else "# " + line
+
+
+def _list(marker: Callable[[int], str]) -> Callable[[int, str], str]:
+    def transform(index: int, line: str) -> str:
+        body = line.lstrip(" \t")
+        indent = line[:len(line) - len(body)]
+        found = LIST_MARKER.match(body)
+        return indent + marker(index) + (body[found.end():] if found else body)
+    return transform
 
 
 def _wrap(document, start, end, before, after, placeholder) -> Edit:
@@ -206,11 +219,11 @@ NOTE_COMMANDS = (
     NoteCommand("italic", "Italic", ("format-text-italic-symbolic",), "I",
                 lambda d, s, e: _wrap(d, s, e, "*", "*", "italic text")),
     NoteCommand("bullet", "Bullet list", ("view-list-bullet-symbolic",), "•",
-                lambda d, s, e: _prefix_lines(d, s, e, lambda i, line: "- ")),
+                lambda d, s, e: _prefix_lines(d, s, e, _list(lambda i: "- "))),
     NoteCommand("numbered", "Numbered list", ("view-list-ordered-symbolic",), "1.",
-                lambda d, s, e: _prefix_lines(d, s, e, lambda i, line: f"{i + 1}. ")),
+                lambda d, s, e: _prefix_lines(d, s, e, _list(lambda i: f"{i + 1}. "))),
     NoteCommand("checklist", "Checklist", ("checkbox-checked-symbolic",), "☐",
-                lambda d, s, e: _prefix_lines(d, s, e, lambda i, line: "- [ ] ")),
+                lambda d, s, e: _prefix_lines(d, s, e, _list(lambda i: "- [ ] "))),
     NoteCommand("table", "Table", ("x-office-spreadsheet-symbolic", "view-grid-symbolic"), "▦",
                 _insert_block(TABLE, (2, 10))),
     NoteCommand("code", "Code block", (), "</>", _code),
@@ -286,7 +299,7 @@ def build_css(ui: dict[str, str]) -> str:
     hover = f"alpha({ui['overlay']}, 0.067)"
     return f'''
 .idgent-note-toolbar {{ background: {ui['bg']}; border-bottom: 1px solid {ui['border']};
-    padding: 3px 8px; }}
+    padding: 8px; }}
 .idgent-note-toolbar button, .idgent-notes-tab {{ background: transparent; border: 0;
     border-radius: 4px; box-shadow: none; color: {ui['muted']}; min-height: 16px; min-width: 16px;
     padding: 4px 6px; }}
