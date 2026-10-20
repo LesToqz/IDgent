@@ -15,6 +15,7 @@ renders the result.
 import os
 import re
 from dataclasses import dataclass
+from datetime import date
 from typing import Callable
 
 import gi
@@ -117,6 +118,14 @@ def list_notes(root: str, sort: str = "name") -> list[str]:
 def is_note(root: str, path: str | None) -> bool:
     return bool(path) and path.lower().endswith(NOTE_SUFFIX) and (
         os.path.dirname(os.path.abspath(path)) == notes_dir(root))
+
+
+def is_note_path(path: str | None) -> bool:
+    """Recognise notes, including nested folders, without a project root."""
+    if not path or not os.fspath(path).lower().endswith(NOTE_SUFFIX):
+        return False
+    parts = os.path.abspath(path).split(os.sep)[:-1]
+    return any(parts[i:i + 2] == [".IDgent", "Notes"] for i in range(len(parts) - 1))
 
 
 # Insert commands ------------------------------------------------------------------
@@ -246,6 +255,87 @@ NOTE_COMMANDS = (
 COMMANDS_BY_ID = {command.id: command for command in NOTE_COMMANDS}
 
 
+@dataclass(frozen=True)
+class SlashCommand:
+    id: str
+    label: str
+    keywords: tuple[str, ...]
+    icons: tuple[str, ...]
+    glyph: str
+    hint: str
+    edit: Callable[[str, int, int], Edit]
+    group: str = "Basic blocks"
+    secondary: str = ""
+
+
+# Slash block commands replace existing markers instead of nesting them.
+BLOCK_MARKER = re.compile(r"^(?:#{1,6}(?: +|$)|> ?|[-*+] \[[ xX]\] |[-*+] |\d+[.)] )")
+SLASH_TABLE = TABLE + "|  |  |  |\n"
+
+
+def _turn_line(prefix="", suffix="", placeholder="", select=None):
+    def edit(document, start, end):
+        first, last = _line_bounds(document, start, end)
+        body = document[first:last]
+        indent = body[:len(body) - len(body.lstrip(" \t"))]
+        body = body[len(indent):]
+        while match := BLOCK_MARKER.match(body):
+            body = body[match.end():]
+        body = body or placeholder
+        text = indent + prefix + body + suffix
+        offset = first + len(indent)
+        a, b = select(body) if select else (len(prefix) + len(body),) * 2
+        return Edit(first, last, text, offset + a, offset + b)
+    return edit
+
+
+def _slash_table(document, start, end):
+    first, last = _line_bounds(document, start, end)
+    body = _turn_line()(document, start, end).text.strip()
+    table = SLASH_TABLE.replace("Column 1", body, 1) if body else SLASH_TABLE
+    return Edit(first, last, table, first + 2, first + 2 + len(body or "Column 1"))
+
+
+def _slash_divider(document, start, end):
+    edit = _turn_line()(document, start, end)
+    text = (edit.text + "\n\n" if edit.text.strip() else "") + "---\n"
+    return Edit(edit.start, edit.end, text, edit.start + len(text), edit.start + len(text))
+
+
+SLASH_COMMANDS = (
+    SlashCommand("text", "Text", ("plain", "paragraph"), ("format-text-symbolic",), "T", "",
+                 _turn_line()),
+    *(SlashCommand(f"h{level}", f"Heading {level}", (f"h{level}", f"title {level}"), (),
+                   f"H{level}", "#" * level, _turn_line("#" * level + " "))
+      for level in (1, 2, 3)),
+    SlashCommand("bullet", "Bullet list", ("ul", "unordered"), ("view-list-bullet-symbolic",),
+                 "•", "-", _turn_line("- ")),
+    SlashCommand("numbered", "Numbered list", ("ol", "ordered"), ("view-list-ordered-symbolic",),
+                 "1.", "1.", _turn_line("1. ")),
+    SlashCommand("todo", "To-do list", ("todo", "check", "checklist", "task"),
+                 ("checkbox-checked-symbolic",), "☐", "[ ]", _turn_line("- [ ] ")),
+    SlashCommand("quote", "Quote", ("blockquote",), ("format-indent-more-symbolic",), "❯", ">",
+                 _turn_line("> ")),
+    SlashCommand("divider", "Divider", ("hr", "rule", "separator"), (), "―", "---",
+                 lambda d, s, e: _slash_divider(d, s, e)),
+    SlashCommand("code", "Code", ("code", "fence", "snippet"), ("text-x-script-symbolic",),
+                 "</>", "```", _turn_line("```\n", "\n```\n", select=lambda b: (4, 4)),
+                 secondary="Block"),
+    SlashCommand("mermaid", "Code · Mermaid", ("code mermaid", "diagram"), (), "◇", "```mermaid",
+                 _turn_line("```mermaid\n", "\n```\n", select=lambda b: (11, 11))),
+    SlashCommand("table", "Table", ("table", "grid"), ("view-grid-symbolic",), "▦", "3 × 3",
+                 _slash_table, "Insert"),
+    SlashCommand("link", "Link", ("url", "hyperlink"), ("insert-link-symbolic",), "↗", "[]()",
+                 _link, "Insert"),
+    SlashCommand("date", "Date", ("today", "date"), ("x-office-calendar-symbolic",), "▣", "ISO",
+                 lambda d, s, e: Edit(s, e, date.today().isoformat(), s + 10, s + 10), "Insert"),
+    SlashCommand("callout", "Callout", ("aside", "notice"), ("dialog-information-symbolic",), "ⓘ", "> **",
+                 _turn_line("> **Note**\n> ", select=lambda b: (4, 8)), "Insert"),
+    SlashCommand("image", "Image", ("picture", "photo"), ("insert-image-symbolic",), "▧", "![]()",
+                 lambda d, s, e: Edit(s, e, "![alt](path)", s + 7, s + 11), "Insert"),
+)
+
+
 def apply_command(command_id: str, document: str, start: int, end: int | None = None) -> Edit:
     """The edit a note command makes for a selection [start, end) of ``document``."""
     end = start if end is None else end
@@ -326,6 +416,16 @@ def build_css(ui: dict[str, str]) -> str:
     color: {ui['muted']}; padding: 4px 8px; min-height: 20px; }}
 .idgent-notes-header button label {{ font-size: 12px; font-weight: 600; }}
 .idgent-notes-header button:hover {{ background: {hover}; color: {ui['foreground']}; }}
+popover.idgent-slash-menu {{ background: {ui['bg']}; color: {ui['foreground']};
+    border: 1px solid {ui['border']}; border-radius: 9px;
+    box-shadow: 0 4px 12px alpha({ui['overlay']}, 0.16); padding: 4px; }}
+.idgent-slash-menu list, .idgent-slash-menu row {{ background: transparent; }}
+.idgent-slash-menu row {{ padding: 6px 8px; border-radius: 4px; min-height: 20px; }}
+.idgent-slash-menu row:selected {{ background: {ui['selection_active']}; color: {ui['selection_fg']}; }}
+.idgent-slash-menu .slash-muted {{ color: {ui['muted']}; font-size: 12px; }}
+.idgent-slash-menu .slash-heading {{ padding: 6px 8px; font-weight: 600; }}
+.idgent-slash-menu .slash-footer {{ border-top: 1px solid {ui['border']}; }}
+.idgent-slash-menu .slash-footer box {{ padding: 8px; min-height: 18px; }}
 .idgent-notes-count {{ opacity: 0.65; }}
 .idgent-notes-empty {{ color: {ui['muted']}; font-size: 12px; padding: 12px; }}
 '''
