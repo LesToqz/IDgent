@@ -8,7 +8,8 @@ hide the window so it can be reused; Escape first clears a search.
 Signals: ``theme-selected(str)`` and ``font-size-changed(str, int)`` for the
 existing keys (not persisted here; the owner saves them), and
 ``setting-changed(str, object)`` for every other key in
-``settings.NEW_KEYS`` (validated and persisted here before emission).
+``settings.NEW_KEYS`` and the full ``graph`` dictionary (validated and
+persisted here before emission).
 Programmatic setters (``set_theme_id``, ``set_sizes``, ``set_values``,
 ``set_hotkeys``) never emit. ``build_css(ui)`` also contains
 ``widgets.build_css(ui)``; ``style.build_css`` installs both.
