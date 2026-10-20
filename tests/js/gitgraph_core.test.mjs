@@ -335,6 +335,11 @@ test('both orientations share lanes and order, transpose nodes and edge tangents
       const vis = labels.filter((l) => !l.hidden);
       for (let i = 0; i < vis.length; i++) for (let j = i + 1; j < vis.length; j++) assert.ok(!G.rectsOverlap(vis[i], vis[j], 0));
       if (V.head >= 0) assert.ok(vis.some((l) => l.kind === 'head'));
+      if (data === SHOW) assert.equal(vis.filter((l) => l.kind === 'pill').length, 6, 'all showcase branch pills stay visible');
+      for (const lb of vis) for (const nd of V.nodes) {
+        const p = G.position(V, nd.i, gap);
+        assert.ok(!G.rectsOverlap(lb, { x: p.x - G.C.dotR, y: p.y - G.C.dotR, w: G.C.dotR * 2, h: G.C.dotR * 2 }, 0), 'labels leave the dots clear');
+      }
       for (const pill of labels.filter((l) => l.kind === 'pill')) assert.equal(pill.node, V.lanes[pill.lane].tipIdx);
     }
   }
