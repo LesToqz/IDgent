@@ -90,8 +90,10 @@ def create_note(root: str, name: str) -> str:
                                 f"{error.strerror or error}") from error
 
 
-def list_notes(root: str) -> list[str]:
-    """Paths of the Markdown files in the notes folder, sorted by name."""
+def list_notes(root: str, sort: str = "name") -> list[str]:
+    """Markdown paths ordered by name or most recently modified first."""
+    if sort not in ("name", "modified"):
+        raise ValueError("Notes sort must be 'name' or 'modified'.")
     folder = notes_dir(root)
     try:
         with os.scandir(folder) as listing:
@@ -99,7 +101,17 @@ def list_notes(root: str) -> list[str]:
                      if entry.name.lower().endswith(NOTE_SUFFIX) and entry.is_file()]
     except OSError:
         return []
-    return sorted(paths, key=lambda path: (os.path.basename(path)[:-len(NOTE_SUFFIX)].casefold(), path))
+
+    def key(path):
+        name = (os.path.basename(path)[:-len(NOTE_SUFFIX)].casefold(), path)
+        if sort == "modified":
+            try:
+                return (-os.stat(path).st_mtime_ns, *name)
+            except OSError:
+                return (0, *name)
+        return name
+
+    return sorted(paths, key=key)
 
 
 def is_note(root: str, path: str | None) -> bool:
@@ -300,14 +312,20 @@ def build_css(ui: dict[str, str]) -> str:
     return f'''
 .idgent-note-toolbar {{ background: {ui['bg']}; border-bottom: 1px solid {ui['border']};
     padding: 8px; }}
-.idgent-note-toolbar button, .idgent-notes-tab {{ background: transparent; border: 0;
+.idgent-note-toolbar button {{ background: transparent; border: 0;
     border-radius: 4px; box-shadow: none; color: {ui['muted']}; min-height: 16px; min-width: 16px;
     padding: 4px 6px; }}
-.idgent-note-toolbar button:hover, .idgent-notes-tab:hover {{ background: {hover};
+.idgent-note-toolbar button:hover {{ background: {hover};
     color: {ui['foreground']}; }}
-.idgent-notes-tab:checked {{ background: alpha({ui['overlay']}, 0.12); color: {ui['foreground']}; }}
 .idgent-note-toolbar button image {{ opacity: 0.85; }}
 .idgent-note-toolbar button:hover image {{ opacity: 1; }}
-.idgent-note-glyph, .idgent-notes-tab label {{ font-size: 12px; font-weight: 600; }}
+.idgent-note-glyph {{ font-size: 12px; font-weight: 600; }}
+.idgent-notes-header {{ border-top: 1px solid {ui['border']};
+    border-bottom: 1px solid {ui['border']}; color: {ui['muted']}; }}
+.idgent-notes-header button {{ background: transparent; border: 0; box-shadow: none;
+    color: {ui['muted']}; padding: 4px 8px; min-height: 20px; }}
+.idgent-notes-header button label {{ font-size: 12px; font-weight: 600; }}
+.idgent-notes-header button:hover {{ background: {hover}; color: {ui['foreground']}; }}
+.idgent-notes-count {{ opacity: 0.65; }}
 .idgent-notes-empty {{ color: {ui['muted']}; font-size: 12px; padding: 12px; }}
 '''

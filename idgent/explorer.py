@@ -10,7 +10,7 @@ gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
 from gi.repository import Gdk, Gio, GLib, GObject, Gtk, Pango
 
-from . import fsops, gitstatus, notes
+from . import fsops, gitstatus, motion, notes
 from .themes import get_theme
 from .search import SearchPanel
 
@@ -32,6 +32,20 @@ class ExplorerPanel(Gtk.Box):
         self.show_hidden = True
         self.confirm_delete = True
         self.delete_mode = "delete"
+        self._notes_enabled = True
+        self._notes_visible = False
+        self._notes_requested = None
+        self._notes_sort = "name"
+        self._notes_collapsed = False
+        self._notes_height = None
+        self._notes_layout = False
+        self._notes_monitors = {}
+        self._notes_idle = 0
+        self._active_file = None
+        self.open_after_create = True
+        self._folders_first = True
+        self._compact = False
+        self._git_colors = True
         self._git_enabled = True
         self._git_snapshot = gitstatus.Snapshot()
         self._git_generation = 0
@@ -78,14 +92,13 @@ class ExplorerPanel(Gtk.Box):
         toolbar.get_accessible().set_name("EXPLORER")
         actions = Gtk.Box(spacing=2, halign=Gtk.Align.CENTER)
         toolbar.pack_start(actions, True, True, 0)
-        # The sidebar's two tabs: Explorer (the tree) and Notes (pressed).
+        # This toggle controls the section below the file tree.
         self.notes_button = Gtk.ToggleButton(label="Notes")
         self.notes_button.set_relief(Gtk.ReliefStyle.NONE)
-        self.notes_button.get_style_context().add_class("idgent-notes-tab")
         self.notes_button.get_accessible().set_name("Notes")
         self.notes_button.set_tooltip_text("Show project notes")
-        self.notes_button.connect("toggled", lambda button: self.show_tab(
-            "notes" if button.get_active() else "explorer"))
+        self.notes_button.connect("toggled", lambda button:
+                                  self.show_notes_section(button.get_active()))
         actions.pack_start(self.notes_button, False, False, 0)
         self.header_buttons = {}
         for name, tooltip, callback in (
@@ -108,23 +121,57 @@ class ExplorerPanel(Gtk.Box):
         self.search = SearchPanel(self._scroll, root)
         self.search.connect("result-activated", lambda _, *match: self.emit("search-result-activated", *match))
         self.search.connect("escaped", lambda _: self.emit("search-escaped"))
-        self.pack_start(self.search, True, True, 0)
-        # The Notes tab takes the search panel's place under the header.
-        self.notes_page = self._build_notes_page()
-        self.notes_page.show_all()
-        self.connect("destroy", self._destroy_detached_tab)
+        self.search.set_size_request(-1, 120)
+        self.notes_split = Gtk.Paned(orientation=Gtk.Orientation.VERTICAL)
+        self.notes_split.get_style_context().add_class("idgent-notes-split")
+        self.notes_split.set_wide_handle(True)
+        self.notes_split.pack1(self.search, True, False)
+        self.notes_section = self._build_notes_section()
+        self.notes_section.set_no_show_all(True)
+        self.notes_split.pack2(self.notes_section, False, False)
+        self.notes_split.connect("notify::position", self._notes_position_changed)
+        self.notes_split.connect("size-allocate", self._layout_notes)
+        self.pack_start(self.notes_split, True, True, 0)
+        self.connect("hierarchy-changed", self._notes_toplevel_changed)
+        self._notes_window = None
+        self._notes_focus_signal = None
         self.set_font_size(10)
         self.set_root(root)
 
-    def _build_notes_page(self) -> Gtk.Widget:
+    def _build_notes_section(self) -> Gtk.Widget:
+        section = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        section.get_style_context().add_class("idgent-notes-section")
+        header = Gtk.Box()
+        header.get_style_context().add_class("idgent-notes-header")
+        self.notes_collapse = Gtk.ToggleButton()
+        self.notes_collapse.set_relief(Gtk.ReliefStyle.NONE)
+        self.notes_collapse.get_accessible().set_name("Collapse notes")
+        title = Gtk.Box(spacing=6)
+        self.notes_chevron = Gtk.Image.new_from_icon_name("pan-down-symbolic", Gtk.IconSize.MENU)
+        title.pack_start(self.notes_chevron, False, False, 0)
+        title.pack_start(Gtk.Label(label="Notes", xalign=0), False, False, 0)
+        self.notes_count = Gtk.Label(label="0")
+        self.notes_count.get_style_context().add_class("idgent-notes-count")
+        title.pack_start(self.notes_count, False, False, 0)
+        self.notes_collapse.add(title)
+        self.notes_collapse.connect("toggled", lambda button:
+                                    self.set_notes_collapsed(button.get_active()))
+        header.pack_start(self.notes_collapse, True, True, 0)
+        self.notes_new = Gtk.Button.new_from_icon_name("list-add-symbolic", Gtk.IconSize.MENU)
+        self.notes_new.set_relief(Gtk.ReliefStyle.NONE)
+        self.notes_new.set_tooltip_text("New Note")
+        self.notes_new.get_accessible().set_name("New Note")
+        self.notes_new.connect("clicked", lambda *_: self.new_note_dialog())
+        header.pack_end(self.notes_new, False, False, 0)
+        section.pack_start(header, False, False, 0)
         self.notes_store = Gtk.ListStore(str, str, str)
         self.notes_tree = Gtk.TreeView(model=self.notes_store)
         self.notes_tree.set_headers_visible(False)
         self.notes_tree.get_accessible().set_name("Notes")
-        for side in ("start", "end"):
-            getattr(self.notes_tree, f"set_margin_{side}")(12)
+        self.notes_tree.set_margin_start(12)
+        self.notes_tree.set_margin_end(12)
         self.notes_tree.set_margin_top(4)
-        self.notes_tree.set_margin_bottom(24)
+        self.notes_tree.set_margin_bottom(8)
         column = Gtk.TreeViewColumn()
         icon = Gtk.CellRendererPixbuf()
         column.pack_start(icon, False)
@@ -136,56 +183,215 @@ class ExplorerPanel(Gtk.Box):
         self.notes_tree.set_activate_on_single_click(True)
         self.notes_tree.connect("row-activated", lambda tree, path, _column:
                                 self.emit("file-activated", self.notes_store[path][2]))
-        self.notes_empty = Gtk.Label(label="No notes yet. Use New Note to create one.",
-                                     xalign=0, wrap=True)
+        self.notes_tree.connect("button-press-event", self._notes_button_press)
+        self.notes_tree.connect("popup-menu", lambda *_: self._notes_menu())
+        self.notes_tree.connect("key-press-event", self._notes_key)
+        self.notes_empty = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         self.notes_empty.get_style_context().add_class("idgent-notes-empty")
-        self.notes_empty.set_no_show_all(True)
+        self.notes_empty.pack_start(Gtk.Label(label="No notes yet"), False, False, 0)
+        empty_new = Gtk.Button(label="New note", halign=Gtk.Align.CENTER)
+        empty_new.connect("clicked", lambda *_: self.new_note_dialog())
+        self.notes_empty.pack_start(empty_new, False, False, 0)
         scroll = Gtk.ScrolledWindow()
         scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         scroll.add(self.notes_tree)
-        page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        page.pack_start(self.notes_empty, False, False, 0)
-        page.pack_start(scroll, True, True, 0)
-        return page
-
-    def _destroy_detached_tab(self, *_args) -> None:
-        for page in (self.search, self.notes_page):
-            if page.get_parent() is None:
-                page.destroy()
+        self.notes_stack = Gtk.Stack()
+        self.notes_stack.add_named(scroll, "list")
+        self.notes_stack.add_named(self.notes_empty, "empty")
+        self.notes_body = Gtk.Revealer()
+        self.notes_body.set_transition_type(Gtk.RevealerTransitionType.SLIDE_DOWN)
+        self.notes_body.set_reveal_child(True)
+        self.notes_body.add(self.notes_stack)
+        self.notes_body.connect("notify::child-revealed", self._layout_notes)
+        section.pack_start(self.notes_body, True, True, 0)
+        section.show_all()
+        return section
 
     @property
-    def current_tab(self) -> str:
-        return "notes" if self.notes_page.get_parent() is self else "explorer"
+    def notes_section_visible(self) -> bool:
+        return self._notes_visible
 
-    def show_tab(self, name: str) -> None:
-        """Switch the sidebar between its 'explorer' and 'notes' tabs (instantly)."""
-        if name not in ("explorer", "notes"):
-            raise ValueError("The sidebar tabs are 'explorer' and 'notes'.")
-        notes_tab = name == "notes"
-        if self.notes_button.get_active() != notes_tab:
-            self.notes_button.set_active(notes_tab)  # re-enters through "toggled"
-            return
-        if notes_tab:
+    def set_notes_enabled(self, enabled: bool) -> None:
+        self._notes_enabled = bool(enabled)
+        self.notes_button.set_no_show_all(not self._notes_enabled)
+        self.notes_button.set_visible(self._notes_enabled)
+        wanted = self._notes_requested
+        self._set_notes_visible(self._notes_enabled and (
+            wanted if wanted is not None else os.path.isdir(notes.notes_dir(self.root))))
+
+    def show_notes_section(self, visible: bool) -> None:
+        self._notes_requested = bool(visible)
+        self._set_notes_visible(bool(visible) and self._notes_enabled)
+        if self._notes_visible:
             self.refresh_notes()
-        shown, hidden = (self.notes_page, self.search) if notes_tab else (self.search, self.notes_page)
-        if shown.get_parent() is not self:
-            self.remove(hidden)
-            self.pack_start(shown, True, True, 0)
-        self.notes_button.set_tooltip_text("Show the file explorer" if notes_tab else "Show project notes")
-        new = self.header_buttons["New File"]
-        new.set_tooltip_text("New Note" if notes_tab else "New File")
-        new.get_accessible().set_name("New Note" if notes_tab else "New File")
-        self.header_buttons["New Folder"].set_visible(not notes_tab)
+
+    def _set_notes_visible(self, visible: bool) -> None:
+        self._notes_visible = visible
+        self.notes_section.set_visible(visible)
+        if self.notes_button.get_active() != visible:
+            # Updating the button must not turn automatic visibility into a user override.
+            requested = self._notes_requested
+            self.notes_button.set_active(visible)
+            self._notes_requested = requested
+        self._layout_notes()
+
+    def set_notes_collapsed(self, collapsed: bool) -> None:
+        self._notes_collapsed = bool(collapsed)
+        if self.notes_collapse.get_active() != self._notes_collapsed:
+            self.notes_collapse.set_active(self._notes_collapsed)
+            return
+        self.notes_chevron.set_from_icon_name(
+            "pan-end-symbolic" if collapsed else "pan-down-symbolic", Gtk.IconSize.MENU)
+        self.notes_collapse.get_accessible().set_name("Expand notes" if collapsed else "Collapse notes")
+        self.notes_body.set_transition_duration(150 if motion.animations_enabled() else 0)
+        self.notes_body.set_reveal_child(not collapsed)
+        self._layout_notes()
+
+    def _layout_notes(self, *_args) -> None:
+        if not self._notes_visible or self._notes_layout:
+            return
+        height = self.notes_split.get_allocated_height() - 6
+        if height < 1:
+            return
+        header = self.notes_collapse.get_parent().get_preferred_height()[0]
+        minimum = header if self._notes_collapsed else 96
+        self.notes_section.set_size_request(-1, minimum)
+        wanted = header if self._notes_collapsed else (self._notes_height or round(height * .3))
+        section_height = max(minimum, min(wanted, height - 120))
+        self._notes_layout = True
+        self.notes_split.set_position(max(120, height - section_height))
+        self._notes_layout = False
+
+    def _notes_position_changed(self, *_args) -> None:
+        if (self._notes_layout or not self._notes_visible or self._notes_collapsed
+                or not self.notes_split.get_mapped()):
+            return
+        height = self.notes_split.get_allocated_height() - 6
+        if height >= 216:
+            self._notes_height = max(96, min(height - self.notes_split.get_position(), height - 120))
+            self._layout_notes()
+
+    def focus_notes(self) -> None:
+        self.show_notes_section(True)
+        self.set_notes_collapsed(False)
+        (self.notes_tree if len(self.notes_store) else self.notes_new).grab_focus()
+
+    def set_notes_sort(self, sort: str) -> None:
+        if sort not in ("name", "modified"):
+            raise ValueError("Notes sort must be 'name' or 'modified'.")
+        self._notes_sort = sort
+        self.refresh_notes()
 
     def refresh_notes(self) -> None:
-        """Reload the notes list from ``<root>/.IDgent/Notes``."""
+        """Reload notes, preserving the active editor's highlight."""
         selected = self._selected_note()
         self.notes_store.clear()
-        for path in notes.list_notes(self.root):
+        for path in notes.list_notes(self.root, sort=self._notes_sort):
             self.notes_store.append(["text-x-generic-symbolic", os.path.basename(path)[:-3], path])
-        self.notes_empty.set_visible(len(self.notes_store) == 0)
-        if selected:
-            self._select_note(selected)
+        self.notes_count.set_text(str(len(self.notes_store)))
+        self.notes_stack.set_visible_child_name("list" if len(self.notes_store) else "empty")
+        if self._active_file or selected:
+            self._select_note(self._active_file or selected)
+        if self._notes_requested is None:
+            self._set_notes_visible(self._notes_enabled and os.path.isdir(notes.notes_dir(self.root)))
+        self._watch_notes()
+
+    def _watch_notes(self) -> None:
+        folder = notes.notes_dir(self.root)
+        paths = {path for path in (self.root, os.path.dirname(folder), folder) if os.path.isdir(path)}
+        for path in self._notes_monitors.keys() - paths:
+            self._notes_monitors.pop(path).cancel()
+        for path in paths - self._notes_monitors.keys():
+            try:
+                monitor = Gio.File.new_for_path(path).monitor_directory(Gio.FileMonitorFlags.WATCH_MOVES, None)
+                monitor.connect("changed", self._notes_changed)
+                self._notes_monitors[path] = monitor
+            except GLib.Error:
+                pass
+
+    def _notes_changed(self, monitor, file, other, event) -> None:
+        folder = notes.notes_dir(self.root)
+        if any(item and (item.get_path() == os.path.dirname(folder)
+                         or item.get_path() == folder
+                         or os.path.dirname(item.get_path() or "") == folder) for item in (file, other)):
+            if not self._notes_idle:
+                self._notes_idle = GLib.idle_add(self._refresh_notes_idle)
+
+    def _refresh_notes_idle(self):
+        self._notes_idle = 0
+        self.refresh()
+        return GLib.SOURCE_REMOVE
+
+    def _notes_toplevel_changed(self, *_args) -> None:
+        if self._notes_window and self._notes_focus_signal:
+            self._notes_window.disconnect(self._notes_focus_signal)
+        top = self.get_toplevel()
+        self._notes_window = top if isinstance(top, Gtk.Window) else None
+        self._notes_focus_signal = (top.connect("focus-in-event", lambda *_: (self.refresh(), False)[1])
+                                    if self._notes_window else None)
+
+    def _rename_note(self) -> None:
+        path = self._selected_note()
+        if path:
+            self._name_dialog("Rename", os.path.basename(path)[:-3],
+                              lambda name: self._rename(path, notes.note_filename(name)))
+
+    def _reveal_note(self) -> None:
+        path = self._selected_note()
+        if path:
+            self.set_show_hidden(True)
+            self.set_current_file(path)
+            self.tree.grab_focus()
+
+    def _notes_menu(self, event=None) -> bool:
+        path = self._selected_note()
+        menu = Gtk.Menu()
+        for title, callback in (
+            ("Open", lambda *_: self.emit("file-activated", path)),
+            ("Rename", lambda *_: self._rename_note()),
+            ("Delete", lambda *_: self._delete_dialog(self._selected_note())),
+            ("Reveal in file tree", lambda *_: self._reveal_note()),
+        ):
+            item = Gtk.MenuItem(label=title)
+            item.set_sensitive(bool(path))
+            if title == "Delete":
+                item.get_style_context().add_class("destructive-action")
+            item.connect("activate", callback)
+            menu.append(item)
+        menu.show_all()
+        menu.attach_to_widget(self.notes_tree, None)
+        menu.connect("selection-done", lambda widget: widget.destroy())
+        if event:
+            menu.popup_at_pointer(event)
+        else:
+            menu.popup_at_widget(self.notes_tree, Gdk.Gravity.CENTER, Gdk.Gravity.NORTH_WEST, None)
+        return True
+
+    def _notes_button_press(self, tree, event) -> bool:
+        if event.button != 3:
+            return False
+        hit = tree.get_path_at_pos(int(event.x), int(event.y))
+        if hit:
+            tree.set_cursor(hit[0])
+        else:
+            tree.get_selection().unselect_all()
+        tree.grab_focus()
+        return self._notes_menu(event)
+
+    def _notes_key(self, tree, event) -> bool:
+        if event.keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter):
+            if self._selected_note():
+                self.emit("file-activated", self._selected_note())
+        elif event.keyval == Gdk.KEY_F2:
+            self._rename_note()
+        elif event.keyval in (Gdk.KEY_Delete, Gdk.KEY_KP_Delete):
+            if self._selected_note():
+                self._delete_dialog(self._selected_note())
+        elif event.keyval == Gdk.KEY_F5:
+            self.refresh()
+        else:
+            return False
+        return True
 
     def _selected_note(self) -> str | None:
         model, row = self.notes_tree.get_selection().get_selected()
@@ -202,34 +408,43 @@ class ExplorerPanel(Gtk.Box):
     def create_note(self, name: str) -> str:
         """Create a note, list and select it, and open it in the editor."""
         path = notes.create_note(self.root, name)
-        self.show_tab("notes")
+        self.show_notes_section(True)
         self.refresh_notes()
         self._select_note(path)
         if self.show_hidden:
             self._rebuild(self._expanded_paths(), self._selected_path())
         self.refresh_git()
-        self.emit("file-activated", path)
+        if self.open_after_create:
+            self.emit("file-activated", path)
         return path
 
     def new_note_dialog(self) -> None:
         self._name_dialog("New Note", "", self.create_note)
 
     def _new_clicked(self) -> None:
-        if self.current_tab == "notes":
-            self.new_note_dialog()
-        else:
-            self._new_dialog(False)
+        self._new_dialog(False)
 
     def _refresh_clicked(self) -> None:
-        if self.current_tab == "notes":
-            self.refresh_notes()
-        else:
-            self.refresh()
+        self.refresh()
+
+    def set_git_colors(self, enabled: bool) -> None:
+        self._git_colors = bool(enabled)
+        self.tree.queue_draw()
+
+    def set_folders_first(self, enabled: bool) -> None:
+        self._folders_first = bool(enabled)
+        self.refresh()
+
+    def set_compact(self, enabled: bool) -> None:
+        self._compact = bool(enabled)
+        context = self.get_style_context()
+        (context.add_class if self._compact else context.remove_class)("idgent-explorer-compact")
+        self.set_font_size(self.font_size)
 
     def _git_cell_data(self, column, cell, model, row, data=None):
         icon, _name, path = model[row][:]
         statuses = self._git_snapshot.folders if icon == "folder" else self._git_snapshot.files
-        status = statuses.get(path) if self._git_enabled else None
+        status = statuses.get(path) if self._git_enabled and self._git_colors else None
         if status:
             role = "git_" + status.kind
             found, color = self.tree.get_style_context().lookup_color("idgent_" + role)
@@ -333,6 +548,15 @@ class ExplorerPanel(Gtk.Box):
             self._git_timeout = self._git_idle = 0
         self._set_git_monitor(None)
         self._watch_current_file(None)
+        for monitor in self._notes_monitors.values():
+            monitor.cancel()
+        self._notes_monitors.clear()
+        if self._notes_idle:
+            GLib.source_remove(self._notes_idle)
+            self._notes_idle = 0
+        if self._notes_window and self._notes_focus_signal:
+            self._notes_window.disconnect(self._notes_focus_signal)
+            self._notes_focus_signal = None
 
     def set_font_size(self, size: int) -> None:
         """Resize file names and reserve enough height for their Pango metrics."""
@@ -343,7 +567,7 @@ class ExplorerPanel(Gtk.Box):
         height = (metrics.get_ascent() + metrics.get_descent()) / Pango.SCALE
         for cell, tree in ((self._text_cell, self.tree), (self._notes_cell, self.notes_tree)):
             cell.set_property("size-points", size)
-            cell.set_fixed_size(-1, max(20, int(height + .999) + 4))
+            cell.set_fixed_size(-1, max(16 if self._compact else 20, int(height + .999) + (0 if self._compact else 4)))
             tree.columns_autosize()
             tree.queue_resize()
         self.search.set_font_size(size)
@@ -352,6 +576,8 @@ class ExplorerPanel(Gtk.Box):
         self._git_snapshot = gitstatus.Snapshot()
         self._set_git_monitor(None)
         self._watch_current_file(None)
+        self._notes_requested = None
+        self._active_file = None
         self.root = os.path.abspath(path)
         self.refresh_git()
         self._rebuild({self.root}, None)
@@ -382,6 +608,7 @@ class ExplorerPanel(Gtk.Box):
 
     def set_current_file(self, path: str | None) -> None:
         """Reveal the active editor file and list its search results first."""
+        self._active_file = os.path.abspath(path) if path else None
         self._watch_current_file(path)
         self.search.set_current_file(path or None)
         if path and notes.is_note(self.root, path):
@@ -411,7 +638,6 @@ class ExplorerPanel(Gtk.Box):
 
     def focus_search(self, query: str | None = None) -> None:
         """Focus the search entry; a given query replaces its text and runs at once."""
-        self.show_tab("explorer")
         self.search.focus_search()
         if query:
             self.search.search_now(query)
@@ -421,7 +647,7 @@ class ExplorerPanel(Gtk.Box):
         self.search.clear()
 
     def focus_tree(self) -> None:
-        (self.notes_tree if self.current_tab == "notes" else self.tree).grab_focus()
+        self.tree.grab_focus()
 
     def _refresh_search(self) -> None:
         # Never leave results pointing at renamed or deleted files.
@@ -472,7 +698,7 @@ class ExplorerPanel(Gtk.Box):
                         continue
         except OSError:
             pass
-        for directory, name, full_path in sorted(entries, key=lambda item: (not item[0], item[1].casefold(), item[1])):
+        for directory, name, full_path in sorted(entries, key=lambda item: (not item[0] if self._folders_first else False, item[1].casefold(), item[1])):
             child = self.store.append(row, ["folder" if directory else "text-x-generic", name, full_path])
             if directory:
                 self.store.append(child, [None, "", ""])
@@ -532,6 +758,7 @@ class ExplorerPanel(Gtk.Box):
         self._rebuild(expanded, result)
         self._refresh_search()
         self.refresh_git()
+        self.refresh_notes()
         return result
 
     def _rename(self, path: str, name: str) -> str:
@@ -541,10 +768,13 @@ class ExplorerPanel(Gtk.Box):
         result = fsops.rename(path, name)
         expanded = {result + old[len(path):] if old == path or old.startswith(path + os.sep) else old for old in expanded}
         self._rebuild(expanded, result)
+        if self._active_file and (self._active_file == path or self._active_file.startswith(path + os.sep)):
+            self._active_file = result + self._active_file[len(path):]
         self.emit("path-renamed", path, result)
         # After the signal, so open tabs already carry their new paths.
         self._refresh_search()
         self.refresh_git()
+        self.refresh_notes()
         return result
 
     def _delete(self, path: str, *, permanent: bool = False) -> str:
@@ -553,9 +783,12 @@ class ExplorerPanel(Gtk.Box):
         operation = fsops.trash if self.delete_mode == "trash" and not permanent else fsops.delete
         result = operation(path, project_root=self.root)
         self._rebuild(self._expanded_paths(), self._selected_path())
+        if self._active_file and (self._active_file == path or self._active_file.startswith(path + os.sep)):
+            self._active_file = None
         self.emit("path-deleted", result)
         self._refresh_search()
         self.refresh_git()
+        self.refresh_notes()
         return result
 
     def _window(self) -> Gtk.Window | None:
@@ -613,8 +846,8 @@ class ExplorerPanel(Gtk.Box):
         dialog.destroy()
         return accepted
 
-    def _delete_dialog(self) -> None:
-        path = self._selected_path()
+    def _delete_dialog(self, path: str | None = None) -> None:
+        path = path or self._selected_path()
         if not path or path == self.root:
             return
         if self.confirm_delete and not self._confirm_removal(path):
@@ -689,11 +922,10 @@ class ExplorerPanel(Gtk.Box):
     def _on_key(self, tree: Gtk.TreeView, event: Gdk.EventKey) -> bool:
         if self._search_has_focus():
             return False
-        if self.current_tab == "notes":
-            if event.keyval != Gdk.KEY_F5:
-                return False
-            self.refresh_notes()
-        elif event.keyval == Gdk.KEY_F2:
+        top = self.get_toplevel()
+        if isinstance(top, Gtk.Window) and top.get_focus() is self.notes_tree:
+            return self._notes_key(self.notes_tree, event)
+        if event.keyval == Gdk.KEY_F2:
             self._rename_dialog()
         elif event.keyval in (Gdk.KEY_Delete, Gdk.KEY_KP_Delete):
             self._delete_dialog()
@@ -717,6 +949,11 @@ def build_css(ui: dict[str, str]) -> str:
 .idgent-explorer-header {{ background: {ui['sidebar_bg']}; min-height: 24px; padding: 8px; }}
 .idgent-explorer-header button {{ background: transparent; border: 0; border-radius: 4px;
     box-shadow: none; color: {ui['muted']}; min-height: 16px; min-width: 16px; padding: 4px 6px; }}
+.idgent-explorer-header button:checked {{ background: alpha({ui['overlay']}, 0.12); color: {ui['foreground']}; }}
+.idgent-explorer-header button label {{ font-size: 12px; font-weight: 600; }}
+.idgent-explorer.idgent-explorer-compact treeview.view {{ -GtkTreeView-vertical-separator: 0; }}
+.idgent-notes-split > separator {{ min-height: 6px; min-width: 0; background: {ui['sidebar_bg']}; }}
+.idgent-notes-split > separator:hover, .idgent-notes-split > separator:active {{ background: {ui['border_focus']}; }}
 .idgent-explorer-header button image {{ opacity: 0.85; }}
 .idgent-explorer-header button:hover {{ background: alpha({ui['overlay']}, 0.067); color: {ui['foreground']}; }}
 .idgent-explorer-header button:hover image {{ opacity: 1; }}

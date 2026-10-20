@@ -190,7 +190,8 @@ class ExplorerTests(unittest.TestCase):
 
     def test_search_box_under_header_and_forwarding(self):
         children = self.panel.get_children()
-        self.assertIs(children[1], self.panel.search)
+        self.assertIs(children[1], self.panel.notes_split)
+        self.assertIs(self.panel.notes_split.get_child1(), self.panel.search)
         self.assertIs(self.panel.search.get_children()[0].get_children()[0], self.panel.search.entry)
         received = []
         self.panel.connect('search-result-activated', lambda _, *args: received.append(args))
@@ -483,41 +484,32 @@ class ExplorerTests(unittest.TestCase):
     def notes_folder(self):
         return self.root / '.IDgent' / 'Notes'
 
-    def test_notes_tab_replaces_tree_and_lists_markdown_notes(self):
+    def test_notes_section_keeps_tree_and_lists_markdown_notes(self):
         self.show_panel()
-        header = self.panel.get_children()[0]
-        notes, new, new_folder, refresh = header.get_children()[0].get_children()
-        self.assertIs(notes, self.panel.notes_button)
-        self.assertEqual(notes.get_label(), 'Notes')
-        self.assertEqual(self.panel.current_tab, 'explorer')
-        notes.clicked()
-        self.assertEqual(self.panel.current_tab, 'notes')
-        self.assertEqual(self.panel.get_children(), [header, self.panel.notes_page])
-        self.assertFalse(self.notes_folder().exists(), 'opening the tab must not create the folder')
-        self.assertTrue(self.panel.notes_empty.get_visible())
-        self.assertEqual(new.get_accessible().get_name(), 'New Note')
-        self.assertFalse(new_folder.get_visible())
+        self.assertFalse(self.panel.notes_section_visible)
+        self.panel.notes_button.clicked()
+        self.assertTrue(self.panel.notes_section_visible)
+        self.assertIs(self.panel.search.get_parent(), self.panel.notes_split)
+        self.assertFalse(self.notes_folder().exists())
+        self.assertEqual(self.panel.notes_stack.get_visible_child_name(), 'empty')
+        self.assertEqual(self.panel.header_buttons['New File'].get_accessible().get_name(), 'New File')
+        self.assertTrue(self.panel.header_buttons['New Folder'].get_visible())
         self.notes_folder().mkdir(parents=True)
         for name in ('b note.md', 'A.md', 'skip.txt'):
             (self.notes_folder() / name).write_text('x')
         (self.notes_folder() / 'dir.md').mkdir()
-        refresh.clicked()
+        self.panel.header_buttons['Refresh'].clicked()
         self.assertEqual([row[1] for row in self.panel.notes_store], ['A', 'b note'])
-        self.assertFalse(self.panel.notes_empty.get_visible())
         opened = []
         self.panel.connect('file-activated', lambda _, path: opened.append(path))
         self.panel.notes_tree.row_activated(Gtk.TreePath(1), self.panel.notes_tree.get_column(0))
         self.assertEqual(opened, [str(self.notes_folder() / 'b note.md')])
-        notes.clicked()
-        self.assertEqual(self.panel.current_tab, 'explorer')
-        self.assertEqual(self.panel.get_children(), [header, self.panel.search])
-        self.assertEqual(new.get_accessible().get_name(), 'New File')
-        self.assertTrue(new_folder.get_visible())
+        self.panel.notes_button.clicked()
+        self.assertFalse(self.panel.notes_section_visible)
         self.assertTrue(self.panel.tree.is_drawable())
 
     def test_new_note_button_creates_lazily_suffixes_and_opens(self):
         self.show_panel()
-        new = self.panel.header_buttons['New File']
         opened, names = [], iter(['coffi shop', 'coffi shop'])
         self.panel.connect('file-activated', lambda _, path: opened.append(path))
 
@@ -525,16 +517,15 @@ class ExplorerTests(unittest.TestCase):
             self.assertEqual(title, 'New Note')
             action(next(names))
 
-        self.panel.show_tab('notes')
+        self.panel.show_notes_section(True)
         with patch.object(self.panel, '_name_dialog', side_effect=accept_name):
-            new.clicked()
-            new.clicked()
+            self.panel.notes_new.clicked()
+            self.panel.notes_new.clicked()
         first, second = self.notes_folder() / 'coffi shop.md', self.notes_folder() / 'coffi shop 2.md'
         self.assertEqual(opened, [str(first), str(second)])
         self.assertEqual(first.read_text(), '# coffi shop\n\n')
         self.assertEqual([row[1] for row in self.panel.notes_store], ['coffi shop', 'coffi shop 2'])
         self.assertEqual(self.panel._selected_note(), str(second))
-        # The explorer keeps working: the hidden notes folder appears in the tree.
         self.assertIsNotNone(self.panel._find(str(self.root / '.IDgent')))
 
     def test_note_name_errors_keep_dialog_open(self):
@@ -547,24 +538,12 @@ class ExplorerTests(unittest.TestCase):
         self.assertTrue(all(errors))
         self.assertFalse((self.root / '.IDgent').exists())
 
-    def test_notes_tab_shortcuts_do_not_touch_hidden_tree(self):
-        self.panel.show_tab('notes')
-        self.panel._select(str(self.root / 'A.py'))
-        event = Gdk.Event.new(Gdk.EventType.KEY_PRESS)
-        event.keyval = Gdk.KEY_Delete
-        with patch.object(self.panel, '_delete_dialog') as delete:
-            self.assertFalse(self.panel._on_key(self.panel, event))
-        delete.assert_not_called()
+    def test_search_keeps_notes_section_visible(self):
+        self.panel.show_notes_section(True)
         self.panel.focus_search('needle')
-        self.assertEqual(self.panel.current_tab, 'explorer')
+        self.assertTrue(self.panel.notes_section_visible)
+        self.assertIs(self.panel.search.get_parent(), self.panel.notes_split)
 
-    def test_destroy_with_detached_tab(self):
-        self.panel.show_tab('notes')
-        search = self.panel.search
-        destroyed = []
-        search.connect('destroy', lambda *_: destroyed.append(True))
-        self.panel.destroy()
-        self.assertEqual(destroyed, [True])
 
 
 if __name__ == '__main__':

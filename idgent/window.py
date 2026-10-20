@@ -295,11 +295,11 @@ class MainWindow(Gtk.ApplicationWindow):
     # Notes ---------------------------------------------------------------------
 
     def show_notes(self) -> None:
-        """Show the sidebar's Notes tab."""
+        """Reveal and focus the Notes section below the file tree."""
         self._restore_terminal_fullscreen()
         if not self.explorer.get_visible():
             self._toggle(self.explorer)
-        self.explorer.show_tab("notes")
+        self.explorer.focus_notes()
 
     def new_note(self) -> None:
         self.show_notes()

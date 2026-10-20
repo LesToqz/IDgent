@@ -35,7 +35,9 @@ where something moves (sliding toggles, notices, terminal panes).
 
 One top bar contains File/View menus, the title **IDgent**, a settings cog and the
 compact window buttons; the right-dock toggle sits beside the cog (Ctrl+Alt+`). The explorer sidebar starts 300 px wide.
-The explorer on the left supports searching (see Search in Files), creating
+The explorer on the left has a collapsible Notes section below the file tree, with a draggable divider.
+Its Notes header button shows or hides the section; the tree stays visible above it.
+The explorer supports searching (see Search in Files), creating
 files/folders, renaming, deleting and refreshing. Renames retarget open files; deletions mark affected tabs deleted.
 File → Open Folder changes the explorer root and the directory for new shells;
 existing shells keep their directories. Deletion is permanent by default; Settings →
