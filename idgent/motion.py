@@ -29,6 +29,9 @@ DURATIONS.update({
     "notice_autohide": DURATIONS["notice_hold"],
     "notice_enter": DURATIONS["travel"],
     "notice_exit": DURATIONS["state"],
+    "tab_close_reflow": DURATIONS["travel"],
+    "clickable_icon_opacity": DURATIONS["state"],
+    "notice_hover_grace": DURATIONS["pause"],
 })
 # Curves chosen for IDgent. Default motion stays within the endpoints.
 _EASING_POINTS = {

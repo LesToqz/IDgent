@@ -93,10 +93,17 @@ Existing callers can still resolve these duration aliases:
 | --- | --- |
 | none | instant |
 | superfast | feedback |
-| fast, collapse, toggle, notice_out, notice_exit, resize_handle | state |
-| moderate, notice_in, notice_enter, reflow | travel |
+| fast, collapse, toggle, notice_out, notice_exit, resize_handle, clickable_icon_opacity | state |
+| moderate, notice_in, notice_enter, reflow, tab_close_reflow | travel |
 | slow | settle |
+| notice_hover_grace | pause |
 | notice_autohide | notice_hold |
+
+The component keys are public caller contracts. Tab-close layout movement uses
+`travel` (224 ms); clickable-icon opacity uses `state` (128 ms). These keys
+resolve to IDgent's durations and respect the same reduced-motion preferences.
+After leaving a hovered notice, `notice_hover_grace` allows a deliberate
+`pause` (640 ms) before dismissal, capped by the notice's own timeout.
 
 Each curve is a CSS cubic Bézier `(x1, y1, x2, y2)`:
 
