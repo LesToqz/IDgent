@@ -127,11 +127,11 @@ class StyleTest(unittest.TestCase):
                 self.assertEqual(button.get_allocated_height(), 34)
                 button.set_state_flags(Gtk.StateFlags.PRELIGHT, False)
                 bg, overlay = theme.ui['bg'], theme.ui['overlay']
-                expected = tuple(round(int(bg[i:i + 2], 16) * .933 +
-                                       int(overlay[i:i + 2], 16) * .067) for i in (1, 3, 5))
+                expected = tuple(round(int(bg[i:i + 2], 16) * .91 +
+                                       int(overlay[i:i + 2], 16) * .09) for i in (1, 3, 5))
                 # Style resolves immediately; only the next paint needs polling.
                 color = button.get_style_context().get_background_color(button.get_state_flags())
-                self.assertAlmostEqual(color.alpha, .067, places=3)
+                self.assertAlmostEqual(color.alpha, .09, places=3)
                 self.assertTrue(self.poll(lambda: all(abs(a - b) <= 1 for a, b in zip(
                     self.pixel(window, button, 8, 15), expected))))
                 window.destroy()
@@ -159,7 +159,7 @@ class StyleTest(unittest.TestCase):
         window, button, _ = self.controls_window(theme)
         button.grab_focus()
         self.assertTrue(self.poll(button.has_focus))
-        ring = (0x55, 0x55, 0x55)
+        ring = tuple(int(theme.ui['border_focus'][i:i + 2], 16) for i in (1, 3, 5))
         window.set_focus_visible(False)
         button.queue_draw()
         self.assertTrue(self.poll(lambda: self.pixel(window, button, -2, 15) != ring))

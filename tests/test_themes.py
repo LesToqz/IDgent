@@ -84,7 +84,7 @@ class ThemesTest(unittest.TestCase):
 
     def test_git_colors_are_readable_on_sidebar_and_selected_rows(self):
         for theme in themes.THEMES:
-            selected = themes._mix_color(theme.ui['sidebar_bg'], theme.ui['overlay'], .067)
+            selected = themes._mix_color(theme.ui['sidebar_bg'], theme.ui['overlay'], .09)
             for role in ('git_new', 'git_modified', 'git_conflict'):
                 with self.subTest(theme=theme.id, role=role):
                     self.assertGreaterEqual(contrast(theme.ui[role], theme.ui['sidebar_bg']), 4.5)
