@@ -79,6 +79,8 @@ class TitleBar(Gtk.HeaderBar):
     __gsignals__ = {
         "settings-requested": (GObject.SignalFlags.RUN_LAST, None, ()),
         "dock-toggle-requested": (GObject.SignalFlags.RUN_LAST, None, ()),
+        "bottom-dock-toggle-requested": (GObject.SignalFlags.RUN_LAST, None, ()),
+        "explorer-toggle-requested": (GObject.SignalFlags.RUN_LAST, None, ()),
     }
 
     def __init__(self, menu_bar: Gtk.MenuBar) -> None:
@@ -91,6 +93,12 @@ class TitleBar(Gtk.HeaderBar):
         self.menu_bar = menu_bar
         menu_bar.set_valign(Gtk.Align.CENTER)
         self.pack_start(menu_bar)
+        icon_theme = Gtk.IconTheme.get_default()
+        self.explorer_button, self.explorer_fader, self._explorer_click_handler = self._toggle_icon(
+            icon_theme, ("sidebar-show-symbolic", "panel-left-symbolic"), "▯",
+            "Toggle file explorer (Ctrl+B)", "Toggle file explorer", "explorer-toggle-requested")
+        self.explorer_button.set_margin_start(2)
+        self.pack_start(self.explorer_button)
         self.title_label = Gtk.Label()
         self.title_label.get_style_context().add_class("idgent-title")
         self.set_custom_title(self.title_label)
@@ -103,7 +111,6 @@ class TitleBar(Gtk.HeaderBar):
         context = self.settings_button.get_style_context()
         context.add_class("flat")
         context.add_class("idgent-settings-button")
-        icon_theme = Gtk.IconTheme.get_default()
         for name in ("preferences-system-symbolic", "emblem-system-symbolic",
                      "preferences-other-symbolic"):
             if icon_theme is not None and icon_theme.has_icon(name):
@@ -117,33 +124,55 @@ class TitleBar(Gtk.HeaderBar):
         self.settings_button.get_accessible().set_name("Settings")
         self.settings_button.connect("clicked", lambda _: self.emit("settings-requested"))
         self.pack_end(self.settings_button)
-        self.dock_button = Gtk.ToggleButton()
-        self.dock_button.set_relief(Gtk.ReliefStyle.NONE)
-        self.dock_button.set_valign(Gtk.Align.CENTER)
+        self.dock_button, self.dock_fader, self._dock_click_handler = self._toggle_icon(
+            icon_theme, ("sidebar-show-right-symbolic", "panel-right-symbolic"), "▯",
+            "Toggle right terminal / graph dock (Ctrl+Alt+`)", "Toggle right dock",
+            "dock-toggle-requested")
         self.dock_button.set_margin_end(6)
-        self.dock_button.get_style_context().add_class("flat")
-        self.dock_button.get_style_context().add_class("idgent-settings-button")
-        for name in ("sidebar-show-right-symbolic", "panel-right-symbolic"):
+        self.pack_end(self.dock_button)
+        self.bottom_dock_button, self.bottom_dock_fader, self._bottom_dock_click_handler = (
+            self._toggle_icon(icon_theme, ("panel-bottom-symbolic", "sidebar-show-bottom-symbolic"),
+                              "▭", "Toggle terminal below (Ctrl+`)", "Toggle terminal below",
+                              "bottom-dock-toggle-requested"))
+        self.bottom_dock_button.set_margin_end(2)
+        self.pack_end(self.bottom_dock_button)
+
+    def _toggle_icon(self, icon_theme, names, fallback, tooltip, accessible, signal):
+        """A 28 x 28 toggle in the cog's clickable-icon style, with its glyph fade."""
+        button = Gtk.ToggleButton()
+        button.set_relief(Gtk.ReliefStyle.NONE)
+        button.set_valign(Gtk.Align.CENTER)
+        button.get_style_context().add_class("flat")
+        button.get_style_context().add_class("idgent-settings-button")
+        for name in names:
             if icon_theme is not None and icon_theme.has_icon(name):
-                self.dock_button.add(Gtk.Image.new_from_icon_name(name, Gtk.IconSize.MENU))
+                button.add(Gtk.Image.new_from_icon_name(name, Gtk.IconSize.MENU))
                 break
         else:
-            self.dock_button.add(Gtk.Label(label="▯"))
-        self.dock_fader = motion.StateFader(
-            self.dock_button, self._set_dock_glyph, "clickable_icon_opacity", "ease_in_out")
-        self.dock_button.set_tooltip_text("Toggle right terminal / graph dock (Ctrl+Alt+`)")
-        self.dock_button.get_accessible().set_name("Toggle right dock")
-        self._dock_click_handler = self.dock_button.connect(
-            "clicked", lambda _: self.emit("dock-toggle-requested"))
-        self.pack_end(self.dock_button)
+            button.add(Gtk.Label(label=fallback))
+        fader = motion.StateFader(
+            button, lambda hover: button.get_child().set_opacity(
+                GLYPH_OPACITY + (1 - GLYPH_OPACITY) * hover),
+            "clickable_icon_opacity", "ease_in_out")
+        button.set_tooltip_text(tooltip)
+        button.get_accessible().set_name(accessible)
+        handler = button.connect("clicked", lambda _: self.emit(signal))
+        return button, fader, handler
+
+    @staticmethod
+    def _sync(button: Gtk.ToggleButton, handler: int, active: bool) -> None:
+        # Gtk.ToggleButton.set_active emits clicked; syncing must not toggle anything.
+        with button.handler_block(handler):
+            button.set_active(active)
 
     def set_dock_active(self, active: bool) -> None:
-        # Gtk.ToggleButton.set_active emits clicked; syncing must not toggle the dock.
-        with self.dock_button.handler_block(self._dock_click_handler):
-            self.dock_button.set_active(active)
+        self._sync(self.dock_button, self._dock_click_handler, active)
 
-    def _set_dock_glyph(self, hover: float) -> None:
-        self.dock_button.get_child().set_opacity(GLYPH_OPACITY + (1 - GLYPH_OPACITY) * hover)
+    def set_bottom_dock_active(self, active: bool) -> None:
+        self._sync(self.bottom_dock_button, self._bottom_dock_click_handler, active)
+
+    def set_explorer_active(self, active: bool) -> None:
+        self._sync(self.explorer_button, self._explorer_click_handler, active)
 
     def do_size_allocate(self, allocation) -> None:
         # GTK owns these children and rebuilds them when window state changes.

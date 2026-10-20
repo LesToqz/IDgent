@@ -93,6 +93,56 @@ class TitleBarTests(unittest.TestCase):
                 self.assertIn(f"border-bottom: 1px solid {theme.ui['border']}", css)
                 self.assertIn('button.idgent-settings-button:hover', css)
 
+    def test_explorer_and_bottom_dock_toggles_sit_beside_view_and_right_dock(self):
+        bar = self.window.titlebar
+        self.assertTrue(poll(lambda: bar.explorer_button.get_mapped()))
+        view_menu = bar.menu_bar.get_children()[1]
+        self.assertEqual(view_menu.get_label(), 'View')
+        view_x = view_menu.translate_coordinates(bar, 0, 0)[0] + view_menu.get_allocated_width()
+        explorer_x, explorer_y = bar.explorer_button.translate_coordinates(bar, 0, 0)
+        self.assertGreaterEqual(explorer_x, view_x)
+        self.assertLessEqual(explorer_x - view_x, 8)
+        bottom_x, bottom_y = bar.bottom_dock_button.translate_coordinates(bar, 0, 0)
+        dock_x, dock_y = bar.dock_button.translate_coordinates(bar, 0, 0)
+        self.assertEqual(bottom_x + 28 + bar.bottom_dock_button.get_margin_end(), dock_x)
+        self.assertEqual(explorer_y, dock_y)
+        self.assertEqual(bottom_y, dock_y)
+        for button, name, tooltip, icon, signal in (
+                (bar.explorer_button, 'Toggle file explorer', 'Toggle file explorer (Ctrl+B)',
+                 ('sidebar-show-symbolic', 'panel-left-symbolic'), 'explorer-toggle-requested'),
+                (bar.bottom_dock_button, 'Toggle terminal below', 'Toggle terminal below (Ctrl+`)',
+                 ('panel-bottom-symbolic', 'sidebar-show-bottom-symbolic'),
+                 'bottom-dock-toggle-requested')):
+            with self.subTest(name=name):
+                self.assertIsInstance(button, Gtk.ToggleButton)
+                self.assertEqual(button.get_accessible().get_name(), name)
+                self.assertEqual(button.get_tooltip_text(), tooltip)
+                child = button.get_child()
+                if isinstance(child, Gtk.Image):
+                    self.assertIn(child.get_icon_name()[0], icon)
+                self.assertTrue(button.get_style_context().has_class('idgent-settings-button'))
+                self.assertEqual((button.get_allocated_width(), button.get_allocated_height()), (28, 28))
+                self.assertAlmostEqual(child.get_opacity(), GLYPH_OPACITY, delta=1 / 255)
+                requested = []
+                handler = bar.connect(signal, lambda _: requested.append(True))
+                # Programmatic syncs never request a toggle.
+                active = button.get_active()
+                getattr(bar, 'set_explorer_active' if button is bar.explorer_button
+                        else 'set_bottom_dock_active')(not active)
+                self.assertEqual(requested, [])
+                self.assertEqual(button.get_active(), not active)
+                bar.disconnect(handler)
+
+    def test_titlebar_toggle_fallback_glyphs(self):
+        with patch.object(Gtk.IconTheme, 'get_default') as theme:
+            theme.return_value.has_icon.return_value = False
+            bar = TitleBar(Gtk.MenuBar())
+        try:
+            self.assertEqual(bar.explorer_button.get_child().get_text(), '▯')
+            self.assertEqual(bar.bottom_dock_button.get_child().get_text(), '▭')
+        finally:
+            bar.destroy()
+
     def test_settings_button_accessibility_and_signal(self):
         bar = self.window.titlebar
         button = bar.settings_button
@@ -126,7 +176,9 @@ class TitleBarTests(unittest.TestCase):
                         self.assertEqual(child.get_icon_name()[0], available)
                     expected = names if available is None else names[:names.index(available) + 1]
                     self.assertEqual([call.args[0] for call in get_theme.return_value.has_icon.call_args_list],
-                                     list(expected) + ["sidebar-show-right-symbolic", "panel-right-symbolic"])
+                                     ["sidebar-show-symbolic", "panel-left-symbolic", *expected,
+                                      "sidebar-show-right-symbolic", "panel-right-symbolic",
+                                      "panel-bottom-symbolic", "sidebar-show-bottom-symbolic"])
                 finally:
                     bar.destroy()
 
@@ -383,7 +435,8 @@ class TitleBarTests(unittest.TestCase):
     def test_window_controls_fit_at_minimum_window_width(self):
         bar = self.window.titlebar
         minimum = self.window.get_preferred_width().minimum_width
-        self.assertLessEqual(minimum, 336)
+        # Menus + explorer toggle, title, bottom/right dock toggles, cog, window controls.
+        self.assertLessEqual(minimum, 400)
         self.window.resize(minimum, 400)
         self.assertTrue(poll(lambda: bar.get_allocated_width() == minimum))
         buttons = [find_class(bar, name) for name in ('minimize', 'maximize', 'close')]
@@ -402,7 +455,12 @@ class TitleBarTests(unittest.TestCase):
         title_x, _ = bar.title_label.translate_coordinates(bar, 0, 0)
         self.assertLessEqual(menu_x + bar.menu_bar.get_allocated_width(), title_x)
         dock_x, _ = bar.dock_button.translate_coordinates(bar, 0, 0)
-        self.assertLessEqual(title_x + bar.title_label.get_allocated_width(), dock_x)
+        bottom_x, _ = bar.bottom_dock_button.translate_coordinates(bar, 0, 0)
+        explorer_x, _ = bar.explorer_button.translate_coordinates(bar, 0, 0)
+        self.assertLessEqual(menu_x + bar.menu_bar.get_allocated_width(), explorer_x)
+        self.assertLessEqual(explorer_x + 28, title_x)
+        self.assertLessEqual(title_x + bar.title_label.get_allocated_width(), bottom_x)
+        self.assertEqual(bottom_x + 28 + bar.bottom_dock_button.get_margin_end(), dock_x)
         self.assertEqual(dock_x + 28 + bar.dock_button.get_margin_end(), gear_x)
         self.assertEqual(bar.get_allocated_height(), HEADER_HEIGHT)
 

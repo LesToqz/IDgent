@@ -10,6 +10,7 @@ gi.require_version('Gdk', '3.0')
 from gi.repository import Gdk, GLib, Gtk
 
 from idgent.explorer import build_css as build_explorer_css
+from idgent.notes import build_css as build_notes_css
 from idgent.editor import build_css as build_editor_css
 from idgent.terminal_bar import build_css as build_terminal_bar_css
 from idgent.overlay import build_css as build_overlay_css
@@ -92,6 +93,7 @@ row:hover, row:selected {{ background: alpha({ui['overlay']}, {opacity['hover']}
 menu separator {{ background: {ui['border']}; min-height: {geometry['border']}px; margin: {space['tight']}px 0; }}
 menuitem.destructive-action {{ color: {ui['danger']}; }}
 {build_explorer_css(ui)}
+{build_notes_css(ui)}
 {build_editor_css(ui)}
 scrollbar, scrollbar trough {{ background: transparent; border: 0;
     box-shadow: none; padding: 0; margin: 0; min-width: 0; min-height: 0; }}
