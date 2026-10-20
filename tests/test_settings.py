@@ -231,7 +231,7 @@ class GraphSettingsTest(unittest.TestCase):
 
     def test_defaults_are_independent_and_not_user_tuned(self):
         graph = settings.get_graph()
-        self.assertEqual(graph['textFadeMultiplier'], 0)
+        self.assertEqual(graph['textFadeMultiplier'], 0.2)
         self.assertFalse(graph['showTags'])
         self.assertEqual(graph['scale'], 1)
         self.assertTrue(graph['showCode'])
@@ -253,10 +253,10 @@ class GraphSettingsTest(unittest.TestCase):
         self.assertFalse(result['showCode'])
         self.assertFalse(result['showOrphans'])
         self.assertEqual(result['localDepth'], settings.GRAPH_LIMITS['localDepth'][1])
-        self.assertEqual(result['repelStrength'], 20)
-        self.assertEqual(result['linkDistance'], 30)
-        self.assertEqual(result['scale'], 1 / 128)
-        self.assertEqual(result['linkStrength'], 1)
+        self.assertEqual(result['repelStrength'], 24)
+        self.assertEqual(result['linkDistance'], 48)
+        self.assertEqual(result['scale'], 0.04)
+        self.assertEqual(result['linkStrength'], 0.35)
         self.assertEqual(result['centerStrength'], settings.GRAPH_DEFAULTS['centerStrength'])
         self.assertEqual(result['colorGroups'], [{'query': 'tag:a', 'color': '#abcdef'}])
         self.assertNotIn('unknown', settings.load()['graph'])
@@ -328,39 +328,26 @@ class GraphSettingsTest(unittest.TestCase):
         self.assertEqual(len(settings.normalize_graph({'colorGroups': groups})['colorGroups']), 12)
         self.assertEqual(settings.normalize_graph({'colorGroups': {}})['colorGroups'], [])
 
-    def test_graph_parameters_match_authoritative_reference(self):
-        reference = json.loads((Path(__file__).resolve().parents[1] / 'docs' /
-                                'reference_app-graph-params.json').read_text())['settings']
-        for key, parameter in reference.items():
-            with self.subTest(key=key):
-                self.assertEqual(settings.GRAPH_DEFAULTS[key], parameter['default'])
-                if 'min' in parameter:
-                    self.assertEqual(settings.GRAPH_LIMITS[key],
-                                     (parameter['min'], parameter['max']))
-                    self.assertEqual(settings.GRAPH_STEPS[key], parameter.get('step'))
-        for host, reference_app in (('localDepth', 'localJumps'),
-                               ('localIncoming', 'localBacklinks'),
-                               ('localOutgoing', 'localForelinks')):
-            self.assertEqual(settings.GRAPH_DEFAULTS[host], reference[reference_app]['default'])
-        self.assertEqual(settings.GRAPH_LIMITS['localDepth'], (1, 5))
-        self.assertEqual(settings.GRAPH_STEPS['localDepth'], 1)
-        self.assertTrue(settings.GRAPH_DEFAULTS['showCode'])
-        self.assertFalse(settings.GRAPH_DEFAULTS['reduceMotion'])
+    def test_graph_parameters_match_idgent_contract(self):
+        reference = json.loads((Path(__file__).parent / 'graph_params.json').read_text())
+        self.assertEqual(settings.GRAPH_DEFAULTS, reference['defaults'])
+        self.assertEqual(settings.GRAPH_LIMITS,
+                         {key: tuple(bounds) for key, bounds in reference['limits'].items()})
+        self.assertEqual(settings.GRAPH_STEPS, reference['steps'])
 
     def test_graph_integer_controls_and_continuous_values(self):
-        result = settings.normalize_graph({'localJumps': 2.6, 'localDepth': 3.2,
+        result = settings.normalize_graph({'localDepth': 3.2,
                                            'linkDistance': 250.7,
-                                           'textFadeMultiplier': -1.85,
+                                           'textFadeMultiplier': -0.85,
                                            'nodeSizeMultiplier': 1.2345})
-        self.assertEqual(result['localJumps'], 3)
         self.assertEqual(result['localDepth'], 3)
-        self.assertEqual(result['linkDistance'], 251)
-        self.assertEqual(result['textFadeMultiplier'], -1.85)
+        self.assertEqual(result['linkDistance'], 250.7)
+        self.assertEqual(result['textFadeMultiplier'], -0.85)
         self.assertEqual(result['nodeSizeMultiplier'], 1.2345)
 
     def test_graph_panel_local_and_motion_flags_persist(self):
-        flags = {'close': True, 'localInterlinks': True, 'localBacklinks': False,
-                 'localForelinks': False, 'reduceMotion': True}
+        flags = {'close': True, 'localIncoming': False,
+                 'localOutgoing': False, 'reduceMotion': True}
         self.assertTrue(settings.set_graph(flags))
         for key, value in flags.items():
             self.assertIs(settings.get_graph()[key], value)

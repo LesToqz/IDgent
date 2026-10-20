@@ -23,8 +23,8 @@
 
   // ------------------------------------------------------------ state
   const settings = Object.assign({}, G.DEFAULTS, { colorGroups: [] });
-  const local = { enabled: false, path: null, depth: 1, incoming: true, outgoing: true };
-  const disp = { node: 1, line: 1, fade: 0 };                    // eased display multipliers
+  const local = { enabled: false, path: null, depth: G.DEFAULTS.localDepth, incoming: G.DEFAULTS.localIncoming, outgoing: G.DEFAULTS.localOutgoing };
+  const disp = { node: G.DEFAULTS.nodeSizeMultiplier, line: G.DEFAULTS.lineSizeMultiplier, fade: G.DEFAULTS.textFadeMultiplier };                    // eased display multipliers
   let themeRaw = Object.assign({}, G.DARK_THEME);
   let pal = G.palette(themeRaw), palFrom = pal, palTo = pal, palT = 1;
   let random = G.rng(1);
@@ -86,7 +86,7 @@
     if (Array.isArray(cg) && cg[g] && cg[g].color != null) return G.parseColor(cg[g].color);
     return pal.groups[g % pal.groups.length] || pal.fill;
   }
-  /** Target fill (spec C.1 priority). */
+  /** Target fill. */
   function targetColor(i) {
     if (i === highlight) return pal.highlight;
     const k = kinds[i];
@@ -108,7 +108,7 @@
       if (f != null) { focus = nodeIndex(f); if (focus < 0) focus = paths.indexOf(f); }
     }
     if (focus >= 0) {
-      const depth = Math.max(1, Math.min(5, local.depth | 0 || 1));
+      const depth = Math.round(G.boundedSetting({ localDepth: local.depth }, 'localDepth'));
       const layer = G.localLayers(model, focus, depth, local.incoming, local.outgoing);
       for (let i = 0; i < N; i++) weight[i] = layer[i] >= 0 ? Math.max(0, G.localWeight(layer[i], depth)) : 0;
     } else {
@@ -189,12 +189,12 @@
   }
 
   function updateStatus(g) {
-    if (!hasData) { statusEl.textContent = 'Building graph…'; statusEl.classList.remove('is-hidden'); return; }
-    if (N === 0) { statusEl.textContent = 'No linked files yet'; statusEl.classList.remove('is-hidden'); }
+    if (!hasData) { statusEl.textContent = 'Mapping this project…'; statusEl.classList.remove('is-hidden'); return; }
+    if (N === 0) { statusEl.textContent = 'No files match this view'; statusEl.classList.remove('is-hidden'); }
     else statusEl.classList.add('is-hidden');
     const truncated = g && g.truncated;
     noticeEl.hidden = !truncated;
-    if (truncated) noticeEl.textContent = 'Showing the ' + N + ' most connected files';
+    if (truncated) noticeEl.textContent = 'View limited to ' + N + ' files with the most connections';
   }
 
   // ------------------------------------------------------------ canvas sizing
@@ -236,7 +236,7 @@
     labelRenders++;
     const px = Math.pow(2, bucket);
     const font = '400 ' + px.toFixed(2) + 'px ' + pal.fontUi;
-    const wrapW = G.C.labelWrap * px / labelFontOf(i);            // 300 text units in bitmap px
+    const wrapW = G.C.labelWrap * px / labelFontOf(i);            // Wrap width in bitmap pixels
     const lns = wrapLines(labels[i], font, wrapW);
     measureCtx.font = font;
     let w = 0; for (const l of lns) w = Math.max(w, measureCtx.measureText(l).width);
@@ -372,8 +372,8 @@
   }
 
   function stepDisplay(dt) {
-    const tn = G.clamp(+settings.nodeSizeMultiplier || 1, 0.1, 5), tl = G.clamp(+settings.lineSizeMultiplier || 1, 0.1, 5);
-    const tf = G.clamp(+settings.textFadeMultiplier || 0, -3, 3);
+    const tn = G.boundedSetting(settings, 'nodeSizeMultiplier'), tl = G.boundedSetting(settings, 'lineSizeMultiplier');
+    const tf = G.boundedSetting(settings, 'textFadeMultiplier');
     let ch = false;
     const e = (v, t) => { if (Math.abs(v - t) < 1e-3) return t; ch = true; return G.ease(v, t, 0.25, dt, reduce()); };
     disp.node = e(disp.node, tn); disp.line = e(disp.line, tl); disp.fade = e(disp.fade, tf);
@@ -733,12 +733,12 @@
     menuEl.textContent = '';
     const title = document.createElement('div'); title.className = 'title'; title.textContent = labels[i]; menuEl.appendChild(title);
     const defs = [
-      ['Open', () => activate(i, false)],
-      ['Open in new tab', () => ctxAction('open-new-tab', i)],
-      ['Open to the right', () => ctxAction('open-right', i)],
+      ['Open file', () => activate(i, false)],
+      ['Open another tab', () => ctxAction('open-new-tab', i)],
+      ['Open in right pane', () => ctxAction('open-right', i)],
       null,
-      ['Reveal in explorer', () => ctxAction('reveal', i)],
-      ['Copy path', () => ctxAction('copy-path', i)],
+      ['Locate in project tree', () => ctxAction('reveal', i)],
+      ['Copy file location', () => ctxAction('copy-path', i)],
     ];
     menuItems = [];
     for (const d of defs) {
@@ -870,6 +870,9 @@
     ui.sliders[key] = { input: r, show }; ui.rows[key] = row;
     return row;
   }
+  function parameterRow(key, label, onChange, fmt, tip) {
+    return sliderRow(key, label, G.LIMITS[key][0], G.LIMITS[key][1], G.STEPS[key], onChange, fmt, tip);
+  }
   function section(key, title, build) {
     const sec = el('div', 'sec is-collapsed');
     const head = el('div', 'sec-head', { role: 'button', tabindex: '0', 'aria-expanded': 'false' });
@@ -898,59 +901,60 @@
   function buildPanel() {
     controlsEl.textContent = '';
     const chip = el('div', 'gc-chip');
-    chip.appendChild(iconBtn('settings', 'Open graph settings', () => setPanelOpen(true, true)));
-    wandBtn = iconBtn('wand', 'Start timelapse animation', () => startTimelapse());
+    chip.appendChild(iconBtn('settings', 'Adjust project graph', () => setPanelOpen(true, true)));
+    wandBtn = iconBtn('wand', 'Replay project history', () => startTimelapse());
     chip.appendChild(wandBtn);
     controlsEl.appendChild(chip);
     const panel = el('div', 'gc-panel');
     const head = el('div', 'gc-head');
-    head.appendChild(iconBtn('reset', 'Restore default settings', restoreDefaults));
-    head.appendChild(iconBtn('x', 'Close', () => setPanelOpen(false, true)));
+    head.appendChild(iconBtn('reset', 'Reset graph preferences', restoreDefaults));
+    head.appendChild(iconBtn('x', 'Hide graph controls', () => setPanelOpen(false, true)));
     panel.appendChild(head);
 
-    panel.appendChild(section('collapse-filter', 'Filters', (b) => {
+    panel.appendChild(section('collapse-filter', 'Project scope', (b) => {
       const box = el('div', 'search');
-      searchInput = el('input', '', { type: 'text', placeholder: 'Search files...', spellcheck: 'false', 'aria-label': 'Search files' });
-      searchClear = iconBtn('x', 'Clear search', () => { searchInput.value = ''; onSearch(true); searchInput.focus(); });
+      searchInput = el('input', '', { type: 'text', placeholder: 'Find paths, names or text…', spellcheck: 'false', 'aria-label': 'Filter project files' });
+      searchClear = iconBtn('x', 'Clear project filter', () => { searchInput.value = ''; onSearch(true); searchInput.focus(); });
       searchClear.classList.add('clear');
       searchInput.addEventListener('input', safe(() => onSearch(false)));
       searchInput.addEventListener('keydown', safe((e) => { if (e.key === 'Enter') { e.preventDefault(); onSearch(true); } else if (e.key === 'Escape' && searchInput.value) { e.stopPropagation(); searchInput.value = ''; onSearch(true); } }));
       box.appendChild(searchInput); box.appendChild(searchClear); b.appendChild(box);
-      b.appendChild(sliderRow('localDepth', 'Depth', 1, 5, 1, (v) => { local.depth = v; settings.localDepth = v; emitSettings({ localDepth: v }); emitOptions(); computeWeights(); kick(); }, (v) => String(v), 'Show nodes this number of links away'));
-      b.appendChild(toggleRow('localIncoming', 'Incoming links', 'Show links from other files', (v) => { local.incoming = v; settings.localIncoming = v; emitSettings({ localIncoming: v }); emitOptions(); }));
-      b.appendChild(toggleRow('localOutgoing', 'Outgoing links', 'Show links to other files', (v) => { local.outgoing = v; settings.localOutgoing = v; emitSettings({ localOutgoing: v }); emitOptions(); }));
-      b.appendChild(toggleRow('showTags', 'Tags', 'Tags are linked to the files that contain them', (v) => setOption('showTags', v)));
-      b.appendChild(toggleRow('showAttachments', 'Attachments', 'Show attachments', (v) => setOption('showAttachments', v)));
-      b.appendChild(toggleRow('hideUnresolved', 'Existing files only', 'When enabled, links to nonexistent files are not shown', (v) => setOption('hideUnresolved', v)));
-      b.appendChild(toggleRow('showOrphans', 'Orphans', 'Show files that are not linked to any other file', (v) => setOption('showOrphans', v)));
-      b.appendChild(toggleRow('showCode', 'Code files', 'Show source code files and their imports', (v) => setOption('showCode', v)));
+      b.appendChild(parameterRow('localDepth', 'Neighbourhood hops', (v) => { local.depth = v; settings.localDepth = v; emitSettings({ localDepth: v }); emitOptions(); computeWeights(); kick(); }, (v) => String(v), 'Follow references up to this many hops from the active file'));
+      b.appendChild(toggleRow('localIncoming', 'Referenced by', 'Include files that refer to this file', (v) => { local.incoming = v; settings.localIncoming = v; emitSettings({ localIncoming: v }); emitOptions(); }));
+      b.appendChild(toggleRow('localOutgoing', 'References to', 'Include files reached from this file', (v) => { local.outgoing = v; settings.localOutgoing = v; emitSettings({ localOutgoing: v }); emitOptions(); }));
+      b.appendChild(toggleRow('showTags', 'Tag markers', 'Connect tags to the notes that mention them', (v) => setOption('showTags', v)));
+      b.appendChild(toggleRow('showAttachments', 'Referenced assets', 'Include images and other referenced assets', (v) => setOption('showAttachments', v)));
+      b.appendChild(toggleRow('hideUnresolved', 'Hide missing targets', 'Exclude references whose target cannot be found', (v) => setOption('hideUnresolved', v)));
+      b.appendChild(toggleRow('showOrphans', 'Unlinked files', 'Keep files with no visible connections', (v) => setOption('showOrphans', v)));
+      b.appendChild(toggleRow('showCode', 'Source and imports', 'Map source files and the modules they import', (v) => setOption('showCode', v)));
     }));
-    panel.appendChild(section('collapse-color-groups', 'Groups', (b) => {
+    panel.appendChild(section('collapse-color-groups', 'Colour rules', (b) => {
       groupsBox = el('div', 'groups'); b.appendChild(groupsBox);
-      const add = el('button', 'btn groups-new', { type: 'button', text: 'New group' });
+      const add = el('button', 'btn groups-new', { type: 'button', text: 'Add colour rule' });
       add.addEventListener('click', safe(() => {
         const list = (settings.colorGroups || []).slice();
+        if (list.length >= 12) return;
         list.push({ query: '', color: G.newGroupColor(list.length, pal.dark) });
         settings.colorGroups = list; groupsKey = null; renderGroupsIfChanged(); groupsChanged();
         const inputs = groupsBox.querySelectorAll('input'); if (inputs.length) inputs[inputs.length - 1].focus();
       }));
       b.appendChild(add);
     }));
-    panel.appendChild(section('collapse-display', 'Display', (b) => {
-      b.appendChild(toggleRow('showArrow', 'Arrows', 'Show arrows when zoomed in', (v) => { settings.showArrow = v; emitSettings({ showArrow: v }); kick(); }));
-      b.appendChild(sliderRow('textFadeMultiplier', 'Text fade threshold', -3, 3, 0.1, (v) => display('textFadeMultiplier', v), fmt1));
-      b.appendChild(sliderRow('nodeSizeMultiplier', 'Node size', 0.1, 5, 0.01, (v) => display('nodeSizeMultiplier', v), fmt2));
-      b.appendChild(sliderRow('lineSizeMultiplier', 'Link thickness', 0.1, 5, 0.01, (v) => display('lineSizeMultiplier', v), fmt2));
+    panel.appendChild(section('collapse-display', 'Visual detail', (b) => {
+      b.appendChild(toggleRow('showArrow', 'Reference direction', 'Mark the direction of each reference as you zoom in', (v) => { settings.showArrow = v; emitSettings({ showArrow: v }); kick(); }));
+      b.appendChild(parameterRow('textFadeMultiplier', 'Label detail', (v) => display('textFadeMultiplier', v), fmt1));
+      b.appendChild(parameterRow('nodeSizeMultiplier', 'File marker size', (v) => display('nodeSizeMultiplier', v), fmt2));
+      b.appendChild(parameterRow('lineSizeMultiplier', 'Connection width', (v) => display('lineSizeMultiplier', v), fmt2));
       const row = el('div', 'row'); ui.rows.animate = row;
-      animateBtn = el('button', 'btn', { type: 'button', text: 'Animate', 'data-tip': 'Start timelapse animation' });
+      animateBtn = el('button', 'btn', { type: 'button', text: 'Replay history', 'data-tip': 'Replay project history' });
       animateBtn.addEventListener('click', safe(() => startTimelapse()));
       row.appendChild(animateBtn); b.appendChild(row);
     }));
-    panel.appendChild(section('collapse-forces', 'Forces', (b) => {
-      b.appendChild(sliderRow('centerStrength', 'Center force', 0, 1, 0.001, (v) => force('centerStrength', v), fmt2));
-      b.appendChild(sliderRow('repelStrength', 'Repel force', 0, 20, 0.01, (v) => force('repelStrength', v), fmt1));
-      b.appendChild(sliderRow('linkStrength', 'Link force', 0, 1, 0.001, (v) => force('linkStrength', v), fmt2));
-      b.appendChild(sliderRow('linkDistance', 'Link distance', 30, 500, 1, (v) => force('linkDistance', v), (v) => String(Math.round(v))));
+    panel.appendChild(section('collapse-forces', 'Layout tuning', (b) => {
+      b.appendChild(parameterRow('centerStrength', 'Pull toward centre', (v) => force('centerStrength', v), fmt2));
+      b.appendChild(parameterRow('repelStrength', 'Space between files', (v) => force('repelStrength', v), fmt1));
+      b.appendChild(parameterRow('linkStrength', 'Connection tension', (v) => force('linkStrength', v), fmt2));
+      b.appendChild(parameterRow('linkDistance', 'Preferred spacing', (v) => force('linkDistance', v), (v) => String(Math.round(v))));
     }));
     controlsEl.appendChild(panel);
     controlsEl.addEventListener('pointerdown', (e) => e.stopPropagation());
@@ -972,23 +976,23 @@
     groupsBox.textContent = '';
     (settings.colorGroups || []).forEach((g, k) => {
       const row = el('div', 'group');
-      const q = el('input', '', { type: 'text', placeholder: 'Enter query...', spellcheck: 'false', 'aria-label': 'Group query' });
+      const q = el('input', '', { type: 'text', placeholder: 'Match files with a query…', spellcheck: 'false', 'aria-label': 'Colour rule query' });
       q.value = g.query || '';
       q.addEventListener('input', safe(() => {
         settings.colorGroups = settings.colorGroups.slice();
         settings.colorGroups[k] = Object.assign({}, settings.colorGroups[k], { query: q.value });
         groupsKey = JSON.stringify(settings.colorGroups); groupsChanged();
       }));
-      const sw = el('button', 'swatch', { type: 'button', 'data-tip': 'Click to change color', 'aria-label': 'Group colour' });
+      const sw = el('button', 'swatch', { type: 'button', 'data-tip': 'Choose a rule colour', 'aria-label': 'Rule colour' });
       sw.style.background = G.toHex(G.parseColor(g.color));
       sw.addEventListener('click', safe((e) => { e.stopPropagation(); openPopup(k, sw); }));
-      const del = iconBtn('x', 'Delete group', () => { settings.colorGroups = settings.colorGroups.filter((_, j) => j !== k); renderGroupsIfChanged(); groupsChanged(); });
+      const del = iconBtn('x', 'Remove colour rule', () => { settings.colorGroups = settings.colorGroups.filter((_, j) => j !== k); renderGroupsIfChanged(); groupsChanged(); });
       row.appendChild(q); row.appendChild(sw); row.appendChild(del);
       groupsBox.appendChild(row);
     });
   }
   function colorValue(k, c) {
-    // Keep the representation the host used for this group (graph.json {a, rgb} by default).
+    // Preserve saved host colours; newly created rules use hex strings.
     const old = settings.colorGroups[k] && settings.colorGroups[k].color;
     if (typeof old === 'string') return G.toHex(c);
     return { a: 1, rgb: (Math.round(c.r) << 16) | (Math.round(c.g) << 8) | Math.round(c.b) };
@@ -1007,8 +1011,8 @@
       b.addEventListener('click', safe(() => { setColor(c); closePopup(); }));
       popupEl.appendChild(b);
     }
-    const custom = el('label', 'custom', { text: 'Custom' });
-    const inp = el('input', '', { type: 'color', 'aria-label': 'Custom colour' });
+    const custom = el('label', 'custom', { text: 'Pick a colour' });
+    const inp = el('input', '', { type: 'color', 'aria-label': 'Choose any rule colour' });
     inp.value = G.toHex(G.parseColor(settings.colorGroups[k].color));
     inp.addEventListener('input', safe(() => setColor(G.parseColor(inp.value))));
     custom.appendChild(inp); popupEl.appendChild(custom);
@@ -1082,9 +1086,9 @@
     for (const k of G.FILTER_KEYS.concat(G.DISPLAY_KEYS, G.FORCE_KEYS)) { settings[k] = D[k]; changed[k] = D[k]; }
     settings.colorGroups = []; changed.colorGroups = [];
     if (local.enabled) {
-      local.depth = 1; local.incoming = true; local.outgoing = true;
-      Object.assign(changed, { localDepth: 1, localIncoming: true, localOutgoing: true });
-      Object.assign(settings, { localDepth: 1, localIncoming: true, localOutgoing: true });
+      local.depth = D.localDepth; local.incoming = D.localIncoming; local.outgoing = D.localOutgoing;
+      Object.assign(changed, { localDepth: D.localDepth, localIncoming: D.localIncoming, localOutgoing: D.localOutgoing });
+      Object.assign(settings, { localDepth: D.localDepth, localIncoming: D.localIncoming, localOutgoing: D.localOutgoing });
     }
     sim.setForces(settings); sim.reheat(G.C.reheat);
     groupsKey = null; syncPanel();
@@ -1092,7 +1096,7 @@
     computeWeights(); kick();
   }
 
-  // ------------------------------------------------------------ timelapse (spec D.6)
+  // ------------------------------------------------------------ timelapse
   function startTimelapse() {
     if (!rawData || local.enabled) return;
     stopTimelapse();
@@ -1140,15 +1144,16 @@
     for (const k in s) {
       const v = s[k];
       if (!(k in G.DEFAULTS) && k !== 'colorGroups') continue;
-      if (k === 'colorGroups') { settings.colorGroups = Array.isArray(v) ? v.map((g) => ({ query: String((g && g.query) || ''), color: g && g.color })) : []; continue; }
+      if (k === 'colorGroups') { settings.colorGroups = Array.isArray(v) ? v.slice(0, 12).map((g) => ({ query: String((g && g.query) || ''), color: g && g.color })) : []; continue; }
       const d = G.DEFAULTS[k];
       if (typeof d === 'number' && (typeof v !== 'number' || !isFinite(v))) continue;
       if (typeof d === 'boolean' && typeof v !== 'boolean') continue;
       if (typeof d === 'string' && typeof v !== 'string') continue;
-      settings[k] = v;
+      settings[k] = k in G.LIMITS ? G.boundedSetting(s, k) : v;
+      if (k === 'localDepth') settings[k] = Math.round(settings[k]);
       if (G.FORCE_KEYS.includes(k)) forces = true;
     }
-    if ('localDepth' in s && typeof s.localDepth === 'number') local.depth = Math.max(1, Math.min(5, Math.round(s.localDepth)));
+    if ('localDepth' in s && typeof s.localDepth === 'number') local.depth = Math.round(G.boundedSetting(s, 'localDepth'));
     if ('localIncoming' in s && typeof s.localIncoming === 'boolean') local.incoming = s.localIncoming;
     if ('localOutgoing' in s && typeof s.localOutgoing === 'boolean') local.outgoing = s.localOutgoing;
     if (forces) { sim.setForces(settings); if (hasData) sim.reheat(G.C.reheat); }
@@ -1195,7 +1200,7 @@
     const wasPath = local.path, wasEnabled = local.enabled;
     if (typeof o.enabled === 'boolean') local.enabled = o.enabled;
     if ('path' in o) local.path = o.path == null ? null : String(o.path);
-    if (typeof o.depth === 'number') local.depth = Math.max(1, Math.min(5, Math.round(o.depth)));
+    if (typeof o.depth === 'number') local.depth = Math.round(G.boundedSetting({ localDepth: o.depth }, 'localDepth'));
     if (typeof o.incoming === 'boolean') local.incoming = o.incoming;
     if (typeof o.outgoing === 'boolean') local.outgoing = o.outgoing;
     if (local.enabled && (local.path !== wasPath || !wasEnabled)) { cam.px = W / 2; cam.py = H / 2; cam.vx = cam.vy = 0; cam.track = -1; }

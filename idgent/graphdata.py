@@ -1,11 +1,11 @@
-"""Pure-Python project graphs with configurable Reference app-style policies.
+"""Pure-Python project graphs with configurable IDgent project policies.
 
 Queries remove non-matching files/tags; unresolved targets are unfiltered. No GUI modules are imported.
 """
 from __future__ import annotations
 
 from collections import Counter, defaultdict, deque
-from dataclasses import asdict, dataclass, field
+from dataclasses import InitVar, asdict, dataclass, field
 from functools import lru_cache
 import os
 import posixpath as pp
@@ -14,8 +14,7 @@ from urllib.parse import unquote
 
 from .linkparse import extract_code_links, extract_links, extract_tags, parse_frontmatter
 
-# All adjustable graph policies live here. Defaults implement the task brief;
-# the policies marked provisional await the Reference app specification reconciliation.
+# IDgent file-resolution and filtering policies; see docs/graph-spec.md.
 SEMANTICS = {
     'note_extensions': ('.md', '.markdown'),
     'code_extensions': frozenset('.py .pyi .js .ts .tsx .jsx .mjs .cjs .css .scss .sass .html .htm .json .sh .bash .rs .go .c .h .cpp .hpp .cc .java .kt .swift .rb .php .vue .svelte .sql .xml .yaml .yml .toml'.split()),
@@ -25,14 +24,14 @@ SEMANTICS = {
     'markdown_path_order': ('source', 'root'),
     'python_path_order': ('root', 'source', 'src'),
     'duplicate_order': ('same_folder', 'shortest', 'lexicographic'),
-    'alias_fallback': True,                 # provisional: filenames before aliases
+    'alias_fallback': True,                 # filenames before aliases
     'attachments_require_reference': True,
-    'hide_missing_attachments_with_attachments': True, # provisional: infer from suffix
-    'query_primary_kinds': ('note', 'code'), # provisional: code behaves like notes
+    'hide_missing_attachments_with_attachments': True, # infer assets from suffix
+    'query_primary_kinds': ('note', 'code'), # search notes and source files
     'tags_from_kinds': ('note',),
     'tag_prefix_boundary': '/',
     'keep_self_links': True,
-    'degree_counts_duplicates': False,       # provisional: count collapsed edges
+    'degree_counts_duplicates': False,       # count collapsed edges
     'size_hint_base': 1,
     'unresolved_prefix': '?',
     'tag_prefix': '#',
@@ -53,8 +52,13 @@ class GraphOptions:
     show_orphans: bool = True
     show_code: bool = True
     groups: list[dict] = field(default_factory=list)
-    # The existing data API keeps linked secondary nodes; the UI uses spec B.2/C.1.
-    reference_app_filters: bool = False
+    # Strict UI searches test each file/tag; data clients can retain neighbours.
+    strict_filters: bool = False
+    reference_app_filters: InitVar[bool | None] = None  # Compatibility keyword for existing callers.
+
+    def __post_init__(self, legacy_filters):
+        if legacy_filters is not None:
+            self.strict_filters = bool(legacy_filters)
 
 
 @dataclass
@@ -405,7 +409,7 @@ class GraphIndex:
                     edge(path, target, 'tag')
         links = list(edges.values())
         if options.query:
-            if options.reference_app_filters:
+            if options.strict_filters:
                 nodes = {key: node for key, node in nodes.items()
                          if key == local_file or node.kind == 'unresolved' or match_query(self._files.get(key, node), options.query)}
             else:
@@ -417,7 +421,7 @@ class GraphIndex:
         for node in nodes.values():
             item = self._files.get(node.id, node)
             node.group = next((i for i, group in enumerate(options.groups)
-                               if (not options.reference_app_filters or
+                               if (not options.strict_filters or
                                    node.kind not in ('tag', 'unresolved') and group.get('query', '').strip())
                                and match_query(item, group.get('query', ''))), None)
         if not options.show_orphans:
