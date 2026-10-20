@@ -72,7 +72,8 @@ class SlashMenu:
         self.matches, self.rows = [], []
         self.index = 0
         self.composing = self._grouped = self._destroyed = False
-        self._idle = 0
+        self._idle = self._ime_idle = self._scroll_idle = 0
+        self._ime_commit = False
         self._blocked_insert = False
         self._top_handler = None
         self._handlers = []
@@ -105,7 +106,7 @@ class SlashMenu:
         box.pack_end(footer, False, False, 0)
         self._connect(self.buffer, 'insert-text', self._insert)
         self._connect(self.buffer, 'changed', self._queue)
-        self._connect(self.buffer, 'mark-set', self._queue)
+        self._connect(self.buffer, 'mark-set', self._mark_set)
         self._connect(view, 'preedit-changed', self._preedit)
         self._connect(view, 'key-press-event', self.handle_key)
         self._connect(view, 'focus-out-event', self._dismiss)
@@ -117,7 +118,7 @@ class SlashMenu:
         parent = view.get_parent()
         if isinstance(parent, Gtk.ScrolledWindow):
             for adjustment in (parent.get_vadjustment(), parent.get_hadjustment()):
-                self._connect(adjustment, 'value-changed', self._dismiss)
+                self._connect(adjustment, 'value-changed', self._scrolled)
 
     def _hierarchy_changed(self, *_):
         if self._top_handler:
@@ -141,13 +142,46 @@ class SlashMenu:
         return self.buffer.get_text(self.buffer.get_start_iter(), self.buffer.get_end_iter(), True)
 
     def _preedit(self, _view, text):
+        if self._ime_idle:
+            GLib.source_remove(self._ime_idle)
+            self._ime_idle = 0
         self.composing = bool(text)
         if self.composing:
+            self._ime_commit = True
             self.close()
+        else:
+            # GTK clears preedit before inserting the committed text.
+            def finished():
+                self._ime_idle = 0
+                self._ime_commit = False
+                return False
+            self._ime_idle = GLib.idle_add(finished)
+
+    def _mark_set(self, _buffer, _iterator, mark):
+        if mark.get_name() in ('insert', 'selection_bound'):
+            self._queue()
+
+    def _scrolled(self, *_):
+        if self.opened:
+            # GTK can animate a caret scroll through intermediate offscreen positions.
+            if self._scroll_idle:
+                GLib.source_remove(self._scroll_idle)
+            self._scroll_idle = GLib.timeout_add(250, self._check_visible)
+            self._queue()
+
+    def _check_visible(self):
+        self._scroll_idle = 0
+        if self.opened:
+            rect = self.view.get_iter_location(self.buffer.get_iter_at_mark(self.buffer.get_insert()))
+            visible = self.view.get_visible_rect()
+            if (rect.y + rect.height < visible.y or rect.y > visible.y + visible.height or
+                    rect.x < visible.x or rect.x > visible.x + visible.width):
+                self.close()
+        return False
 
     def _insert(self, buffer, location, text, _length):
         blocked, self._blocked_insert = self._blocked_insert, False
-        if blocked or self.opened or self.composing or buffer.get_has_selection() or text != '/':
+        if blocked or self.opened or self.composing or self._ime_commit or buffer.get_has_selection() or text != '/':
             return
         offset = location.get_offset()
         document = self._text()
@@ -180,12 +214,14 @@ class SlashMenu:
         if query.endswith(' ') and not self.matches and self.query:
             self.close()
             return False
+        changed = query != self.query or not self.popover.get_visible()
         self.query = query
         ranked = [(score, i, command) for i, command in enumerate(notes.SLASH_COMMANDS)
                   if (score := match_score(command, query)) is not None]
         self.matches = [item[2] for item in sorted(ranked, key=lambda item: item[:2])]
-        self.index = 0
-        self._build_rows()
+        if changed:
+            self.index = 0
+            self._build_rows()
         rect = self.view.get_iter_location(self.buffer.get_iter_at_mark(self.buffer.get_insert()))
         rect.x, rect.y = self.view.buffer_to_window_coords(Gtk.TextWindowType.WIDGET, rect.x, rect.y)
         rect.width = max(1, rect.width)
@@ -335,6 +371,9 @@ class SlashMenu:
         return self._dismiss()
 
     def close(self):
+        if self._scroll_idle:
+            GLib.source_remove(self._scroll_idle)
+            self._scroll_idle = 0
         if self._idle:
             GLib.source_remove(self._idle)
             self._idle = 0
@@ -351,6 +390,9 @@ class SlashMenu:
         if self._destroyed:
             return
         self._destroyed = True
+        if self._ime_idle:
+            GLib.source_remove(self._ime_idle)
+            self._ime_idle = 0
         self.close()
         for obj, signal in self._handlers:
             obj.disconnect(signal)

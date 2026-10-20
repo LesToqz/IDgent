@@ -193,6 +193,55 @@ class InsertCommandTest(unittest.TestCase):
         self.assertEqual(run("code", "run x now", 4, 5)[:2], ("run \n\n```\nx\n```\n\n now", "x"))
 
 
+class SlashCommandEditsTest(unittest.TestCase):
+    def test_note_path_without_root_includes_nested_notes_only(self):
+        for path in ('/project/.IDgent/Notes/a.md', '/project/.IDgent/Notes/sub/a.MD'):
+            self.assertTrue(notes.is_note_path(path))
+        for path in (None, '', '/project/Notes/a.md', '/project/.IDgent/Other/a.md',
+                     '/project/.IDgent/Notes/a.markdown', '/project/.IDgent/Notes.md'):
+            self.assertFalse(notes.is_note_path(path))
+
+    def test_exact_slash_edits_empty_and_populated_lines(self):
+        expected = {
+            'text': ('', 'body'), 'h1': ('# ', '# body'),
+            'h2': ('## ', '## body'), 'h3': ('### ', '### body'),
+            'bullet': ('- ', '- body'), 'numbered': ('1. ', '1. body'),
+            'todo': ('- [ ] ', '- [ ] body'), 'quote': ('> ', '> body'),
+            'divider': ('---\n', 'body\n\n---\n'),
+            'code': ('```\n\n```\n', '```\nbody\n```\n'),
+            'mermaid': ('```mermaid\n\n```\n', '```mermaid\nbody\n```\n'),
+            'table': (notes.SLASH_TABLE, notes.SLASH_TABLE.replace('Column 1', 'body', 1)),
+            'link': ('[link text](url)', '## body[link text](url)'),
+            'date': ('2026-10-21', '## body2026-10-21'),
+            'callout': ('> **Note**\n> ', '> **Note**\n> body'),
+            'image': ('![alt](path)', '## body![alt](path)'),
+        }
+        with patch('idgent.notes.date') as today:
+            today.today.return_value.isoformat.return_value = '2026-10-21'
+            for command in notes.SLASH_COMMANDS:
+                for document, wanted in zip(('', '## body'), expected[command.id]):
+                    with self.subTest(command=command.id, document=document):
+                        edit = command.edit(document, len(document), len(document))
+                        result = edit.apply(document)
+                        self.assertEqual(result, wanted)
+                        self.assertTrue(0 <= edit.select_start <= edit.select_end <= len(result))
+                        if command.id == 'code':
+                            self.assertEqual(edit.select_start, 4)
+                        if command.id == 'mermaid':
+                            self.assertEqual(edit.select_start, 11)
+                        if command.id == 'table':
+                            self.assertEqual(edit.select_start, 2)
+                        if command.id == 'image':
+                            self.assertEqual(result[edit.select_start:edit.select_end], 'path')
+
+    def test_turn_into_strips_existing_markers_and_keeps_surrounding_lines(self):
+        for marker in ('# ', '### ', '> ', '- ', '1. ', '- [ ] ', '> - [x] '):
+            document = 'before\n' + marker + 'keep\nafter'
+            command = next(c for c in notes.SLASH_COMMANDS if c.id == 'h2')
+            edit = command.edit(document, 7 + len(marker), 7 + len(marker))
+            self.assertEqual(edit.apply(document), 'before\n## keep\nafter')
+
+
 class BufferAndToolbarTest(unittest.TestCase):
     def test_apply_to_buffer_is_one_user_action_and_selects_result(self):
         buffer = Gtk.TextBuffer()
