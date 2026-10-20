@@ -25,14 +25,16 @@ SHIFT = Gdk.ModifierType.SHIFT_MASK
 
 # A non-default value for every settings-window key, and how to read it back live.
 CHANGES = {
-    'line_numbers': False, 'highlight_line': False, 'md_default_preview': True,
+    'line_numbers': False, 'highlight_line': False,
+    **({'md_live_preview': False} if 'md_live_preview' in settings.NEW_KEYS else
+       {'md_default_preview': True}),
     'md_readable_width': False, 'indent_tabs': True, 'indent_width': 2, 'auto_pair': False,
     'show_hidden': False, 'confirm_delete': False, 'delete_mode': 'trash',
     'terminal_cursor': 'underline', 'terminal_blink': False, 'terminal_scrollback': 5000,
     'reduce_motion': True, 'accent': '#22a55b', 'ui_font': 'DejaVu Serif',
     'editor_font': 'DejaVu Sans Mono', 'terminal_autostart': False,
 }
-EDITOR_ATTRS = ('line_numbers', 'highlight_line', 'md_readable_width',
+EDITOR_ATTRS = ('line_numbers', 'highlight_line', 'md_live_preview', 'md_readable_width',
                 'indent_tabs', 'indent_width', 'auto_pair')
 EXPLORER_ATTRS = ('show_hidden', 'confirm_delete')
 VTE_SHAPES = {'block': Vte.CursorShape.BLOCK, 'ibeam': Vte.CursorShape.IBEAM,
