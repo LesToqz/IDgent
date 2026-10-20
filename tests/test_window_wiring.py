@@ -518,7 +518,7 @@ class WindowWiringTest(unittest.TestCase):
             window.new_note()
         spin()
         path = str(self.root / '.IDgent' / 'Notes' / 'coffi shop.md')
-        self.assertEqual(window.explorer.current_tab, 'notes')
+        self.assertTrue(window.explorer.notes_section_visible)
         self.assertEqual(window.editor.current_path(), path)
         tab = window.editor._current()
         toolbar = tab._note_toolbar
@@ -577,7 +577,7 @@ class WindowWiringTest(unittest.TestCase):
         window.toggle_explorer()
         commands['Notes: Show notes'].callback()
         self.assertTrue(window.explorer.get_visible())
-        self.assertEqual(window.explorer.current_tab, 'notes')
+        self.assertTrue(window.explorer.notes_section_visible)
 
 
 if __name__ == '__main__':

@@ -100,6 +100,31 @@ class WindowIntegrationTests(unittest.TestCase):
         tree.row_activated(self.window.explorer.store.get_path(row), tree.get_column(0))
         return path, self.window.editor._current()
 
+    def test_notes_section_editor_and_tree_operations_stay_in_sync(self):
+        panel = self.window.explorer
+        path = panel.create_note('First')
+        self.assertTrue(poll(lambda: self.window.editor.current_path() == path))
+        self.assertTrue(panel.notes_section_visible)
+        self.assertTrue(panel.tree.get_visible())
+        panel.set_current_file(path)
+        renamed = panel._rename(path, 'Renamed.md')
+        self.assertEqual(self.window.editor.current_path(), renamed)
+        self.assertEqual(panel._selected_note(), renamed)
+        self.assertEqual([row[1] for row in panel.notes_store], ['Renamed'])
+        panel._reveal_note()
+        self.assertEqual(panel._selected_path(), renamed)
+        panel._delete(renamed)
+        self.assertEqual(len(panel.notes_store), 0)
+        self.assertTrue(self.window.editor._current().deleted)
+        panel.open_after_create = False
+        created = panel.create_note('Quiet')
+        self.assertTrue(Path(created).exists())
+        self.assertEqual(self.window.editor.current_path(), renamed)
+        self.window.show_notes()
+        self.assertTrue(panel.notes_section_visible)
+        self.assertIs(self.window.get_focus(), panel.notes_tree)
+        self.assertEqual(panel.header_buttons['New File'].get_accessible().get_name(), 'New File')
+
     def assert_color(self, actual, expected):
         rgba = Gdk.RGBA()
         self.assertTrue(rgba.parse(expected))

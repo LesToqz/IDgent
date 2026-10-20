@@ -97,6 +97,17 @@ class NoteFilesTest(unittest.TestCase):
         self.assertEqual([os.path.basename(path) for path in notes.list_notes(str(self.root))],
                          ["A.MD", "b.md", "coffi shop.md", "coffi shop 2.md"])
 
+    def test_modified_sort_is_newest_first_with_name_tiebreak(self):
+        paths = [notes.create_note(str(self.root), name) for name in ('Beta', 'Alpha', 'Newest')]
+        for index, path in enumerate(paths):
+            os.utime(path, ns=(1, 2 if index == 2 else 1))
+        self.assertEqual([Path(path).stem for path in notes.list_notes(str(self.root), sort='modified')],
+                         ['Newest', 'Alpha', 'Beta'])
+        self.assertEqual([Path(path).stem for path in notes.list_notes(str(self.root))],
+                         ['Alpha', 'Beta', 'Newest'])
+        with self.assertRaises(ValueError):
+            notes.list_notes(str(self.root), sort='other')
+
     def test_is_note(self):
         root = str(self.root)
         self.assertTrue(notes.is_note(root, str(self.folder / "x.md")))
