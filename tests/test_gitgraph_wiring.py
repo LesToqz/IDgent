@@ -140,7 +140,7 @@ class WindowGitTests(unittest.TestCase):
         w = self.window
         for panel in (w.terminal_bottom, w.terminal_right):
             panel.show_all()
-            for _ in range(3):
+            while not panel.is_full():
                 panel.new_terminal()
         with patch.object(w, 'notify') as notice:
             self.assertIsNone(w.open_gitgraph())

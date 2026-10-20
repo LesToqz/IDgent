@@ -26,13 +26,22 @@ SHIFT = Gdk.ModifierType.SHIFT_MASK
 # A non-default value for every settings-window key, and how to read it back live.
 CHANGES = {
     'line_numbers': False, 'highlight_line': False,
-    **({'md_live_preview': False} if 'md_live_preview' in settings.NEW_KEYS else
-       {'md_default_preview': True}),
+    'md_live_preview': False,
     'md_readable_width': False, 'indent_tabs': True, 'indent_width': 2, 'auto_pair': False,
     'show_hidden': False, 'confirm_delete': False, 'delete_mode': 'trash',
     'terminal_cursor': 'underline', 'terminal_blink': False, 'terminal_scrollback': 5000,
     'reduce_motion': True, 'accent': '#22a55b', 'ui_font': 'DejaVu Serif',
     'editor_font': 'DejaVu Sans Mono', 'terminal_autostart': False,
+    'feature_explorer': False, 'feature_terminal': False, 'feature_graph': False,
+    'feature_gitgraph': False, 'feature_notes': False,
+    'explorer_git_colors': False, 'explorer_folders_first': False, 'explorer_compact': True,
+    'terminal_max_panes': 2, 'terminal_shell': '/bin/sh',
+    'terminal_copy_on_select': True, 'terminal_bell': True,
+    'graph_default_type': 'note', 'gitgraph_orientation': 'vertical',
+    'gitgraph_max_commits': 100, 'gitgraph_show_remotes': False, 'gitgraph_show_tags': False,
+    'gitgraph_time_format': 'absolute', 'notes_sort': 'modified',
+    'notes_open_after_create': False, 'notes_toolbar': False,
+    'notes_slash_commands': False,
 }
 EDITOR_ATTRS = ('line_numbers', 'highlight_line', 'md_live_preview', 'md_readable_width',
                 'indent_tabs', 'indent_width', 'auto_pair')
@@ -312,8 +321,56 @@ class WindowWiringTest(unittest.TestCase):
             family = window.editor._current().view.get_style_context().get_property(
                 'font', Gtk.StateFlags.NORMAL).get_family()
             self.assertEqual(family, value or 'monospace')
-        elif key == 'terminal_autostart':
-            self.assertTrue(window.terminal_bottom.get_visible())
+        elif key.startswith('feature_'):
+            kind = key.removeprefix('feature_')
+            self.assertEqual(window.feature_enabled(kind), value)
+            if kind == 'explorer':
+                self.assertEqual(window.explorer.get_visible(), value)
+                self.assertEqual(window.titlebar.explorer_button.get_visible(), value)
+            elif kind == 'notes':
+                self.assertEqual(window.explorer._notes_enabled, value)
+            else:
+                for panel in terminals:
+                    self.assertEqual(kind in panel.add_button._kinds, value)
+                    if not value:
+                        self.assertFalse(any(p.kind == kind for p in panel._panes))
+        elif key in ('explorer_git_colors', 'explorer_folders_first', 'explorer_compact'):
+            self.assertEqual(getattr(window.explorer, '_' + key.removeprefix('explorer_')), value)
+        elif key == 'notes_sort':
+            self.assertEqual(window.explorer._notes_sort, value)
+        elif key == 'notes_open_after_create':
+            self.assertEqual(window.explorer.open_after_create, value)
+        elif key == 'notes_toolbar':
+            for tab in window.editor.tabs:
+                if notes.is_note(window.root, tab.path):
+                    self.assertEqual(getattr(tab, '_note_toolbar', None) is not None,
+                                     value and window.feature_enabled('notes'))
+        elif key in ('terminal_max_panes', 'terminal_shell', 'terminal_copy_on_select', 'terminal_bell'):
+            attr = {'terminal_max_panes': 'max_panes', 'terminal_shell': '_shell',
+                    'terminal_copy_on_select': '_copy_on_select', 'terminal_bell': '_bell'}[key]
+            for panel in terminals:
+                self.assertEqual(getattr(panel, attr), value)
+                if key == 'terminal_bell':
+                    for pane in panel._panes:
+                        if pane.terminal is not None:
+                            self.assertEqual(pane.terminal.get_audible_bell(), value)
+        elif key.startswith('gitgraph_'):
+            for view in window._gitgraph_views():
+                if key == 'gitgraph_orientation':
+                    self.assertEqual(view.orientation, value)
+                elif key == 'gitgraph_max_commits':
+                    self.assertEqual(view._max_commits, value)
+                else:
+                    option = {'gitgraph_show_remotes': 'showRemotes',
+                              'gitgraph_show_tags': 'showTags',
+                              'gitgraph_time_format': 'timeFormat'}[key]
+                    self.assertEqual(view._options[option], value)
+        elif key == 'graph_default_type':
+            self.assertEqual(window._values[key], value)
+        elif key in ('terminal_autostart', 'notes_slash_commands'):
+            pass  # Start-up policy and the separately owned slash-menu dispatch.
+        else:
+            self.fail(f'Missing live assertion for {key}')
 
     def test_every_setting_changes_the_live_widgets_and_persists(self):
         self.animations = motion.animations_enabled()
@@ -326,7 +383,7 @@ class WindowWiringTest(unittest.TestCase):
         dialog = window._settings_dialog
         defaults = settings.NEW_DEFAULTS
         self.assertEqual(set(CHANGES), set(settings.NEW_KEYS))
-        for key, value in CHANGES.items():
+        for key, value in sorted(CHANGES.items(), key=lambda pair: pair[0].startswith('feature_')):
             with self.subTest(key=key):
                 self.assert_live(window, key, defaults[key])
                 dialog._changed(key, value)
@@ -340,6 +397,7 @@ class WindowWiringTest(unittest.TestCase):
                 spin(.05)
                 self.assert_live(window, key, defaults[key])
         # A new terminal pane gets the current terminal settings.
+        dialog._changed('feature_terminal', True)
         window.terminal_bottom.new_terminal()
         spin()
         self.assert_live(window, 'terminal_cursor', 'underline')
@@ -370,6 +428,8 @@ class WindowWiringTest(unittest.TestCase):
                     self.assert_live(window, key, value)
         self.assertFalse(window.terminal_bottom.get_visible())
         self.assertEqual(window.terminal_bottom.terminal_count(), 0)
+        window.open_settings()
+        window._settings_dialog._changed('feature_terminal', True)
         window.toggle_terminal_bottom()
         spin()
         self.assertTrue(window.terminal_bottom.get_visible())

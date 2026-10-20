@@ -272,6 +272,14 @@ class GraphView(Gtk.Box):
         elif kind == 'error':
             self.emit('error', str(message.get('message', 'Graph error')))
 
+    def set_settings(self, values: dict) -> None:
+        """Apply the dialog's graph controls using the page controls' rebuild path."""
+        self._settings = preferences.normalize_graph(values)
+        self.post('setSettings', self._settings)
+        if self._options_timer is not None:
+            GLib.source_remove(self._options_timer)
+        self._options_timer = GLib.timeout_add(80, self._options_changed)
+
     def _options_changed(self):
         self._options_timer = None
         self.rebuild()

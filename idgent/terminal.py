@@ -14,12 +14,12 @@ gi.require_version("Gdk", "3.0")
 gi.require_version("Vte", "2.91")
 from gi.repository import Gdk, Gio, GLib, GObject, Gtk, Pango, Vte
 
-from idgent import motion
+from idgent import motion, settings
 from idgent.resizegate import ResizeGate
 from idgent.panesplit import PaneSplit
 from idgent.terminal_bar import AddButton, LimitToast, PaneHeader, cancel_fade, fade
 
-MAX_TERMINALS = 3
+DEFAULT_MAX_PANES = 6
 SCROLLBACK_RANGE = (1000, 100000)
 CURSOR_SHAPES = {
     "block": Vte.CursorShape.BLOCK,
@@ -88,6 +88,7 @@ def _hangup(pane: _Pane) -> None:
 
 class TerminalPanel(Gtk.Box):
     __gsignals__ = {
+        "feature-disabled": (GObject.SignalFlags.RUN_LAST, None, (str,)),
         "last-closed": (GObject.SignalFlags.RUN_LAST, None, ()),
         "limit-reached": (GObject.SignalFlags.RUN_LAST, None, ()),
         "maximize-toggled": (GObject.SignalFlags.RUN_LAST, None, (bool,)),
@@ -102,6 +103,11 @@ class TerminalPanel(Gtk.Box):
     def __init__(self, cwd: str, autostart: bool = True, stacked: bool = False,
                  font_size: int = 11):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        self.max_panes = settings.get_value("terminal_max_panes")
+        self._pane_kinds = ("terminal", "graph", "gitgraph")
+        self._shell = ""
+        self._copy_on_select = False
+        self._bell = False
         self.font_size = font_size
         self._cwd = cwd
         self.graph_factory: Callable[[], Gtk.Widget] | None = None
@@ -127,9 +133,9 @@ class TerminalPanel(Gtk.Box):
                                minimum=self.HEADER_HEIGHT + 90 if stacked else 160)
         self.overlay = Gtk.Overlay()
         self.overlay.add(self._body)
-        self.add_button = AddButton(MAX_TERMINALS)
+        self.add_button = AddButton(self.max_panes)
         self.add_button.connect("choose", self._choose_pane)
-        self.toast = LimitToast(MAX_TERMINALS)
+        self.toast = LimitToast(self.max_panes)
         self.toast.set_margin_top(self.HEADER_HEIGHT + 6)
         self.toast.set_margin_end(10)
         for widget in (self.add_button, self.toast):
@@ -219,7 +225,50 @@ class TerminalPanel(Gtk.Box):
             self._add_web_pane(kind)
 
     def is_full(self) -> bool:
-        return len(self._panes) >= MAX_TERMINALS
+        return len(self._panes) >= self.max_panes
+
+    def set_max_panes(self, count: int) -> None:
+        self.max_panes = max(1, min(8, int(count)))
+        self.add_button.set_limit(self.max_panes)
+        self.toast.set_text(f"Cannot add (limit {self.max_panes})")
+        self._update_layout()
+
+    def set_pane_kinds(self, kinds) -> None:
+        self._pane_kinds = tuple(kinds)
+        self.add_button.set_kinds(kinds)
+
+    def _allow_kind(self, kind: str) -> bool:
+        if kind in self._pane_kinds:
+            return True
+        self.emit("feature-disabled", kind)
+        return False
+
+    def close_kind(self, kind: str) -> None:
+        """Release disabled panes immediately, including any pending exit animation."""
+        for pane in list(self._panes):
+            if pane.kind == kind:
+                self._close_pane(pane)
+        for pane in list(self._closing):
+            if pane.kind == kind:
+                if pane.timer is not None:
+                    GLib.source_remove(pane.timer)
+                self._finish_close(pane)
+
+    def set_shell(self, shell: str) -> None:
+        self._shell = shell
+
+    def set_copy_on_select(self, enabled: bool) -> None:
+        self._copy_on_select = bool(enabled)
+
+    def _selection_changed(self, terminal) -> None:
+        if self._copy_on_select and terminal.get_has_selection():
+            terminal.copy_clipboard_format(Vte.Format.TEXT)
+
+    def set_bell(self, enabled: bool) -> None:
+        self._bell = bool(enabled)
+        for pane in self._panes + self._closing:
+            if pane.terminal is not None:
+                pane.terminal.set_audible_bell(self._bell)
 
     def set_cwd(self, path: str) -> None:
         self._cwd = path
@@ -258,7 +307,7 @@ class TerminalPanel(Gtk.Box):
 
     def new_terminal(self) -> bool:
         """Add a terminal; False when the dock is full or destroyed."""
-        if self._destroyed:
+        if self._destroyed or not self._allow_kind("terminal"):
             return False
         if self.is_full():
             self.toast.popup()
@@ -266,7 +315,7 @@ class TerminalPanel(Gtk.Box):
             return False
         if self._maximized is not None:
             self.restore()
-        shell = pick_shell()
+        shell = self._shell or pick_shell()
         terminal = Vte.Terminal()
         self._configure(terminal)
         content = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
@@ -489,7 +538,7 @@ class TerminalPanel(Gtk.Box):
 
     def _add_web_pane(self, kind: str, view: Gtk.Widget | None = None) -> bool:
         """Shared lifecycle for composite web views, without a PTY or ResizeGate."""
-        if self._destroyed:
+        if self._destroyed or not self._allow_kind(kind):
             return False
         existing = next((p for p in self._panes if p.kind == kind), None)
         if existing is not None:
@@ -632,7 +681,8 @@ class TerminalPanel(Gtk.Box):
         terminal.set_scrollback_lines(self._scrollback)
         terminal.set_scroll_on_output(False)
         terminal.set_scroll_on_keystroke(True)
-        terminal.set_audible_bell(False)
+        terminal.set_audible_bell(self._bell)
+        terminal.connect("selection-changed", self._selection_changed)
         terminal.set_mouse_autohide(True)
         terminal.set_hexpand(True)
         terminal.set_vexpand(True)
