@@ -268,6 +268,8 @@ class GitGraphPageTests(unittest.TestCase):
         p.call('resume')
         p.call('setSettings', {'reduceMotion': False, 'showRemote': True, 'showTags': True})
         p.call('setTheme', DARK)
+        p.call('setOrientation', 'horizontal')
+        p.call('setOptions', {'showRemotes': True, 'showTags': True, 'timeFormat': 'relative'})
         p.call('select', None)
         p.pointer('pointerleave', -5, -5)
         p.messages.clear()
@@ -326,7 +328,6 @@ class GitGraphPageTests(unittest.TestCase):
         self.assertEqual(parts[1]['cls'], 't-subj')
         self.assertIn("Merge branch 'feature/ui'", parts[1]['text'])
         self.assertEqual(parts[2]['cls'], 't-time')
-        self.assertRegex(parts[2]['text'], r'[A-Z][a-z]{2} \d{1,2}, \d{4}, \d{1,2}:\d\d [AP]M')
         self.assertIn('ago', parts[2]['text'])
         r = p.js('IDGit._debug.tipRect()')
         st = p.stats()
@@ -613,6 +614,78 @@ class GitGraphPageTests(unittest.TestCase):
         self.assertGreater(self.perf['pan_fps_1500'], 15)
         self.assertEqual(p.errors(), [])
 
+    def test_17_orientation_controls_animation_refresh_and_vertical_input(self):
+        p = self.page
+        self.show()
+        p.call('select', SHOW['head']['hash'])
+        p.messages.clear()
+        self.assertEqual(p.js("document.getElementById('b-horizontal').getAttribute('aria-pressed')"), 'true')
+        before = p.pos(SHOW['head']['hash'])
+        p.js("document.getElementById('b-vertical').click(); true")
+        self.assertTrue(p.stats()['animating'])
+        self.assertEqual(p.stats()['state'], 'data')
+        self.assertEqual(p.of_type('orientation'), [{'type': 'orientation', 'value': 'vertical'}])
+        p.pump(.12)
+        mid = p.pos(SHOW['head']['hash'])
+        p.settle()
+        after = p.pos(SHOW['head']['hash'])
+        self.assertNotEqual(before, mid)
+        self.assertNotEqual(mid, after)
+        self.assertEqual(p.js("document.getElementById('b-vertical').getAttribute('aria-pressed')"), 'true')
+        self.assertEqual(p.stats()['selected'], SHOW['head']['hash'])
+        p.call('setOrientation', 'horizontal')
+        p.call('setOrientation', 'vertical')
+        p.settle()
+        self.assertEqual(len(p.of_type('orientation')), 1, 'host API does not send user signals')
+        p.call('setTheme', LIGHT)
+        p.call('setData', SHOW)
+        p.settle()
+        self.assertEqual(p.stats()['orientation'], 'vertical')
+        self.assertEqual(p.js('IDGit._debug.nodeAlpha(%s)' % json.dumps(SHOW['head']['hash'])), 1)
+        x, y = p.pos(SHOW['head']['hash'])
+        p.pointer('pointermove', x, y, buttons=0)
+        p.wait_for('IDGit.stats().tip')
+        self.assertIn(SHOW['head']['hash'][:7], p.js('IDGit._debug.tipText()'))
+        p.call('setOptions', {'timeFormat': 'absolute', 'showRemotes': False, 'showTags': False})
+        self.assertRegex(p.js('IDGit._debug.tipParts()[2].text'), r'[A-Z][a-z]{2} \d{1,2}, \d{4}')
+        self.assertEqual(p.js("document.getElementById('c-remote').getAttribute('aria-pressed')"), 'false')
+        self.assertEqual(p.js("document.getElementById('c-tags').getAttribute('aria-pressed')"), 'false')
+        p.js("document.getElementById('c-tags').click(); true")
+        self.assertTrue(p.stats()['options']['showTags'])
+        p.pointer('pointerdown', x, y)
+        p.pointer('pointerup', x, y, buttons=0)
+        self.assertEqual(p.of_type('open-commit')[-1]['hash'], SHOW['head']['hash'])
+        p.key('End')
+        p.key('ArrowDown')
+        self.assertEqual(p.stats()['cursor'], self.hash_of('Update docs for v0.2'))
+        p.js("document.getElementById('b-fit').click(); true")
+        p.settle()
+        for h in p.js('IDGit._debug.hashes()'):
+            x, y = p.pos(h)
+            self.assertTrue(0 <= x <= p.stats()['width'] and 0 <= y <= p.stats()['height'])
+        p.js("document.getElementById('b-head').click(); true")
+        p.settle()
+        x, y = p.pos(SHOW['head']['hash'])
+        self.assertTrue(0 <= x <= p.stats()['width'] and 0 <= y <= p.stats()['height'])
+        f = p.stats()['frames']
+        p.pump(.3)
+        self.assertEqual(f, p.stats()['frames'])
+        self.assertEqual(p.errors(), [])
+
+    def test_18_orientation_reduced_motion_and_narrow_toolbar(self):
+        p = self.page
+        self.show()
+        p.call('setSettings', {'reduceMotion': True})
+        for value in ('vertical', 'horizontal', 'vertical'):
+            p.call('setOrientation', value)
+            self.assertFalse(p.stats()['animating'])
+            self.assertEqual(p.stats()['orientation'], value)
+        p.resize(240, 240)
+        for value in ('horizontal', 'vertical'):
+            self.assertTrue(p.js("(() => { const r = document.getElementById('b-%s').getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth && r.top >= 0 && r.bottom <= innerHeight; })()" % value))
+        p.resize(1100, 520)
+        self.assertEqual(p.errors(), [])
+
     def test_16_runs_without_bridge(self):
         p = Page(900, 400, query='?demo=80', bridge=False)
         try:
@@ -630,6 +703,24 @@ class GitGraphPageTests(unittest.TestCase):
 
 @unittest.skipIf(WK is None or not os.environ.get('GITGRAPH_SHOTS'), 'screenshots only with GITGRAPH_SHOTS=1')
 class GitGraphShots(unittest.TestCase):
+    def test_orientation_shots(self):
+        p = Page(1100, 820)
+        try:
+            p.call('setData', SHOW)
+            p.settle()
+            for name, colors in [('dark', DARK), ('light', LIGHT)]:
+                p.call('setTheme', colors)
+                for orientation in ('horizontal', 'vertical'):
+                    p.call('setOrientation', orientation)
+                    if name == 'dark' and orientation == 'vertical':
+                        p.pump(.12)
+                        p.snapshot('gg-orientation-mid')
+                    p.settle()
+                    p.snapshot('gg-' + name + '-' + orientation)
+            self.assertEqual(p.errors(), [])
+        finally:
+            p.destroy()
+
     def test_shots(self):
         p = Page(1500, 700)
         try:

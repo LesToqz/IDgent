@@ -34,7 +34,9 @@
   pulseEl.innerHTML = '<i></i><i></i>';
 
   // ------------------------------------------------------------ state
-  const settings = { reduceMotion: false, showRemote: true, showTags: true };
+  const settings = { reduceMotion: false, showRemote: true, showTags: true, timeFormat: 'relative' };
+  let orientation = 'horizontal', turn = null;
+  let labelGlides = new Map();
   const mql = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : null;
   const reduce = () => !!settings.reduceMotion || !!(mql && mql.matches);
 
@@ -155,8 +157,26 @@
   }
 
   // ------------------------------------------------------------ geometry helpers
-  const nx = (i) => L.nodes[i].col * C.colW;
-  const ny = (i) => L.nodes[i].slot * gap;
+  const vertical = () => orientation === 'vertical';
+  const nx = (i) => G.position(L, i, gap).x;
+  const ny = (i) => G.position(L, i, gap).y;
+  function viewAngle(now) {
+    const target = vertical() ? Math.PI / 2 : 0;
+    if (!turn) return target;
+    const t = G.clamp((now - turn.t0) / turn.d, 0, 1);
+    return turn.from + (target - turn.from) * G.ease.inOutCubic(t);
+  }
+  function routedEdge(e, now) {
+    const a = viewAngle(now), c = Math.cos(a), s = Math.sin(a);
+    const px = D.x[e.p], py = D.y[e.p], cx = D.x[e.c], cy = D.y[e.c];
+    return G.edgeSegments(px * c - py * s, px * s + py * c, cx * c - cy * s, cx * s + cy * c, e.route, C.colW).map((seg) => {
+      const out = { t: seg.t };
+      for (const [x, y] of [['x0', 'y0'], ['x1', 'y1'], ...(seg.t === 'C' ? [['c1x', 'c1y'], ['c2x', 'c2y']] : [])]) {
+        out[x] = seg[x] * c + seg[y] * s; out[y] = -seg[x] * s + seg[y] * c;
+      }
+      return out;
+    });
+  }
   const toSX = (wx) => (wx - cam.x) * cam.s + W / 2;
   const toSY = (wy) => (wy - cam.y) * cam.s + H / 2;
   const toWX = (sx) => (sx - W / 2) / cam.s + cam.x;
@@ -167,13 +187,18 @@
     let x0 = -20, x1 = L.maxCol * C.colW + (L.head >= 0 ? C.tail + 30 : 20);
     if (L.stubs.length) x0 = -C.colW * 1.6;
     let y0 = L.minSlot * gap - gap * 0.75, y1 = L.maxSlot * gap + gap * 0.75;
+    if (vertical()) {
+      x0 = L.minSlot * gap - gap * 0.75; x1 = L.maxSlot * gap + gap * 0.75;
+      y0 = -C.tail - 30; y1 = L.maxCol * C.colW + (L.stubs.length ? 90 : 30);
+    }
     for (const lb of labels) if (!lb.hidden) { x0 = Math.min(x0, lb.x - 8); x1 = Math.max(x1, lb.x + lb.w + 8); y0 = Math.min(y0, lb.y - 6); y1 = Math.max(y1, lb.y + lb.h + 6); }
     return { x0, x1, y0, y1 };
   }
-  function homeScale() { return G.clamp((W - 40) / (12 * C.colW + C.tail + 70), 0.8, 1); }
+  function homeScale() { return G.clamp(((vertical() ? H : W) - 40) / (12 * C.colW + C.tail + 70), 0.8, 1); }
   function computeGap() {
     if (!L) return C.laneGap;
     const span = L.maxSlot - L.minSlot;
+    if (vertical()) return Math.round(G.clamp(((W || 700) - 80) / Math.max(1, span + 1.5), 110, 190));
     if (!span) return C.laneGap;
     const avail = (H || 400) / homeScale() - 70;
     return Math.round(G.clamp(avail / (span + 1.3), C.minLaneGap, C.laneGap));
@@ -192,6 +217,10 @@
     }
     if (b.y1 - b.y0 <= vh) y = (b.y0 + b.y1) / 2;
     else y = G.clamp(L.head >= 0 ? ny(L.head) : 0, b.y0 + vh / 2, b.y1 - vh / 2);
+    if (vertical()) {
+      x = (b.x0 + b.x1) / 2;
+      y = b.y1 - b.y0 <= vh ? (b.y0 + b.y1) / 2 : b.y0 + vh / 2 - 10;
+    }
     return { x, y, s };
   }
   function fitView() {
@@ -226,7 +255,7 @@
         const t = G.clamp((now - a.at0) / a.ad, 0, 1);
         u = t;
         if (a.ak === 'pop') { sc = t <= 0 ? 0 : G.ease.outBack(t); al = Math.min(1, t * 2.2); }
-        else if (a.ak === 'slide') { const e = G.ease.outCubic(t); al = e; x += (1 - e) * C.colW * 1.4; }
+        else if (a.ak === 'slide') { const e = G.ease.outCubic(t); al = e; if (vertical()) y -= (1 - e) * C.colW * 1.4; else x += (1 - e) * C.colW * 1.4; }
         else al = G.ease.outCubic(t);
       }
     }
@@ -357,7 +386,7 @@
       const cache = new Array(L.edges.length);
       for (let k = 0; k < L.edges.length; k++) {
         const e = L.edges[k];
-        let segs = G.edgeSegments(D.x[e.p], D.y[e.p], D.x[e.c], D.y[e.c], e.route, C.colW);
+        let segs = routedEdge(e, now);
         if (D.u[e.c] < 1 && anim[e.c] && anim[e.c].ak !== 'fade') segs = G.partialSegments(segs, G.ease.outCubic(D.u[e.c]));
         cache[k] = segs;
       }
@@ -369,7 +398,9 @@
     for (const st of L.stubs) {
       const i = st.node;
       if (D.x[i] < vx0 - 80 || D.x[i] > vx1 + 80 || D.y[i] < vy0 || D.y[i] > vy1) continue;
+      ctx.save();
       const c = laneCol(N[i].lane), x = D.x[i], y = D.y[i];
+      if (vertical()) { ctx.translate(x, y); ctx.rotate(-Math.PI / 2); ctx.translate(-x, -y); }
       const g = ctx.createLinearGradient(x, y, x - 66, y);
       g.addColorStop(0, G.rgba(c.line, 0.85 * D.a[i])); g.addColorStop(1, G.rgba(c.line, 0));
       ctx.strokeStyle = g; ctx.lineWidth = lineW; ctx.lineCap = 'round';
@@ -379,6 +410,7 @@
       else { const dy = (N[i].slot <= 0 ? -1 : 1) * gap * 0.45; ctx.moveTo(x, y); ctx.bezierCurveTo(x - 24, y, x - 30, y + dy, x - 56, y + dy); }
       ctx.stroke();
       ctx.setLineDash([]);
+      ctx.restore();
     }
 
     // ---- tail from HEAD to the working tree
@@ -537,7 +569,9 @@
   function tailGeom() {
     const i = L.head;
     const x = D ? D.x[i] : nx(i), y = D ? D.y[i] : ny(i);
-    return { x0: x + C.headR + 6, x1: x + C.tail, y, x: x + C.tail };
+    const a = viewAngle(performance.now()), dx = Math.cos(a), dy = -Math.sin(a);
+    return { x0: x + dx * (C.headR + 6), y0: y + dy * (C.headR + 6),
+      x: x + dx * C.tail, y: y + dy * C.tail, dx, dy };
   }
   function drawTail(now) {
     const i = L.head, tg = tailGeom();
@@ -545,7 +579,7 @@
     if (a <= 0) return;
     ctx.globalAlpha = a;
     ctx.strokeStyle = pal.tail; ctx.lineWidth = 1.6; ctx.setLineDash([5, 5]); ctx.lineCap = 'butt';
-    ctx.beginPath(); ctx.moveTo(tg.x0, tg.y); ctx.lineTo(tg.x1 - 8.5, tg.y); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(tg.x0, tg.y0); ctx.lineTo(tg.x - tg.dx * 8.5, tg.y - tg.dy * 8.5); ctx.stroke();
     if (L.dirty) {
       ctx.setLineDash([2.6, 2.2]); ctx.strokeStyle = pal.warn; ctx.lineWidth = 1.6;
       ctx.beginPath(); ctx.arc(tg.x, tg.y, Math.max(0.01, 6.5), 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
@@ -572,6 +606,12 @@
   }
   function labelPos(lb, now) {
     let x = lb.x, y = lb.y;
+    const glide = labelGlides.get(labelKey(lb));
+    if (glide) {
+      const t = reduce() ? 1 : G.clamp((now - glide.t0) / 400, 0, 1), e = G.ease.inOutCubic(t);
+      if (t < 1) return { x: glide.x + (x - glide.x) * e, y: glide.y + (y - glide.y) * e };
+      labelGlides.delete(labelKey(lb));
+    }
     if (D && lb.node >= 0 && lb.node < D.x.length) { x += D.x[lb.node] - lb.ax; y += D.y[lb.node] - lb.ay; }
     if (lb.kind === 'head' && headGlide) {
       const t = reduce() ? 1 : G.clamp((now - headGlide.t0) / headGlide.d, 0, 1);
@@ -662,13 +702,25 @@
     const cx = x + w / 2, cy = below ? y - 5 : y + h + 5;
     ctx.strokeStyle = pal.head; ctx.lineWidth = 1.8; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
     ctx.beginPath();
-    if (below) { ctx.moveTo(cx - 4, cy + 1.5); ctx.lineTo(cx, cy - 2); ctx.lineTo(cx + 4, cy + 1.5); }
+    if (lb.vertical) {
+      const ex = lb.side > 0 ? x - 5 : x + w + 5, ey = y + h / 2, d = lb.side > 0 ? -1 : 1;
+      ctx.moveTo(ex - d * 1.5, ey - 4); ctx.lineTo(ex + d * 2, ey); ctx.lineTo(ex - d * 1.5, ey + 4);
+    }
+    else if (below) { ctx.moveTo(cx - 4, cy + 1.5); ctx.lineTo(cx, cy - 2); ctx.lineTo(cx + 4, cy + 1.5); }
     else { ctx.moveTo(cx - 4, cy - 1.5); ctx.lineTo(cx, cy + 2); ctx.lineTo(cx + 4, cy - 1.5); }
     ctx.stroke();
   }
   function drawCallout(lb, p) {
     const x = p.x, y = p.y, w = lb.w, h = lb.h;
     const below = lb.side > 0;
+    if (lb.vertical) {
+      ctx.fillStyle = pal.calloutBg; ctx.strokeStyle = pal.calloutBorder; ctx.lineWidth = 1;
+      ctx.beginPath(); rr(x, y, w, h, 6); ctx.fill(); ctx.stroke();
+      const ex = lb.side > 0 ? x : x + w, ey = G.clamp(D.y[lb.node], y + 6, y + h - 6);
+      ctx.beginPath(); ctx.moveTo(ex, ey - 4); ctx.lineTo(ex + (lb.side > 0 ? -6 : 6), ey); ctx.lineTo(ex, ey + 4); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = pal.calloutText; ctx.font = '400 ' + (h * 12 / 22).toFixed(2) + 'px ' + pal.ui;
+      ctx.fillText(lb.text, x + 10, y + h / 2 + 0.5); return;
+    }
     const px = lb.px + (p.x - lb.x);
     ctx.fillStyle = pal.calloutBg; ctx.strokeStyle = pal.calloutBorder; ctx.lineWidth = 1;
     ctx.beginPath();
@@ -702,6 +754,12 @@
   function drawRunChips(vx0, vx1) {
     const s = cam.s;
     for (const r of L.runs) {
+      if (vertical()) {
+        const x = D.x[r.from], y0 = D.y[r.from], y1 = D.y[r.to], c = laneCol(r.lane);
+        ctx.strokeStyle = c.css; ctx.lineWidth = 4.2 / s; ctx.lineCap = 'round';
+        ctx.beginPath(); ctx.moveTo(x, y0); ctx.lineTo(x, y1); ctx.stroke();
+        continue;
+      }
       const xa = D.x[r.from], xb = D.x[r.to];
       if (xb < vx0 || xa > vx1) continue;
       const y = D.y[r.from], c = laneCol(r.lane);
@@ -775,12 +833,12 @@
   function tipHtml(t) {
     if (t.kind === 'node') {
       const nd = L.nodes[t.i];
-      const refs = nd.refs.filter((r) => r.kind !== 'tag' || settings.showTags).map((r) => r.name);
+      const refs = nd.refs.filter((r) => (r.kind !== 'tag' || settings.showTags) && (r.kind !== 'remote' || settings.showRemote)).map((r) => r.name);
       const nowS = Date.now() / 1000;
       const kind = t.i === L.head ? 'HEAD' : (nd.merge ? (nd.parents.length + nd.absent.length > 2 ? 'octopus merge' : 'merge') : '');
       return '<div class="t-hash"><span>' + esc(nd.short) + '</span>' + (kind ? '<span class="t-kind">' + esc(kind) + '</span>' : '') + '</div>' +
         '<div class="t-subj">' + esc(nd.subject || '(no message)') + '</div>' +
-        '<div class="t-time"><b>' + esc(G.absTime(nd.ts)) + '</b> · ' + esc(G.relTime(nd.ts, nowS)) + '</div>' +
+        '<div class="t-time"><b>' + esc(settings.timeFormat === 'absolute' ? G.absTime(nd.ts) : G.relTime(nd.ts, nowS)) + '</b>' + '</div>' +
         '<div class="t-meta">' + esc(nd.author) + (refs.length ? ' · ' + esc(refs.slice(0, 4).join(', ')) + (refs.length > 4 ? ' …' : '') : '') + '</div>';
     }
     if (t.kind === 'label') {
@@ -818,10 +876,11 @@
   function hitNode(sx, sy) {
     if (!L || viewState !== 'data') return -1;
     const wx = toWX(sx), wy = toWY(sy);
-    const c0 = Math.round(wx / C.colW);
+    const c0 = Math.round(vertical() ? L.maxCol - wy / C.colW : wx / C.colW);
     let best = -1, bd = Infinity;
     const lim = Math.max(10, 9 * cam.s + 3);
-    for (let c = c0 - 2; c <= c0 + 2; c++) {
+    const moving = performance.now() < animUntil;
+    for (let c = moving ? 0 : c0 - 2; c <= (moving ? L.maxCol : c0 + 2); c++) {
       const list = colMap.get(c);
       if (!list) continue;
       for (const i of list) {
@@ -1006,6 +1065,50 @@
     moveCamera(homeView());
   }
 
+  function labelKey(lb) { return lb.kind + ':' + lb.full + ':' + lb.lane; }
+  function setOrientation(value) {
+    if (value !== 'horizontal' && value !== 'vertical' || value === orientation) return;
+    const now = performance.now(), angle = viewAngle(now);
+    const prev = new Map(), oldLabels = new Map();
+    if (L && L.nodes.length) {
+      computeDisplay(now);
+      for (const nd of L.nodes) prev.set(nd.hash, { x: D.x[nd.i], y: D.y[nd.i] });
+      for (const lb of labels) oldLabels.set(labelKey(lb), labelPos(lb, now));
+    }
+    orientation = value;
+    setChip('b-horizontal', !vertical()); setChip('b-vertical', vertical());
+    canvas.setAttribute('aria-label', 'Git commit graph, ' + value + ' view');
+    hideTip(); hover = unhover = -1;
+    if (!L || !L.nodes.length) return;
+    L.orientation = value; gap = computeGap(); relabel();
+    anim = new Array(L.nodes.length); labelGlides.clear(); ghosts = []; headGlide = null; labelD = 0;
+    if (!reduce()) {
+      for (const nd of L.nodes) {
+        const p = prev.get(nd.hash);
+        anim[nd.i] = { fx: p.x, fy: p.y, pt0: now, pd: 400 };
+      }
+      for (const lb of labels) {
+        const p = oldLabels.get(labelKey(lb));
+        if (p) labelGlides.set(labelKey(lb), { x: p.x, y: p.y, t0: now });
+      }
+      turn = { from: angle, t0: now, d: 400 }; animUntil = now + 420;
+    } else { turn = null; animUntil = 0; }
+    edgeCache = null; camHome = true; moveCamera(homeView(), 400); draw(now); kick();
+  }
+  for (const value of ['horizontal', 'vertical']) $('b-' + value).addEventListener('click', safe(() => {
+    if (orientation === value) return;
+    setOrientation(value); post({ type: 'orientation', value });
+  }));
+  function setOptions(o) {
+    o = o || {};
+    if ('showRemotes' in o) { settings.showRemote = !!o.showRemotes; setChip('c-remote', settings.showRemote); }
+    if ('showTags' in o) { settings.showTags = !!o.showTags; setChip('c-tags', settings.showTags); }
+    if (o.timeFormat === 'relative' || o.timeFormat === 'absolute') settings.timeFormat = o.timeFormat;
+    if (L) relabel();
+    if (tipFor) { tipEl.innerHTML = tipHtml(tipFor); positionTip(); }
+    draw();
+  }
+
   // ------------------------------------------------------------ layout plumbing
   function relabel() {
     if (!L) { labels = []; return; }
@@ -1063,7 +1166,7 @@
     if (!data || typeof data !== 'object') { setState('error', 'No graph data'); return; }
     if (data.ok === false) { setState(STATES[data.error] ? data.error : 'error', STATES[data.error] ? '' : data.error); return; }
     const t0 = performance.now();
-    const NL = G.layout(data);
+    const NL = G.layout(data, orientation);
     if (!NL.nodes.length) { L = NL; selected = cursor = hover = unhover = -1; anim = []; ghosts = []; setState('empty'); return; }
     G.assignColors(NL, pal.lanes.length, pal.skip);
     perf.layoutMs = performance.now() - t0;
@@ -1161,9 +1264,9 @@
     barEl.classList.toggle('narrow', W < 520);
     if (L && L.nodes.length) {
       const ng = computeGap();
-      if (ng !== gap) { const k = ng / gap; gap = ng; relabel(); cam.y = cy * k; }
+      if (ng !== gap) { const k = ng / gap; gap = ng; relabel(); if (vertical()) cam.x = cx * k; else cam.y = cy * k; }
       if (camHome) { const v = homeView(); cam.x = v.x; cam.y = v.y; cam.s = v.s; }
-      else { cam.x = cx; clampCam(); }
+      else { if (!vertical()) cam.x = cx; clampCam(); }
     }
     draw();
   }
@@ -1182,6 +1285,8 @@
   // ------------------------------------------------------------ API
   Object.assign(IDGit, {
     setData: safe(setData),
+    setOrientation: safe(setOrientation),
+    setOptions: safe(setOptions),
     setState: safe((kind, message) => setState(kind, message)),
     setTheme: safe((colors) => {
       theme = Object.assign({}, DEFAULT_THEME, colors || {});
@@ -1198,6 +1303,7 @@
       if ('showTags' in o) { settings.showTags = !!o.showTags; setChip('c-tags', settings.showTags); }
       document.body.classList.toggle('reduce', reduce());
       if (reduce()) {
+        turn = null; labelGlides.clear();
         anim = L ? new Array(L.nodes.length) : []; ghosts = []; labelD = 0; headGlide = null; animUntil = 0;
         if (camTw) { cam.x = camTw.tx; cam.y = camTw.ty; cam.s = camTw.ts; camTw = null; }
         if (zoomT) { cam.s = zoomT.s; zoomT = null; }
@@ -1233,6 +1339,7 @@
       draw(); kick();
     }),
     stats: () => ({
+      orientation, options: { showRemotes: settings.showRemote, showTags: settings.showTags, timeFormat: settings.timeFormat },
       frames: perf.frames, running: !!raf, paused, state: viewState, commits: L ? L.nodes.length : 0, lanes: L ? L.lanes.length : 0,
       slots: L ? L.maxSlot - L.minSlot + 1 : 0, laneGap: gap, scale: cam.s, cam: { x: cam.x, y: cam.y }, width: W, height: H,
       animating: performance.now() < animUntil || !!camTw || !!zoomT || !!inertia, layoutMs: perf.layoutMs, labelMs: perf.labelMs,
@@ -1248,7 +1355,7 @@
       return [toSX(D.x[i]), toSY(D.y[i])];
     },
     nodeAlpha: (hash) => { if (!L || !L.byHash.has(hash)) return null; const d = nodeDisp(L.byHash.get(hash), performance.now()); return d.a; },
-    nodeWorld: (hash) => { if (!L || !L.byHash.has(hash)) return null; const i = L.byHash.get(hash); return { col: L.nodes[i].col, slot: L.nodes[i].slot, lane: L.lanes[L.nodes[i].lane].id }; },
+    nodeWorld: (hash) => { if (!L || !L.byHash.has(hash)) return null; const i = L.byHash.get(hash); return { x: nx(i), y: ny(i), col: L.nodes[i].col, slot: L.nodes[i].slot, lane: L.lanes[L.nodes[i].lane].id }; },
     labels: () => labels.filter((lb) => labelVisible(lb, cam.s) > 0.5).map((lb) => {
       const p = labelPos(lb, performance.now());
       return { kind: lb.kind, text: lb.text, x: toSX(p.x), y: toSY(p.y), w: lb.w * cam.s, h: lb.h * cam.s, side: lb.side, node: L.nodes[lb.node].hash };

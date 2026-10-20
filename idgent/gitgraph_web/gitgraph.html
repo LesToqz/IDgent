@@ -11,6 +11,11 @@
   <canvas id="gg" tabindex="0" role="img" aria-label="Git commit graph"></canvas>
   <div id="pulse" aria-hidden="true"></div>
   <div id="bar" class="bar" role="toolbar" aria-label="Graph controls">
+    <span class="orient" role="group" aria-label="History orientation">
+      <button type="button" id="b-horizontal" class="btn on" title="Horizontal view" aria-label="Horizontal" aria-pressed="true"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 8h12M11 5l3 3-3 3"/><circle cx="3" cy="8" r="1.7"/><circle cx="8" cy="8" r="1.7"/></svg></button>
+      <button type="button" id="b-vertical" class="btn" title="Vertical view" aria-label="Vertical" aria-pressed="false"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2v12M5 11l3 3 3-3"/><circle cx="8" cy="3" r="1.7"/><circle cx="8" cy="8" r="1.7"/></svg></button>
+    </span>
+    <span class="sep"></span>
     <button type="button" id="b-fit" class="btn" title="Fit everything (double-click empty space)" aria-label="Fit"><svg viewBox="0 0 16 16"><path d="M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4"/></svg></button>
     <button type="button" id="b-head" class="btn" title="Jump to HEAD (End)" aria-label="Jump to HEAD"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="2.6"/><circle cx="8" cy="8" r="5.6" class="thin"/></svg></button>
     <span class="sep"></span>

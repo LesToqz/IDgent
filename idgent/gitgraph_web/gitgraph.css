@@ -24,13 +24,15 @@ body.paused #pulse > i, body.reduce #pulse > i { animation: none !important; }
 @keyframes breathe { 0% { transform: scale(0.9); opacity: 0; } 30% { opacity: 0.5; } 100% { transform: scale(1.75); opacity: 0; } }
 
 /* toolbar */
-.bar { position: absolute; top: 8px; right: 8px; display: flex; align-items: center; gap: 2px; padding: 3px;
+.bar { position: absolute; top: 8px; right: 8px; display: flex; align-items: center; gap: 2px; padding: 3px; max-width: calc(100% - 24px); flex-wrap: wrap; justify-content: flex-end;
   background: var(--bar-bg); border: 1px solid var(--border); border-radius: 9px; box-shadow: 0 4px 14px var(--shadow);
   -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); opacity: 0.82; transition: opacity 0.16s; z-index: 3; }
 .bar:hover, .bar:focus-within { opacity: 1; }
 .bar .sep { width: 1px; height: 16px; background: var(--border); margin: 0 3px; }
 .btn { appearance: none; border: 0; background: transparent; color: var(--muted); width: 26px; height: 24px; padding: 0;
   border-radius: 6px; display: grid; place-items: center; cursor: pointer; transition: background 0.12s, color 0.12s; }
+.orient { display: inline-flex; border: 1px solid var(--border); border-radius: 7px; flex-shrink: 0; }
+.orient .btn.on { color: var(--accent-text, var(--accent)); background: var(--accent-13); }
 .btn:hover { background: var(--hover); color: var(--text); }
 .btn:active { transform: translateY(0.5px); }
 .btn:focus-visible, .chip:focus-visible, .state-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }

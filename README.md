@@ -118,7 +118,7 @@ path/file/content/tag fields).
 
 ## Git graph
 
-Git graph draws the repository's history as a horizontal timeline. Open it from
+Git graph draws the repository's history with Horizontal / Vertical view icons to switch the timeline direction. Open it from
 either dock's **+ → Git graph** chooser, **View → Git graph**, **Ctrl+Alt+H**,
 or **Git graph: Open git graph** in the command palette. The menu, shortcut and
 palette focus an existing Git graph, or open one below the editor (on the right
