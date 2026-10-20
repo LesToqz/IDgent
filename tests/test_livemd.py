@@ -1,4 +1,5 @@
 """Live decoration preserves source, editing history and a responsive GTK loop."""
+import gc
 import os
 os.environ['GDK_BACKEND'] = 'x11'
 from pathlib import Path
@@ -271,6 +272,10 @@ class LiveMarkdownTest(unittest.TestCase):
         self.assertEqual(self.text(), source)
 
     def test_incremental_5000_lines_and_typing_burst(self):
+        # a collector pause from garbage left by earlier tests is not a slice of livemd work
+        gc.collect()
+        gc.disable()
+        self.addCleanup(gc.enable)
         source = '# Heading\n\n' + 'paragraph **bold** and `code`\n' * 4997 + '\nend'
         self.open(source)
         self.assertEqual(len(self.live.blocks), 5001)
