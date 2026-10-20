@@ -70,7 +70,7 @@ class GraphDataParityTests(unittest.TestCase):
             Path(root, 'pic.png').write_bytes(b'\0')
             index = GraphIndex(root)
             index.scan()
-            options = GraphOptions(query='alpha', existing_only=False, reference_app_filters=True,
+            options = GraphOptions(query='alpha', existing_only=False, strict_filters=True,
                                    groups=[{'query': '', 'color': '#ffffff'},
                                            {'query': 'alpha', 'color': '#ff0000'},
                                            {'query': 'file:Alpha', 'color': '#00ff00'}])
@@ -81,7 +81,7 @@ class GraphDataParityTests(unittest.TestCase):
             self.assertIsNone(nodes['#alpha'].group)
             self.assertIsNone(nodes['?Missing'].group)
             self.assertTrue(all(graph.nodes[e['s']].id in nodes for e in graph.to_json()['links']))
-            # The local centre always passes the search filter (spec B.2).
+            # The local focus survives a filter that would exclude it.
             local = index.local('Beta.md', options=options)
             self.assertIn('Beta.md', {n.id for n in local.nodes})
 
@@ -119,7 +119,7 @@ class WindowGraphTests(unittest.TestCase):
         poll(lambda: not web_processes(), timeout=6)
 
     def test_graph_focus_shortcuts_and_hotkeys_without_webkit(self):
-        settings.set_graph({'localJumps': 3, 'localBacklinks': False, 'localForelinks': False})
+        settings.set_graph({'localDepth': 3, 'localIncoming': False, 'localOutgoing': False})
         with patch('idgent.graphview._load_webkit', side_effect=ValueError('missing')):
             view = self.window.open_graph()
         self.assertEqual(view._settings['localDepth'], 3)
@@ -297,6 +297,10 @@ class WindowGraphTests(unittest.TestCase):
         global_count = page.js('IDGraph.stats().nodes')
         self.menu('Local graph')
         page.wait_for('IDGraph._debug.local().enabled && IDGraph.stats().nodes < ' + str(global_count))
+        local = page.js('IDGraph._debug.local()')
+        self.assertEqual(local['depth'], view._settings['localDepth'])
+        self.assertEqual(local['incoming'], view._settings['localIncoming'])
+        self.assertEqual(local['outgoing'], view._settings['localOutgoing'])
         self.assertEqual(panel.graph_count(), 1)
         self.window.editor.open_file(str(self.root / 'concepts/Orbit.md'))
         page.wait_for('IDGraph._debug.local().path === "concepts/Orbit.md"')

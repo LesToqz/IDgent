@@ -26,7 +26,7 @@ def _load_webkit():
 
 def graph_colors(ui: dict[str, str], accent: str) -> dict:
     """Resolve canvas roles from the current UI palette, keeping nodes legible."""
-    background = ui.get('bg', '#1e1e1e')
+    background = ui.get('bg', '#17212b')
     text = ui.get('foreground', '#cccccc')
     muted = ui.get('muted', text)
     groups = [_legible(c, background, 3) for c in preferences.ACCENT_PRESETS]
@@ -39,7 +39,7 @@ def graph_colors(ui: dict[str, str], accent: str) -> dict:
 
 _PLACEHOLDER = '''<!doctype html><meta charset="utf-8"><style>
 html,body{margin:0;width:100%;height:100%;overflow:hidden;font:14px sans-serif}
-body{display:grid;place-items:center;background:#1e1e1e;color:#ccc}
+body{display:grid;place-items:center;background:#17212b;color:#e4edf5}
 </style><div id="stats">Loading graph…</div><script>
 window.IDGraph = {
  setData(g) { document.getElementById('stats').textContent =
@@ -76,13 +76,7 @@ class GraphView(Gtk.Box):
         self._cancellable = Gio.Cancellable()
         raw_settings = settings if settings is not None else preferences.get_graph()
         raw_settings = dict(raw_settings)
-        for legacy, current in (('localJumps', 'localDepth'), ('localBacklinks', 'localIncoming'),
-                                ('localForelinks', 'localOutgoing')):
-            if legacy in raw_settings and (current not in raw_settings or
-                    raw_settings[current] == preferences.GRAPH_DEFAULTS[current]):
-                raw_settings[current] = raw_settings[legacy]
         self._settings = preferences.normalize_graph(raw_settings)
-        self._sync_local_settings()
         self._index = index if index is not None else GraphIndex(self.root)
         self._local_path = None
         self._active_id = None
@@ -240,12 +234,6 @@ class GraphView(Gtk.Box):
                 for source, target in (('query', 'search'), ('groups', 'colorGroups')):
                     if source in changes:
                         changes[target] = changes.pop(source)
-            for legacy, current in (('localJumps', 'localDepth'), ('localBacklinks', 'localIncoming'),
-                                    ('localForelinks', 'localOutgoing')):
-                if current in changes:
-                    changes[legacy] = changes[current]
-                elif legacy in changes:
-                    changes[current] = changes[legacy]
             self._settings = preferences.normalize_graph({**self._settings, **changes})
             if kind == 'options':
                 local = changes.get('local', _NO_PAYLOAD)
@@ -263,7 +251,6 @@ class GraphView(Gtk.Box):
                 if self._options_timer is not None:
                     GLib.source_remove(self._options_timer)
                 self._options_timer = GLib.timeout_add(80, self._options_changed)
-            self._sync_local_settings()
             preferences.set_graph(self._settings)
             self.emit('settings-changed', dict(self._settings))
         elif kind in ('search', 'create', 'context'):
@@ -273,11 +260,6 @@ class GraphView(Gtk.Box):
             self.set_tooltip_text(label if isinstance(label, str) else None)
         elif kind == 'error':
             self.emit('error', str(message.get('message', 'Graph error')))
-
-    def _sync_local_settings(self):
-        for legacy, current in (('localJumps', 'localDepth'), ('localBacklinks', 'localIncoming'),
-                                ('localForelinks', 'localOutgoing')):
-            self._settings[legacy] = self._settings[current]
 
     def _options_changed(self):
         self._options_timer = None
@@ -330,7 +312,6 @@ class GraphView(Gtk.Box):
             return
         self._local_path = self._node_id(path)
         self._settings = preferences.normalize_graph({**self._settings, 'localDepth': depth})
-        self._sync_local_settings()
         self.post('setLocal', dict(enabled=self._local_path is not None))
         self.post('setLocal', dict(path=self._local_path, depth=self._settings['localDepth'],
                                  incoming=self._settings['localIncoming'],
@@ -375,7 +356,7 @@ class GraphView(Gtk.Box):
                                show_attachments=settings['showAttachments'],
                                existing_only=settings['hideUnresolved'],
                                show_orphans=settings['showOrphans'], show_code=settings['showCode'],
-                               groups=settings['colorGroups'], reference_app_filters=True)
+                               groups=settings['colorGroups'], strict_filters=True)
 
         def work():
             data, error = None, None

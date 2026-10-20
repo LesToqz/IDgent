@@ -1,16 +1,16 @@
 /* IDgent graph view. Colours come from CSS variables set by graph.js from the theme roles. */
 :root {
-  --bg: #1e1e1e;
-  --text: #dadada;
-  --muted: #999999;
-  --accent: #8a5cf5;
-  --panel: #282828;
-  --border: #363636;
-  --hover: #333333;
-  --track: #4a4a4a;
-  --input: #232323;
+  --bg: #17212b;
+  --text: #e4edf5;
+  --muted: #a1b5c6;
+  --accent: #63b3ed;
+  --panel: #243340;
+  --border: #394f61;
+  --hover: #304656;
+  --track: #506779;
+  --input: #1b2935;
   --shadow: rgba(0, 0, 0, 0.35);
-  --font: ui-sans-serif, -apple-system, system-ui, "Segoe UI", Roboto, Inter, sans-serif;
+  --font: system-ui, sans-serif;
   --fade: 120ms;
   --collapse: 100ms;
   color-scheme: dark;

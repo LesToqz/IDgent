@@ -6,41 +6,106 @@
   'use strict';
 
   // ---------------------------------------------------------------- constants
+  // IDgent tuning, selected for readable project maps (docs/graph-spec.md).
   const C = {
-    alphaMin: 0.001,
-    alphaDecay: 1 - Math.pow(0.001, 1 / 300),   // 0.0227628
-    velocityDecay: 0.4,                          // velocities x0.6 after forces
-    theta: 0.9,
-    distanceMin2: 30,
-    collideRadius: 60,
-    collideStrength: 0.5,
-    reheat: 0.3,
+    alphaMin: 0.002,
+    alphaDecay: 1 - Math.pow(0.002, 1 / 240),
+    velocityDecay: 0.45,
+    theta: 0.65,
+    distanceMin2: 64,
+    collideRadius: 32,
+    collideStrength: 0.7,
+    reheat: 0.4,
     tickHz: 60,
-    minScale: 1 / 128,
-    maxScale: 8,
-    hoverDim: 0.2,
-    easeK: 0.1,          // per-frame (60 Hz) fraction toward the target for alpha/tint/label drop
-    zoomK: 0.15,         // per-frame zoom approach (s = .85 s + .15 target)
-    panFilter: 0.2,      // pan velocity filter while dragging (0.8 / 0.2)
-    panDecay: 0.9,       // inertia decay per 60 Hz frame
-    wheelBase: 1.5,
-    labelDrop: 15,
-    labelWrap: 300,
-    clickSlop2: 25,
+    minScale: 0.04,
+    maxScale: 6,
+    hoverDim: 0.28,
+    easeK: 0.16,
+    zoomK: 0.18,
+    panFilter: 0.25,
+    panDecay: 0.86,
+    wheelBase: Math.exp(120 / 480),
+    labelDrop: 12,
+    labelWrap: 224,
+    clickSlop2: 36,
   };
 
-  // Default settings (graph.json keys, spec J).
   const DEFAULTS = {
-    search: '', showTags: false, showAttachments: false, hideUnresolved: false,
-    showOrphans: true, showCode: true, showArrow: false, textFadeMultiplier: 0,
-    nodeSizeMultiplier: 1, lineSizeMultiplier: 1,
-    centerStrength: 0.518713248970312, repelStrength: 10, linkStrength: 1,
-    linkDistance: 250, colorGroups: [],
-    'collapse-filter': true, 'collapse-color-groups': true,
-    'collapse-display': true, 'collapse-forces': true,
-    scale: 1, localDepth: 1, localIncoming: true, localOutgoing: true,
-    reduceMotion: false, close: false,
-  };
+    "search": "",
+    "showTags": false,
+    "showAttachments": false,
+    "hideUnresolved": false,
+    "showOrphans": true,
+    "showCode": true,
+    "showArrow": true,
+    "textFadeMultiplier": 0.2,
+    "nodeSizeMultiplier": 1.15,
+    "lineSizeMultiplier": 1.25,
+    "centerStrength": 0.12,
+    "repelStrength": 6,
+    "linkStrength": 0.35,
+    "linkDistance": 160,
+    "colorGroups": [],
+    "collapse-filter": false,
+    "collapse-display": true,
+    "collapse-forces": true,
+    "collapse-color-groups": true,
+    "scale": 1,
+    "localDepth": 2,
+    "localIncoming": true,
+    "localOutgoing": true,
+    "close": false,
+    "reduceMotion": false
+};
+  const LIMITS = {
+    "textFadeMultiplier": [
+        -1,
+        2
+    ],
+    "nodeSizeMultiplier": [
+        0.5,
+        3
+    ],
+    "lineSizeMultiplier": [
+        0.5,
+        4
+    ],
+    "centerStrength": [
+        0,
+        0.6
+    ],
+    "repelStrength": [
+        0,
+        24
+    ],
+    "linkStrength": [
+        0,
+        1.5
+    ],
+    "linkDistance": [
+        48,
+        480
+    ],
+    "scale": [
+        0.04,
+        6
+    ],
+    "localDepth": [
+        1,
+        6
+    ]
+};
+  const STEPS = {
+    "textFadeMultiplier": 0.1,
+    "nodeSizeMultiplier": 0.05,
+    "lineSizeMultiplier": 0.25,
+    "centerStrength": 0.02,
+    "repelStrength": 0.5,
+    "linkStrength": 0.05,
+    "linkDistance": 8,
+    "scale": null,
+    "localDepth": 1
+};
   const DISPLAY_KEYS = ['showArrow', 'textFadeMultiplier', 'nodeSizeMultiplier', 'lineSizeMultiplier'];
   const FORCE_KEYS = ['centerStrength', 'repelStrength', 'linkStrength', 'linkDistance'];
   const FILTER_KEYS = ['showTags', 'showAttachments', 'hideUnresolved', 'showOrphans', 'showCode'];
@@ -48,33 +113,34 @@
   // ---------------------------------------------------------------- formulas
   const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 
-  /** Node size (spec D.2): clamp before the multiplier. */
+  /** Node size: clamp before the multiplier. */
   function nodeSize(weight, mult) {
-    return (mult == null ? 1 : mult) * Math.max(8, Math.min(3 * Math.sqrt(weight + 1), 30));
+    return (mult == null ? 1 : mult) * Math.min(24, 6 + 2 * Math.log2(1 + Math.max(0, weight)));
   }
   /** On-screen radius: size * sqrt(s). */
   function screenRadius(size, s) { return size * Math.sqrt(s); }
-  /** Label alpha (spec D.3). */
-  function textAlpha(s, tf) { return clamp(Math.log2(s) + 1 - (tf || 0), 0, 1); }
-  /** World line width (spec D.4) -> constant mult px on screen. */
+  /** Label alpha. */
+  function textAlpha(s, tf) { return clamp((s - 0.12) / 0.7 - (tf || 0) * 0.25, 0, 1); }
+  /** World line width -> constant mult px on screen. */
   function lineWorldWidth(mult, s) { return mult / s; }
-  /** Arrow alpha factor (spec D.5). */
-  function arrowFactor(s) { return clamp(2 * (s - 0.3), 0, 1); }
+  /** Arrow alpha factor. */
+  function arrowFactor(s) { return clamp((s - 0.18) / 0.62, 0, 1); }
   /** Arrow on-screen length/height in px. */
-  function arrowSize(mult) { return 8 * Math.sqrt(mult); }
-  /** Label font size in text units (spec F.3). */
-  function labelFont(size) { return 14 + size / 4; }
+  function arrowSize(mult) { return 6 * Math.sqrt(mult); }
+  /** Label font size in text units. */
+  function labelFont(size) { return 12 + size * 0.2; }
 
-  /** Exponential taper slider mapping (spec E.1). */
-  function F2(e, t) { if (t == null) t = 0.01; return (Math.pow(t, 1 - e) - t) / (1 - t); }
-  function R2(e, t) { if (t == null) t = 0.01; return 1 - Math.log(e * (1 - t) + t) / Math.log(t); }
+  /** Direct, bounded controls: no hidden taper or minimum repulsion. */
+  function boundedSetting(st, key) {
+    const [lo, hi] = LIMITS[key];
+    return clamp(num(st[key], DEFAULTS[key]), lo, hi);
+  }
   function forceParams(st) {
-    const r = Math.pow(num(st.repelStrength, DEFAULTS.repelStrength), 3);
     return {
-      center: F2(clamp(num(st.centerStrength, DEFAULTS.centerStrength), 0, 1), 0.01),
-      link: F2(clamp(num(st.linkStrength, DEFAULTS.linkStrength), 0, 1), 0.01),
-      distance: num(st.linkDistance, DEFAULTS.linkDistance),
-      repel: Math.abs(r) < 1 ? -1 : -r,
+      center: boundedSetting(st, 'centerStrength'),
+      link: boundedSetting(st, 'linkStrength'),
+      distance: boundedSetting(st, 'linkDistance'),
+      repel: -120 * boundedSetting(st, 'repelStrength'),
     };
   }
   function num(v, d) { return typeof v === 'number' && isFinite(v) ? v : d; }
@@ -86,22 +152,22 @@
     if (reduce) return target;
     return v + (target - v) * easeFactor(k, dt);
   }
-  /** Wheel delta -> zoom factor (spec G.3). */
+  /** Wheel delta -> zoom factor. */
   function wheelDelta(ev) {
     let dy = ev.deltaY || 0;
-    if (ev.deltaMode === 1) dy *= 40; else if (ev.deltaMode === 2) dy *= 800;
+    if (ev.deltaMode === 1) dy *= 24; else if (ev.deltaMode === 2) dy *= 640;
     // Trackpad pinch arrives as ctrl+wheel with small pixel deltas: make it as lively as a notch.
-    if (ev.ctrlKey && ev.deltaMode === 0 && Math.abs(dy) < 50) dy *= 3;
+    if (ev.ctrlKey && ev.deltaMode === 0 && Math.abs(dy) < 32) dy *= 2;
     return dy;
   }
-  function wheelFactor(dy) { return Math.pow(C.wheelBase, -dy / 120); }
+  function wheelFactor(dy) { return Math.exp(-dy / 480); }
   function clampScale(s) { return clamp(s, C.minScale, C.maxScale); }
   /** Keep the world point under `anchor` fixed when going from s0 to s1. */
   function zoomAround(pan, s0, s1, anchor) {
     return anchor - (anchor - pan) * (s1 / s0);
   }
-  function timelapseSpeed(total) { return clamp(0.5 * Math.sqrt(total), 5, 100); }
-  function localWeight(layer, depth) { return layer === 0 ? 30 : 30 - (30 / depth) * layer; }
+  function timelapseSpeed(total) { return clamp(total / 12, 8, 72); }
+  function localWeight(layer) { return 12 / (Math.max(0, layer) + 1); }
 
   // ---------------------------------------------------------------- colours
   function parseColor(c, fallback) {
@@ -141,30 +207,29 @@
     const f = (n) => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
     return { r: Math.round(f(0) * 255), g: Math.round(f(8) * 255), b: Math.round(f(4) * 255), a: 1 };
   }
-  /** New colour group default (spec C.1). */
+  /** New colour group default. */
   function newGroupColor(count, dark) {
-    const c = hslToRgb((40 * count) % 360, dark ? 70 : 60, 60);
-    return { a: 1, rgb: (c.r << 16) | (c.g << 8) | c.b };
+    const c = hslToRgb((210 + 137.5 * count) % 360, 65, dark ? 64 : 42);
+    return toHex(c);
   }
 
   const DARK_THEME = {
-    background: '#1e1e1e', node: '#b3b3b3', node_focused: '#a68af9', node_tag: '#44cf6e',
-    node_attachment: '#e0de71', node_unresolved: '#666666', node_code: '#6fb3f2',
-    line: '#3f3f3f', line_highlight: '#8a5cf5', text: '#dadada', text_muted: '#999999',
-    accent: '#8a5cf5', dark: true,
-    groups: ['#e5484d', '#f76b15', '#ffc53d', '#46a758', '#12a594', '#00a2c7',
-      '#3e63dd', '#8e4ec6', '#d6409f', '#ad7f58', '#8d8d8d', '#bdee63'],
-    font_ui: 'ui-sans-serif, -apple-system, system-ui, "Segoe UI", Roboto, Inter, sans-serif',
-    font_text: 'ui-sans-serif, system-ui, sans-serif',
+    background: '#17212b', node: '#adc2d4', node_focused: '#63b3ed', node_tag: '#70d6a0',
+    node_attachment: '#e7c66b', node_unresolved: '#7d8f9e', node_code: '#65d3df',
+    line: '#506779', line_highlight: '#63b3ed', text: '#e4edf5', text_muted: '#a1b5c6',
+    accent: '#63b3ed', dark: true,
+    groups: ['#63b3ed', '#ed9e63', '#70d6a0', '#c9a0ed', '#e7c66b', '#65d3df',
+      '#ed839d', '#a6cf72', '#a4a9f0', '#d5ad88', '#8abfbc', '#c4bead'],
+    font_ui: 'system-ui, sans-serif', font_text: 'system-ui, sans-serif',
   };
 
-  /** Resolve the renderer palette (spec C.2 roles) from a theme object. */
+  /** Resolve the renderer palette from a theme object. */
   function palette(theme) {
     const t = Object.assign({}, DARK_THEME, theme || {});
     const P = (k, d) => parseColor(t[k], parseColor(DARK_THEME[k] || d));
-    const unres = P('node_unresolved'); unres.a *= 0.5;
+    const unres = P('node_unresolved'); unres.a *= 0.65;
     const text = P('text');
-    const arrow = Object.assign({}, text, { a: text.a * 0.5 });
+    const arrow = Object.assign({}, text, { a: text.a * 0.7 });
     const accent = P('accent');
     return {
       background: P('background'), fill: P('node'), focused: P('node_focused'),
@@ -490,7 +555,7 @@
     const fwd = Array.from({ length: n }, () => []), rev = Array.from({ length: n }, () => []);
     for (const [s, t] of pairs) { fwd[s].push(t); rev[t].push(s); }
     const weight = new Float64Array(n);
-    for (let i = 0; i < n; i++) weight[i] = fwd[i].length + rev[i].length;   // spec A.4
+    for (let i = 0; i < n; i++) weight[i] = fwd[i].length + rev[i].length;
     // Draw list: one line per unordered pair (mutual pairs collapse), arrows for every direction.
     const lineSeen = new Set(), lines = [];
     for (const [s, t] of pairs) {
@@ -503,7 +568,7 @@
     return { nodes, pairs, fwd, rev, weight, lines, n };
   }
 
-  /** BFS layers from focus for the local graph weights (spec H.3). */
+  /** BFS layers from focus for the local graph weights. */
   function localLayers(model, focus, depth, incoming, outgoing) {
     const layer = new Int32Array(model.n).fill(-1);
     if (focus < 0 || focus >= model.n) return layer;
@@ -520,7 +585,7 @@
     return layer;
   }
 
-  /** Initial placement of new ids (spec G.8). existing: Map id -> [x, y]. */
+  /** Initial placement of new ids. existing: Map id -> [x, y]. */
   function placeNodes(model, existing, random) {
     const n = model.n, out = new Array(n);
     let existingR = 0, newCount = 0;
@@ -529,7 +594,7 @@
       if (p) { out[i] = p; existingR = Math.max(existingR, Math.hypot(p[0], p[1])); } else newCount++;
     }
     if (!newCount) return out;
-    const area = 3600 * newCount, jitter = Math.sqrt(area);
+    const area = 72 * 72 * newCount, jitter = 48;
     const outer = Math.sqrt(area / Math.PI + existingR * existingR);
     const disc = () => {
       const ang = 2 * Math.PI * random();
@@ -573,7 +638,7 @@
   }
 
   // ---------------------------------------------------------------- timelapse
-  /** Items in timelapse order (spec D.6): returns {order, total, subset(progression)}. */
+  /** Items in timelapse order: returns {order, total, subset(progression)}. */
   function timelapse(g, showOrphans) {
     const nodes = g.nodes || [], links = g.links || [];
     const idx = nodes.map((_, i) => i);
@@ -661,9 +726,9 @@
   }
 
   const api = {
-    C, DEFAULTS, DISPLAY_KEYS, FORCE_KEYS, FILTER_KEYS, DARK_THEME,
+    C, DEFAULTS, LIMITS, STEPS, DISPLAY_KEYS, FORCE_KEYS, FILTER_KEYS, DARK_THEME,
     clamp, nodeSize, screenRadius, textAlpha, lineWorldWidth, arrowFactor, arrowSize, labelFont,
-    F2, R2, forceParams, easeFactor, ease, wheelDelta, wheelFactor, clampScale, zoomAround,
+    boundedSetting, forceParams, easeFactor, ease, wheelDelta, wheelFactor, clampScale, zoomAround,
     timelapseSpeed, localWeight, parseColor, toHex, toCss, mix, hslToRgb, newGroupColor, palette,
     rng, QuadTree, Simulation, buildModel, localLayers, placeNodes, hitTest, timelapse, demo, now,
   };

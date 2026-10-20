@@ -1,14 +1,8 @@
 """Small, failure-tolerant JSON settings store, resolved at call time.
 
-Graph defaults, bounds and steps follow docs/reference_app-graph-params.json, section
-settings (spec section J). IDgent deviations: showCode defaults to True for source
-files; reduceMotion defaults to False for the host's accessibility override;
-localDepth/localIncoming/localOutgoing retain the brief's host names alongside
-Reference app's localJumps/localBacklinks/localForelinks, with identical defaults and
-bounds. These are independent settings, not synchronized aliases. Color groups
-use #rrggbb strings instead of Reference app's {a: 1, rgb: int}, and are capped at 12
-as required by the host bridge. Unknown keys are dropped. Numeric steps describe
-the controls; persisted numbers are clamped, with integer controls rounded.
+IDgent graph defaults and control ranges are defined in docs/graph-spec.md.
+Unknown graph keys are dropped; numeric values clamp to bounds, and only hop
+counts round to integers. Each normalization returns independent colour rules.
 """
 from __future__ import annotations
 
@@ -220,34 +214,51 @@ def reset_value(key: str) -> bool:
     return set_value(key, DEFAULTS[key])
 
 
-# Reference app's initial graph preferences; user-tuned graph.json values are not defaults.
-GRAPH_DEFAULTS = {
-    'search': '', 'showTags': False, 'showAttachments': False,
-    'hideUnresolved': False, 'showOrphans': True, 'showCode': True,
-    'showArrow': False, 'textFadeMultiplier': 0, 'nodeSizeMultiplier': 1,
-    'lineSizeMultiplier': 1, 'centerStrength': 0.518713248970312,
-    'repelStrength': 10, 'linkStrength': 1, 'linkDistance': 250,
-    'colorGroups': [], 'collapse-filter': True, 'collapse-display': True,
-    'collapse-forces': True, 'collapse-color-groups': True, 'scale': 1,
-    'localDepth': 1, 'localIncoming': True, 'localOutgoing': True,
-    'localJumps': 1, 'localBacklinks': True, 'localForelinks': True,
-    'localInterlinks': False, 'close': False, 'reduceMotion': False,
-}
-GRAPH_LIMITS = {
-    'textFadeMultiplier': (-3, 3), 'nodeSizeMultiplier': (0.1, 5),
-    'lineSizeMultiplier': (0.1, 5), 'centerStrength': (0, 1),
-    'repelStrength': (0, 20), 'linkStrength': (0, 1),
-    'linkDistance': (30, 500), 'scale': (1 / 128, 8),
-    'localDepth': (1, 5), 'localJumps': (1, 5),
-}
-# None means no slider step is specified (persisted zoom).
-GRAPH_STEPS = {
-    'textFadeMultiplier': 0.1, 'nodeSizeMultiplier': 'any',
-    'lineSizeMultiplier': 'any', 'centerStrength': 'any',
-    'repelStrength': 'any', 'linkStrength': 'any', 'linkDistance': 1,
-    'scale': None, 'localDepth': 1, 'localJumps': 1,
-}
-
+# IDgent project-exploration choices; see docs/graph-spec.md.
+GRAPH_DEFAULTS = {'search': '',
+ 'showTags': False,
+ 'showAttachments': False,
+ 'hideUnresolved': False,
+ 'showOrphans': True,
+ 'showCode': True,
+ 'showArrow': True,
+ 'textFadeMultiplier': 0.2,
+ 'nodeSizeMultiplier': 1.15,
+ 'lineSizeMultiplier': 1.25,
+ 'centerStrength': 0.12,
+ 'repelStrength': 6,
+ 'linkStrength': 0.35,
+ 'linkDistance': 160,
+ 'colorGroups': [],
+ 'collapse-filter': False,
+ 'collapse-display': True,
+ 'collapse-forces': True,
+ 'collapse-color-groups': True,
+ 'scale': 1,
+ 'localDepth': 2,
+ 'localIncoming': True,
+ 'localOutgoing': True,
+ 'close': False,
+ 'reduceMotion': False}
+GRAPH_LIMITS = {'textFadeMultiplier': (-1, 2),
+ 'nodeSizeMultiplier': (0.5, 3),
+ 'lineSizeMultiplier': (0.5, 4),
+ 'centerStrength': (0, 0.6),
+ 'repelStrength': (0, 24),
+ 'linkStrength': (0, 1.5),
+ 'linkDistance': (48, 480),
+ 'scale': (0.04, 6),
+ 'localDepth': (1, 6)}
+# Steps describe controls; saved values are not snapped to a slider grid.
+GRAPH_STEPS = {'textFadeMultiplier': 0.1,
+ 'nodeSizeMultiplier': 0.05,
+ 'lineSizeMultiplier': 0.25,
+ 'centerStrength': 0.02,
+ 'repelStrength': 0.5,
+ 'linkStrength': 0.05,
+ 'linkDistance': 8,
+ 'scale': None,
+ 'localDepth': 1}
 
 def normalize_graph(value: object) -> dict:
     """Return independent, JSON-safe graph preferences, dropping unknown keys."""
@@ -263,7 +274,7 @@ def normalize_graph(value: object) -> dict:
                 raw = default
             low, high = GRAPH_LIMITS[key]
             result[key] = max(low, min(high, raw))
-            if GRAPH_STEPS[key] == 1:
+            if key == 'localDepth':
                 result[key] = round(result[key])
         elif key == 'colorGroups':
             groups = []
