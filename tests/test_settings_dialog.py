@@ -206,6 +206,7 @@ class SettingsDialogTest(unittest.TestCase):
             self.dialog.controls[feature].clicked()
             self.assertEqual(changes[-1], (feature, False))
             self.assertTrue(all(not r.get_sensitive() for r in rows[1:]))
+            self.assertTrue(all(r.get_opacity() < 0.5 for r in rows[1:]))
             self.assertTrue(rows[0].get_sensitive())
             self.dialog.search(rows[1].name)
             self.assertTrue(rows[1].get_visible())
@@ -267,6 +268,14 @@ class SettingsDialogTest(unittest.TestCase):
         self.dialog.controls['terminal_shell'].set_text('/missing/idgent-shell')
         self.assertIn('not found', self.dialog.shell_hint.get_text())
         self.assertEqual(changes[-1], ('terminal_shell', '/missing/idgent-shell'))
+
+    def test_graph_edit_retains_preferences_changed_in_an_open_graph(self):
+        settings.set_graph({'linkDistance': 220, 'search': 'new query', 'future': 7})
+        self.dialog.controls['graph.showTags'].clicked()
+        self.assertEqual(settings.get_graph()['linkDistance'], 220)
+        self.assertEqual(settings.get_graph()['search'], 'new query')
+        self.assertEqual(settings.get_graph()['future'], 7)
+        self.assertTrue(settings.get_graph()['showTags'])
 
     def test_set_values_is_silent_and_validated(self):
         changes = self.changes()

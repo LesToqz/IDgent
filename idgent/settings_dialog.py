@@ -40,7 +40,7 @@ PAGES = (
     ('notes', 'Notes', 'text-x-generic-symbolic'),
     ('terminal', 'Terminal', 'utilities-terminal-symbolic'),
     ('graph', 'Graph view', 'view-grid-symbolic'),
-    ('gitgraph', 'Git graph', 'git-symbolic'),
+    ('gitgraph', 'Git graph', 'view-list-symbolic'),
     ('hotkeys', 'Hotkeys', 'input-keyboard-symbolic'),
     ('about', 'About', 'help-about-symbolic'),
 )
@@ -188,6 +188,7 @@ class SettingsDialog(Gtk.Window):
         self._theme_id = None
         self._values: dict[str, object] = {}
         self._graph = settings.get_graph()
+        self._saved_graph = copy.deepcopy(self._graph)
         self._feature_pages = {}
         self._setters = {}
         self._searching = False
@@ -492,7 +493,9 @@ class SettingsDialog(Gtk.Window):
             for _, card in self._groups[page_id]:
                 for row in card.rows:
                     if row.key != feature:
-                        row.set_sensitive(self._values.get(feature, True))
+                        enabled = self._values.get(feature, True)
+                        row.set_sensitive(enabled)
+                        row.set_opacity(1 if enabled else 0.48)
 
     def _spin(self, key, name, description, step=1, aliases=()):
         spin = Gtk.SpinButton.new_with_range(*settings.LIMITS[key], step)
@@ -826,11 +829,13 @@ class SettingsDialog(Gtk.Window):
         if self._updating:
             return
         # Read current persisted preferences so edits retain graph-panel changes.
-        graph = settings.normalize_graph({**settings.get_graph(), **self._graph, key: value})
+        pending = {k: v for k, v in self._graph.items() if v != self._saved_graph.get(k)}
+        graph = settings.normalize_graph({**settings.get_graph(), **pending, key: value})
         if graph == self._graph:
             return
         self.set_values({'graph': graph})
         settings.set_graph(graph)
+        self._saved_graph = copy.deepcopy(graph)
         self.emit('setting-changed', 'graph', copy.deepcopy(graph))
 
     def _changed(self, key, value):
