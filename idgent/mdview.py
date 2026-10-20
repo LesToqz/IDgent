@@ -119,10 +119,10 @@ def parse_blocks(text: str):
     At most CHUNK characters are accumulated per paragraph/code block. Tables
     are emitted one row at a time so painting can yield between rows.
     """
-    lines = text.replace('\r\n', '\n').expandtabs(4).split('\n')
+    lines = text.replace('\r\n', '\n').split('\n')
     i, count = 0, len(lines)
     while i < count:
-        quote, line = _quote(lines[i])
+        quote, line = _quote(lines[i].expandtabs(4))
         if not line.strip():
             i += 1
             continue
@@ -270,6 +270,7 @@ class MarkdownView:
         self.tags, self.links = {}, []
         self._widgets = []
         self._wide_widgets = []
+        self._code_controls = []
         self._feedback = set()
         self._idle = 0
         self._work = None
@@ -279,6 +280,14 @@ class MarkdownView:
         self.view.get_style_context().add_provider(self.provider, Gtk.STYLE_PROVIDER_PRIORITY_USER + 1)
         self.view.connect('button-release-event', self._release)
         self.view.connect('destroy', lambda *_: self.destroy())
+        self._frame_clock = None
+        self._frame_handler = 0
+        self.view.connect('realize', self._connect_frame)
+        self.view.connect('unrealize', self._disconnect_frame)
+        self._scroll_handlers = []
+        self.view.connect('notify::vadjustment', self._bind_scroll)
+        self.view.connect('notify::hadjustment', self._bind_scroll)
+        self._bind_scroll()
 
     def set_readable_width(self, enabled: bool) -> None:
         self.readable_width = bool(enabled)
@@ -298,7 +307,8 @@ class MarkdownView:
         for widget, quote, inset in self._wide_widgets:
             self._size_widget(widget, quote, inset)
         if 'codeblock' in self.tags:
-            self.tags['codeblock'].set_property('right-margin', max(48, margin))
+            self.tags['codeblock'].set_property('right-margin', margin + 36)
+        self._position_tools()
 
     def tag(self, name, **properties):
         tag = self.tags.get(name)
@@ -340,7 +350,7 @@ textview, textview text {{background-color:{bg}; color:{fg}; font-family:sans-se
         self.tag('strike', strikethrough=True)
         self.tag('code', family='monospace', background=chrome['current_line_bg'], foreground=color('string'))
         self.tag('codeblock', family='monospace', paragraph_background=chrome['current_line_bg'],
-                 foreground=fg, right_margin=max(48, self.view.get_right_margin()), pixels_above_lines=5, pixels_below_lines=5)
+                 foreground=fg, right_margin=self.view.get_right_margin() + 36, pixels_above_lines=5, pixels_below_lines=5)
         self.tag('table', pixels_above_lines=0, pixels_below_lines=0)
         self.tag('link', foreground=color('link'), underline=p.Underline.SINGLE)
         self.tag('image', foreground=chrome['gutter_fg'])
@@ -364,6 +374,10 @@ textview, textview text {{background-color:{bg}; color:{fg}; font-family:sans-se
     def destroy(self):
         self.cancel()
         self._clear_widgets()
+        for adjustment, handler in self._scroll_handlers:
+            adjustment.disconnect(handler)
+        self._scroll_handlers.clear()
+        self._disconnect_frame()
         self.destroyed = True
 
     def render(self, text, done=None):
@@ -399,9 +413,8 @@ textview, textview text {{background-color:{bg}; color:{fg}; font-family:sans-se
                 if not block.continuation:
                     code_parts = []
                     yield self._code_tools(code_parts, block), base, None
-                    yield '\n', base + ('codeblock',), None
                 code_parts.append(block.text)
-                yield block.text, base + ('codeblock',), None
+                yield block.text or '\n', base + ('codeblock',), None
                 if block.language and highlight.AVAILABLE:
                     # Bounded snippets avoid pathological long-line lexing in Pygments.
                     try:
@@ -440,6 +453,50 @@ textview, textview text {{background-color:{bg}; color:{fg}; font-family:sans-se
             widget.destroy()
         self._widgets.clear()
         self._wide_widgets.clear()
+        for _widget, mark in self._code_controls:
+            self.buffer.delete_mark(mark)
+        self._code_controls.clear()
+
+    def _connect_frame(self, *_):
+        # Text layout and scroll coordinates settle during painting. The frame
+        # signal needs no cairo bridge, and only runs when GTK paints a frame.
+        self._frame_clock = self.view.get_frame_clock()
+        self._frame_handler = self._frame_clock.connect('after-paint', self._position_tools)
+
+    def _disconnect_frame(self, *_):
+        if self._frame_handler:
+            self._frame_clock.disconnect(self._frame_handler)
+            self._frame_handler = 0
+        self._frame_clock = None
+
+    def _bind_scroll(self, *_):
+        for adjustment, handler in self._scroll_handlers:
+            adjustment.disconnect(handler)
+        self._scroll_handlers = []
+        for adjustment in (self.view.get_vadjustment(), self.view.get_hadjustment()):
+            if adjustment is not None:
+                handler = adjustment.connect('value-changed', self._position_tools)
+                self._scroll_handlers.append((adjustment, handler))
+
+    def _position_tools(self, *_):
+        if not self.view.get_realized():
+            return
+        for widget, mark in self._code_controls:
+            rect = self.view.get_iter_location(self.buffer.get_iter_at_mark(mark))
+            _x, y = self.view.buffer_to_window_coords(self.Gtk.TextWindowType.WIDGET, rect.x, rect.y)
+            width = widget.get_preferred_width()[1]
+            height = widget.get_preferred_height()[1]
+            visible = -height < y < self.view.get_allocated_height()
+            if widget.get_visible() != visible:
+                widget.set_visible(visible)
+            if not visible:
+                continue
+            x = self.view.get_allocated_width() - self.view.get_right_margin() - width
+            position = max(0, x), y
+            allocation = widget.get_allocation()
+            if (allocation.x, allocation.y) != position:
+                self.view.move_child(widget, *position)
+                widget.queue_resize()
 
     def _style_widget(self, widget, *classes):
         context = widget.get_style_context()
@@ -501,9 +558,13 @@ textview, textview text {{background-color:{bg}; color:{fg}; font-family:sans-se
         self._style_widget(button)
         box.pack_end(button, False, False, 0)
         button.connect('clicked', lambda *_: self._copy_code(button, parts))
-        return self._wide_widget(box, block, 16)
+        return box
 
     def _copy_code(self, button, parts):
+        previous = getattr(button, '_md_feedback', 0)
+        if previous in self._feedback:
+            self.GLib.source_remove(previous)
+            self._feedback.discard(previous)
         self.Gtk.Clipboard.get(self.Gdk.SELECTION_CLIPBOARD).set_text(''.join(parts), -1)
         button.set_image(mode_icon('copied'))
         button.set_tooltip_text('Copied!')
@@ -520,6 +581,7 @@ textview, textview text {{background-color:{bg}; color:{fg}; font-family:sans-se
 
         source = self.GLib.timeout_add(1200, reset)
         self._feedback.add(source)
+        button._md_feedback = source
 
     def _step(self):
         deadline = time.perf_counter() + .008
@@ -527,8 +589,13 @@ textview, textview text {{background-color:{bg}; color:{fg}; font-family:sans-se
             while time.perf_counter() < deadline:
                 value, tags, link = next(self._work)
                 if isinstance(value, self.Gtk.Widget):
-                    anchor = self.buffer.create_child_anchor(self.buffer.get_end_iter())
-                    self.view.add_child_at_anchor(value, anchor)
+                    if isinstance(value, self.Gtk.Box):
+                        mark = self.buffer.create_mark(None, self.buffer.get_end_iter(), True)
+                        self._code_controls.append((value, mark))
+                        self.view.add_child_in_window(value, self.Gtk.TextWindowType.WIDGET, 0, 0)
+                    else:
+                        anchor = self.buffer.create_child_anchor(self.buffer.get_end_iter())
+                        self.view.add_child_at_anchor(value, anchor)
                     self._widgets.append(value)
                     value.show_all()
                     continue
@@ -545,9 +612,11 @@ textview, textview text {{background-color:{bg}; color:{fg}; font-family:sans-se
         except StopIteration:
             self._idle, self._work = 0, None
             done, self._done = self._done, None
+            self._position_tools()
             if done:
                 done()
             return False
+        self._position_tools()
         return True
 
     def activate_link(self, target):

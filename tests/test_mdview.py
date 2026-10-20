@@ -194,12 +194,12 @@ class RendererTest(unittest.TestCase):
 
     def test_each_fence_has_copy_button_including_empty_and_chunked_code(self):
         large = 'x' * (mdview.CHUNK * 3) + '\n'
-        self.render('```sh\nprintf "<&>"\n```\n~~~\n' + large + '~~~\n```\n```')
+        self.render('```sh\n\tprintf "<&>"\n```\n~~~\n' + large + '~~~\n```\n```')
         tools = [w for w in self.preview._widgets if isinstance(w, Gtk.Box)]
         self.assertEqual(len(tools), 3)
         from gi.repository import Gdk
         clipboard = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
-        for box, expected in zip(tools, ('printf "<&>"\n', large, '')):
+        for box, expected in zip(tools, ('\tprintf "<&>"\n', large, '')):
             button = box.get_children()[0]
             self.assertIsInstance(button.get_image(), Gtk.Image)
             self.assertEqual(button.get_accessible().get_name(), 'Copy code')
@@ -207,6 +207,33 @@ class RendererTest(unittest.TestCase):
             self.assertEqual(clipboard.wait_for_text() or '', expected)
             self.assertEqual(button.get_tooltip_text(), 'Copied!')
         drain(lambda: all(b.get_children()[0].get_tooltip_text() == 'Copy code' for b in tools))
+
+    def test_copy_controls_follow_code_when_scrolling_and_resizing(self):
+        window = Gtk.Window()
+        self.addCleanup(window.destroy)
+        window.set_default_size(900, 400)
+        scroll = Gtk.ScrolledWindow()
+        scroll.add(self.preview.view)
+        window.add(scroll)
+        self.preview.set_readable_width(True)
+        window.show_all()
+        self.render('paragraph\n\n' * 20 + '```sh\necho hi\n```\n' + 'after\n\n' * 40)
+        control, mark = self.preview._code_controls[0]
+
+        def positioned():
+            rect = self.preview.view.get_iter_location(self.preview.buffer.get_iter_at_mark(mark))
+            _, y = self.preview.view.buffer_to_window_coords(Gtk.TextWindowType.WIDGET, rect.x, rect.y)
+            allocation = control.get_allocation()
+            return (allocation.y == y and allocation.x + allocation.width ==
+                    self.preview.view.get_allocated_width() - self.preview.view.get_right_margin())
+
+        drain(lambda: not control.get_visible() and scroll.get_vadjustment().get_upper() > 1500)
+        self.preview.view.get_vadjustment().set_value(550)
+        drain(lambda: positioned() and 0 < control.get_allocation().y < 200)
+        window.resize(550, 400)
+        drain(lambda: positioned() and self.preview.view.get_allocated_width() < 600)
+        self.preview.view.get_vadjustment().set_value(0)
+        drain(lambda: not control.get_visible())
 
     def test_tasks_are_readonly_checkbox_widgets_and_rerender_cleans_up(self):
         self.render('- [ ] **todo**\n  - [x] done\n- [X] also done\n- ordinary')
