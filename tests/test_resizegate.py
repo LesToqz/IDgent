@@ -12,6 +12,7 @@ import tempfile
 import time
 import unittest
 import warnings
+from unittest.mock import patch
 
 os.environ["GDK_BACKEND"] = "x11"
 
@@ -308,6 +309,41 @@ class ResizeGateTest(unittest.TestCase):
         self.assertTrue(poll(lambda: self.child.get_allocated_width() == 260, 1))
         self.assertGreaterEqual(time.monotonic() - started, .04)
         self.assertEqual(self.gate._answers, [])
+
+    def test_answer_in_flight_extends_release_once(self):
+        source = self.hold(pace_ms=60)
+        # The program wrote to its PTY; VTE has not parsed the bytes yet.
+        self.gate._written.add(source)
+        allocate(self.gate, 260, 130)
+        started = time.monotonic()
+        self.assertTrue(poll(lambda: self.child.get_allocated_width() == 260, 1))
+        self.assertGreaterEqual(time.monotonic() - started, .1)
+        self.assertEqual(self.gate._answers, [])
+
+    def test_pty_terminal_ignores_contents_change_before_output(self):
+        source = self.hold()
+        # A watch still pending means the program has written nothing yet:
+        # this contents change is VTE's own, for the resize.
+        self.gate._watches[source] = GLib.timeout_add(100000, lambda: GLib.SOURCE_CONTINUE)
+        allocate(self.gate, 260, 130)
+        source.feed(b"vte resize")
+        spin(100)
+        self.assertEqual(self.child.get_allocated_width(), 200)
+        self.assertTrue(self.gate._answers)
+        GLib.source_remove(self.gate._watches.pop(source))
+        self.gate._written.add(source)
+        source.feed(b"redrawn")
+        self.assertTrue(poll(lambda: self.child.get_allocated_width() == 260, 1))
+
+    def test_commit_when_answered_waits_then_commits(self):
+        source = self.hold()
+        with patch.object(self.gate, "commit", wraps=self.gate.commit) as commit:
+            self.gate.commit_when_answered()
+            self.assertEqual(commit.call_count, 0)
+            source.feed(b"redrawn")
+            self.assertTrue(poll(lambda: commit.call_count == 1, 1))
+        self.assertEqual(self.gate._answers, [])
+        self.assertFalse(self.gate._commit_requested)
 
     def test_identical_allocation_while_waiting_keeps_committed_geometry(self):
         self.hold()
