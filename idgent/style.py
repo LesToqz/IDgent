@@ -30,6 +30,7 @@ TOKENS = {
     "geometry": {"button_content": 22, "entry_content": 20,
                  "border": 1, "focus_ring": 2, "scrollbar_thumb": 6,
                  "scrollbar_margin": 2, "scrollbar_length": 34,
+                 "terminal_scrollbar_margin": 1,
                  "separator": 1, "separator_hit_padding": 3},
     "type": {"control": 14, "menu": 13, "tooltip": 12},
     "opacity": {"hover": 0.09, "disabled": 0.48,
@@ -100,6 +101,10 @@ scrollbar slider {{ background: alpha({ui['overlay']}, {opacity['scrollbar']}); 
     padding: 0; margin: {geometry['scrollbar_margin']}px; }}
 scrollbar.vertical slider {{ min-height: {geometry['scrollbar_length']}px; }}
 scrollbar.horizontal slider {{ min-width: {geometry['scrollbar_length']}px; }}
+/* The terminal reserves an eight-pixel lane even without scrollback. */
+.idgent-terminal scrollbar.vertical slider {{
+    margin-left: {geometry['terminal_scrollbar_margin']}px;
+    margin-right: {geometry['terminal_scrollbar_margin']}px; }}
 scrollbar slider:hover, scrollbar slider:active {{ background: alpha({ui['overlay']}, {opacity['scrollbar_hover']}); }}
 scrollbar button {{ min-width: 0; min-height: 0; padding: 0; border: 0;
     margin: 0; box-shadow: none; background: transparent; -gtk-icon-source: none; }}

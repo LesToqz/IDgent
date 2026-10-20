@@ -161,8 +161,8 @@ with patch.object(Gtk.Widget, '__init__', forbidden), \
      patch.object(GLib, 'timeout_add', forbidden), \
      patch.object(GLib, 'idle_add', forbidden):
     from idgent import motion
-assert 0.7 < motion.EASINGS['ease'](0.5) < 0.9
-    assert motion.duration_ms('fast') == 140
+    assert 0.7 < motion.EASINGS['ease'](0.5) < 0.9
+    assert motion.duration_ms('fast') == 128
     assert motion.lerp_color('#000', '#fff', 1) == 'rgba(255, 255, 255, 1)'
     assert 'idgent.settings' not in sys.modules
     motion.set_reduce_motion(True)

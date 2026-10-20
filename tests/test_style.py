@@ -274,7 +274,7 @@ class StyleTest(unittest.TestCase):
                                      and '200' in (terminal.get_text_format(Vte.Format.TEXT)
                                                    or '').splitlines()))
             self.assertGreater(adjustment.get_upper(), adjustment.get_page_size())
-            self.assertEqual(scrollbar.get_allocated_width(), 10)
+            self.assertEqual(scrollbar.get_allocated_width(), 8)
             width = terminal.get_allocated_width()
             self.assertEqual(width, initial_width)
             adjustment.set_value(adjustment.get_lower())

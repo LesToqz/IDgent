@@ -397,9 +397,11 @@ class NoticeToastTest(ThemedTest):
         self.assertEqual(self.toast.get_text(), LIMIT_TEXT)
 
     def test_timings_follow_the_spec(self):
-        self.assertEqual((LimitToast.SHOW_MS, LimitToast.ENTER_MS, LimitToast.FADE_MS), (4000, 100, 120))
+        self.assertEqual((LimitToast.SHOW_MS, LimitToast.ENTER_MS, LimitToast.FADE_MS),
+                         (motion.DURATIONS["notice_hold"], motion.DURATIONS["travel"],
+                          motion.DURATIONS["state"]))
         interval, _callback = self.popup_with_fake_clock()
-        self.assertEqual(interval, 4000)
+        self.assertEqual(interval, motion.DURATIONS["notice_hold"])
 
     def test_slides_in_then_fades_out_and_hides(self):
         interval, expire = self.popup_with_fake_clock()
@@ -436,7 +438,7 @@ class NoticeToastTest(ThemedTest):
         pump(0.05)
         self.toast.popup()
         self.assertTrue(poll(lambda: self.toast.get_opacity() == 1.0, 1))
-        pump(0.2)
+        pump(motion.DURATIONS["travel"] / 1000)
         self.assertTrue(self.toast.get_visible())
         self.assertEqual(self.toast.get_margin_top(), 36)
 

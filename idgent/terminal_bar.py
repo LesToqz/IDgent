@@ -93,7 +93,7 @@ class _IconButton(Gtk.Button):
         return False
 
     def set_hover(self, target: float) -> motion.Tween:
-        """Fade the glyph towards hovered (1) or resting (0) over 140 ms."""
+        """Fade the glyph towards hovered (1) or resting (0) using IDgent state timing."""
         start = self._hover
 
         def update(t):
@@ -103,7 +103,7 @@ class _IconButton(Gtk.Button):
             if child is not None:
                 child.set_opacity(self.glyph_opacity)
 
-        return motion.animate(self, "clickable_icon_opacity", update, easing="ease_in_out",
+        return motion.animate(self, "state", update, easing="ease_in_out",
                               key=_GLYPH_KEY)
 
     def set_icon(self, icon_name: str, glyph: str) -> None:
