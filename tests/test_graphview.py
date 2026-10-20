@@ -27,7 +27,7 @@ from idgent.themes import THEMES, _contrast
 FAKE_PAGE = '''<!doctype html><meta charset="utf-8"><body><script>
 window.calls=[];
 window.IDGraph={};
-for (const name of ['setData','setTheme','setSettings','setActive','focus','pause','resume','setLocal']) {
+for (const name of ['setData','setTheme','setSettings','setActive','focus','pause','resume','setLocal','setGraphType']) {
  IDGraph[name] = (...args) => { calls.push([name,...args]); };
 }
 window.send = (obj) => webkit.messageHandlers.idgent.postMessage(obj);
@@ -228,6 +228,47 @@ class GraphViewTest(unittest.TestCase):
         self.assertTrue(poll(lambda: view.last_data['stats']['focus'] == 'b.md'))
         view.show_local(None, 1)
         self.assertTrue(poll(lambda: len(view.last_data['nodes']) == 4))
+
+    def test_graph_types_select_the_right_nodes(self):
+        for path, text in {'a.md': '[[b]]', 'b.md': '', 'orphan.md': '',
+                           '.IDgent/Notes/n1.md': '[[n2]] [[a]]',
+                           '.IDgent/Notes/n2.md': ''}.items():
+            Path(self.root.name, path).parent.mkdir(parents=True, exist_ok=True)
+            Path(self.root.name, path).write_text(text)
+        view = self.make_view()
+        self.ready()
+        ids = lambda: {n['id'] for n in view.last_data['nodes']}
+        self.assertEqual(view.graph_type, 'global')
+        self.assertEqual(len(ids()), 5)
+        # Local without an active file: empty graph and a message.
+        view.set_graph_type('local')
+        self.assertTrue(poll(lambda: view.last_data['nodes'] == []))
+        self.assertIn(['setGraphType', {'type': 'local', 'message': 'Open a file to see its local graph'}],
+                      self.js('calls'))
+        view.set_active_file(Path(self.root.name, 'a.md'))
+        view.show_local(Path(self.root.name, 'a.md'), 1)
+        self.assertTrue(poll(lambda: ids() == {'a.md', 'b.md', '.IDgent/Notes/n1.md'}))
+        view.set_active_file(Path(self.root.name, 'orphan.md'))
+        self.assertTrue(poll(lambda: ids() == {'orphan.md'}))
+        view.set_graph_type('note')
+        self.assertTrue(poll(lambda: ids() == {'.IDgent/Notes/n1.md', '.IDgent/Notes/n2.md'}))
+        self.assertEqual(len(view.last_data['links']), 1)
+        view.set_active_file(Path(self.root.name, 'a.md'))
+        self.assertTrue(poll(lambda: view.graph_type == 'note'))
+        view.set_graph_type('bogus')
+        self.assertEqual(view.graph_type, 'note')
+        self.send({'type': 'graphType', 'value': 'global'})
+        self.assertTrue(poll(lambda: len(ids()) == 5))
+        self.assertEqual(view.graph_type, 'global')
+
+    def test_note_graph_without_notes_folder_is_empty(self):
+        Path(self.root.name, 'a.md').write_text('')
+        view = self.make_view()
+        self.ready()
+        view.set_graph_type('note')
+        self.assertTrue(poll(lambda: view.last_data['nodes'] == []))
+        self.assertTrue(poll(lambda: any(c[0] == 'setGraphType' and c[1]['type'] == 'note'
+                                         and 'No notes' in c[1]['message'] for c in self.js('calls'))))
 
     def test_local_options_persist_depth_and_direction_and_cancel_timer(self):
         for path, text in {'a.md': '[[b]]', 'b.md': '[[c]]', 'c.md': ''}.items():

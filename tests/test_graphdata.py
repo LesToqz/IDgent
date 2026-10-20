@@ -118,6 +118,25 @@ class GraphTests(unittest.TestCase):
         self.assertEqual(graph.stats['focus'], 'A.md')
         self.assertEqual(self.index.local('missing.md').nodes, [])
 
+    def test_folder_keeps_only_files_below_prefix(self):
+        self.write('.IDgent/Notes/a.md', '[[b]] [[outside]] #tag')
+        self.write('.IDgent/Notes/b.md', '')
+        self.write('outside.md', '[[a]]')
+        self.index.scan()
+        graph = self.index.folder('.IDgent/Notes')
+        self.assertEqual(self.ids(graph), {'.IDgent/Notes/a.md', '.IDgent/Notes/b.md'})
+        self.assertEqual([(l.source, l.target) for l in graph.links],
+                         [('.IDgent/Notes/a.md', '.IDgent/Notes/b.md')])
+        self.assertEqual(len(self.index.build().nodes), 4)
+        self.assertEqual(self.index.folder('missing').nodes, [])
+
+    def test_empty_graph(self):
+        self.write('a.md')
+        self.index.scan()
+        graph = self.index.empty()
+        self.assertEqual((graph.nodes, graph.links), ([], []))
+        self.assertEqual(graph.to_json()['nodes'], [])
+
     def test_incremental_and_buffers(self):
         file = self.write('A.md', '[[B]]')
         self.index.scan()
