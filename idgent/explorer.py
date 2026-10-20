@@ -340,7 +340,7 @@ class ExplorerPanel(Gtk.Box):
         path = self._selected_note()
         if path:
             self.set_show_hidden(True)
-            self.set_current_file(path)
+            self._reveal_path(path)
             self.tree.grab_focus()
 
     def _notes_menu(self, event=None) -> bool:
@@ -615,6 +615,9 @@ class ExplorerPanel(Gtk.Box):
             self._select_note(os.path.abspath(path))
         else:
             self.notes_tree.get_selection().unselect_all()
+        self._reveal_path(path)
+
+    def _reveal_path(self, path: str | None) -> None:
         if not path:
             self.tree.get_selection().unselect_all()
             return
@@ -952,8 +955,8 @@ def build_css(ui: dict[str, str]) -> str:
 .idgent-explorer-header button:checked {{ background: alpha({ui['overlay']}, 0.12); color: {ui['foreground']}; }}
 .idgent-explorer-header button label {{ font-size: 12px; font-weight: 600; }}
 .idgent-explorer.idgent-explorer-compact treeview.view {{ -GtkTreeView-vertical-separator: 0; }}
-.idgent-notes-split > separator {{ min-height: 6px; min-width: 0; background: {ui['sidebar_bg']}; }}
-.idgent-notes-split > separator:hover, .idgent-notes-split > separator:active {{ background: {ui['border_focus']}; }}
+.idgent-notes-split.vertical > separator {{ min-height: 6px; min-width: 0; border: 0; background: {ui['sidebar_bg']}; }}
+.idgent-notes-split > separator:hover, .idgent-notes-split > separator:active {{ background: {ui['accent']}; }}
 .idgent-explorer-header button image {{ opacity: 0.85; }}
 .idgent-explorer-header button:hover {{ background: alpha({ui['overlay']}, 0.067); color: {ui['foreground']}; }}
 .idgent-explorer-header button:hover image {{ opacity: 1; }}
