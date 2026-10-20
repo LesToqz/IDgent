@@ -1,9 +1,7 @@
 """Pure timing/colour checks and real GTK3 frame-clock integration under X11."""
 from __future__ import annotations
 
-import json
 import os
-from pathlib import Path
 import subprocess
 import sys
 import time
@@ -65,51 +63,39 @@ class EasingTest(unittest.TestCase):
         self.assertGreater(max(EASINGS["jumpy"](i / 100) for i in range(101)), 1)
         self.assertLess(EASINGS["jumpy"](0.1), 0)
 
-    def test_measured_control_points(self):
-        points = {
-            "smooth": (0.45, 0.05, 0.55, 0.95),
-            "delay": (0.65, 0.05, 0.36, 1),
-            "jumpy": (0.68, -0.55, 0.27, 1.55),
-            "swing": (0, 0.55, 0.45, 1),
-            "collapse": (0.02, 0.01, 0.47, 1),
-            "reflow": (0.2, 0, 0, 1),
-            "slide_out": (0.33, 1, 0.68, 1),
-            "sheet": (0.36, 0.66, 0.04, 1),
-            "backdrop": (0.5, 0, 0.75, 0),
-            "loading_icon": (0.22, 1, 0.36, 1),
+    def test_idgent_control_points(self):
+        from idgent.motion import _EASING_POINTS
+        expected = {
+            "smooth": (0.24, 0.08, 0.28, 1.0),
+            "arrive": (0.18, 0.66, 0.26, 1.0),
+            "depart": (0.48, 0.0, 0.82, 0.42),
+            "balanced": (0.38, 0.0, 0.62, 1.0),
+            "jumpy": (0.32, -0.18, 0.42, 1.16),
         }
-        # Sample the parametric cubic directly, independently of the x solver.
-        for name, (x1, y1, x2, y2) in points.items():
-            for s in (0.1, 0.25, 0.5, 0.75, 0.9):
-                with self.subTest(easing=name, parameter=s):
-                    x = 3 * (1 - s) ** 2 * s * x1 + 3 * (1 - s) * s ** 2 * x2 + s ** 3
-                    y = 3 * (1 - s) ** 2 * s * y1 + 3 * (1 - s) * s ** 2 * y2 + s ** 3
-                    self.assertAlmostEqual(EASINGS[name](x), y, delta=1e-7)
+        for name, controls in expected.items():
+            self.assertEqual(_EASING_POINTS[name], controls)
+            x1, y1, x2, y2 = controls
+            for s in (0.125, 0.375, 0.625, 0.875):
+                x = 3 * (1 - s) ** 2 * s * x1 + 3 * (1 - s) * s ** 2 * x2 + s ** 3
+                y = 3 * (1 - s) ** 2 * s * y1 + 3 * (1 - s) * s ** 2 * y2 + s ** 3
+                self.assertAlmostEqual(EASINGS[name](x), y, places=6)
 
-    def test_swing_midpoint_matches_measurement(self):
-        self.assertAlmostEqual(EASINGS["swing"](0.5), 0.865128251929, delta=1e-9)
+    def test_balanced_curve_is_symmetric(self):
+        self.assertAlmostEqual(EASINGS["balanced"](0.5), 0.5)
+        for t in (0.1, 0.3, 0.7):
+            self.assertAlmostEqual(EASINGS["balanced"](t), 1 - EASINGS["balanced"](1 - t))
 
-    def test_all_json_motion_tokens_resolve(self):
-        path = Path(__file__).resolve().parents[1] / "docs" / "reference_app-tokens.json"
-        motion = json.loads(path.read_text())["motion"]
-        for name, value in motion["duration"].items():
-            with self.subTest(duration=name):
-                self.assertEqual(duration_ms(name.replace("-", "_")), value)
-        for name, value in motion["easing"].items():
-            with self.subTest(easing=name):
-                ease = EASINGS[name.replace("-", "_")]
-                controls = ((0, 0, 1, 1) if value == "linear" else
-                            tuple(map(float, value.removeprefix("cubic-bezier(").removesuffix(")").split(","))))
-                x1, y1, x2, y2 = controls
-                for s in (0.2, 0.5, 0.8):
-                    x = 3 * (1 - s) ** 2 * s * x1 + 3 * (1 - s) * s ** 2 * x2 + s ** 3
-                    y = 3 * (1 - s) ** 2 * s * y1 + 3 * (1 - s) * s ** 2 * y2 + s ** 3
-                    self.assertAlmostEqual(ease(x), y, delta=1e-7)
+    def test_idgent_motion_scale(self):
+        expected = {"instant": 0, "feedback": 96, "state": 128, "travel": 224, "settle": 352, "pause": 640}
+        for name, duration in expected.items():
+            self.assertEqual(duration_ms(name), duration)
+        self.assertLess(DURATIONS["feedback"], DURATIONS["state"])
+        self.assertLess(DURATIONS["state"], DURATIONS["travel"])
+        self.assertLess(DURATIONS["travel"], DURATIONS["settle"])
 
-    def test_css_ease_known_values(self):
-        for t, expected in ((0.1, 0.0947963), (0.25, 0.4085106),
-                            (0.5, 0.8024034), (0.75, 0.9604591)):
-            self.assertAlmostEqual(EASINGS["ease"](t), expected, delta=1e-3)
+    def test_default_curve_finishes_most_travel_before_half_time(self):
+        self.assertGreater(EASINGS["smooth"](0.5), 0.7)
+        self.assertLess(EASINGS["smooth"](0.5), 0.9)
 
     def test_flat_derivatives_use_bisection(self):
         # x(s)=s^3, y(s)=3s^2-2s^3 has a flat derivative near the origin.
@@ -128,10 +114,7 @@ class EasingTest(unittest.TestCase):
             EASINGS["smooth"](float("nan"))
 
     def test_duration_tokens_and_numbers(self):
-        for name, expected in {"none": 0, "superfast": 70, "fast": 140,
-                               "moderate": 300, "slow": 560, "collapse": 100,
-                               "toggle": 150, "notice_in": 100, "notice_out": 120,
-                               "reflow": 300, "resize_handle": 200}.items():
+        for name, expected in {'none': 0, 'superfast': 96, 'fast': 128, 'moderate': 224, 'slow': 352, 'collapse': 128, 'toggle': 128, 'notice_in': 224, 'notice_out': 128, 'reflow': 224, 'resize_handle': 128}.items():
             self.assertEqual(duration_ms(name), expected)
         for name, expected in DURATIONS.items():
             self.assertEqual(duration_ms(name), expected)

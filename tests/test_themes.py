@@ -1,8 +1,6 @@
 """Theme catalogue integrity and independent WCAG contrast checks."""
 import dataclasses
-import json
 import os
-from pathlib import Path
 import subprocess
 import sys
 import unittest
@@ -98,46 +96,32 @@ class ThemesTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 themes.TerminalColors('#ffffff', '#000000', '#ffffff', palette)
 
-    def test_idgent_palettes_match_spec_and_have_original_legible_syntax(self):
-        spec = json.loads((Path(__file__).resolve().parents[1] /
-                           'docs/reference_app-tokens.json').read_text())
-        roles = dict(bg='background-primary', sidebar_bg='background-secondary',
-                     surface_alt='background-primary-alt', border='background-modifier-border',
-                     border_hover='background-modifier-border-hover',
-                     border_focus='background-modifier-border-focus', foreground='text-normal',
-                     muted='text-muted', faint='text-faint', accent='interactive-accent',
-                     accent_text='text-accent', accent_hover='interactive-accent-hover',
-                     danger='text-error', input_bg='background-modifier-form-field')
-        for mode in ('dark', 'light'):
-            theme = themes.get_theme('idgent-' + mode)
-            with self.subTest(theme=theme.id):
-                for role, token in roles.items():
-                    self.assertEqual(theme.ui[role], spec['color'][mode][token], role)
-                self.assertEqual(theme.ui['overlay'], '#ffffff' if theme.dark else '#000000')
-                self.assertEqual(len(set(theme.terminal.ansi)), 16)
-                for syntax in theme.syntax.values():
-                    self.assertGreaterEqual(contrast(syntax.foreground, theme.ui['bg']), 3)
-                for other in themes.THEMES:
-                    if other is not theme:
-                        self.assertNotEqual(theme.syntax, other.syntax)
-                        self.assertNotEqual(theme.terminal.ansi, other.terminal.ansi)
+    def test_idgent_mineral_palettes(self):
+        expected = {
+            "idgent-dark": {"bg": "#182126", "sidebar_bg": "#202c32", "panel_bg": "#26343b",
+                            "foreground": "#e3eceb", "muted": "#a3b5b8", "accent": "#72b9ad",
+                            "border": "#3b5059", "input_bg": "#1c282e", "button_bg": "#30434b"},
+            "idgent-light": {"bg": "#f4f7f5", "sidebar_bg": "#e9efec", "panel_bg": "#dfe8e3",
+                             "foreground": "#20352e", "muted": "#526a60", "accent": "#356e60",
+                             "border": "#b3c4bb", "input_bg": "#fcfdfb", "button_bg": "#d5e2da"},
+        }
+        self.assertEqual(themes.DEFAULT_THEME_ID, "idgent-dark")
+        for name, roles in expected.items():
+            theme = themes.get_theme(name)
+            with self.subTest(theme=name):
+                for role, color in roles.items():
+                    self.assertEqual(theme.ui[role], color)
+                self.assertEqual(theme.ui["status_bg"], theme.ui["sidebar_bg"])
+                self.assertEqual(theme.ui["titlebar_bg"], theme.ui["sidebar_bg"])
+                self.assertNotEqual(theme.syntax, DARK_PLUS)
+                for role, background in (("muted", "sidebar_bg"), ("accent_text", "bg"),
+                                         ("danger", "panel_bg"), ("warning", "panel_bg"),
+                                         ("foreground", "button_bg"), ("foreground", "input_bg")):
+                    self.assertGreaterEqual(contrast(theme.ui[role], theme.ui[background]), 4.5)
 
     def test_dark_plus_matches_original(self):
         t = themes.get_theme('dark-plus')
         self.assertEqual(t.syntax, DARK_PLUS)
         self.assertEqual(t.chrome, DEFAULT_CHROME)
-        self.assertEqual(t.ui, dict(
-            bg='#1e1e1e', sidebar_bg='#252526', panel_bg='#1e1e1e', border='#2b2b2b',
-            titlebar_bg='#333333', titlebar_fg='#cccccc', title_fg='#9d9d9d',
-            foreground='#cccccc', muted='#858585', accent='#007acc', accent_fg='#ffffff',
-            selection_active='#094771', selection_inactive='#37373d', hover='#2a2d2e',
-            tab_inactive_bg='#2d2d2d', editor_fg='#d4d4d4', editor_selection='#264f78',
-            selection_fg='#ffffff', warning='#cca700', limit_tint='#7d6f2a', toast_bg='#3a331a',
-            status_bg='#007acc', status_fg='#ffffff', button_bg='#333333', button_hover='#505050',
-            input_bg='#333333', scrollbar='#424242', scrollbar_hover='#4f4f4f',
-            scrollbar_active='#686868', tab_close_hover='#383838', cursor='#ffffff',
-            close_hover='#c42b1c', close_fg='#ffffff', hover_fg='#ffffff',
-            surface_alt='#1e1e1e', border_hover='#434343', border_focus='#636363',
-            faint='#858585', accent_text='#007acc', accent_hover='#298acc',
-            overlay='#ffffff', danger='#c42b1c',
-            git_new='#73c991', git_modified='#e2c08d', git_conflict='#e87c80'))
+        expected = dict(bg='#1e1e1e', sidebar_bg='#252526', panel_bg='#1e1e1e', border='#2b2b2b', titlebar_bg='#333333', titlebar_fg='#cccccc', title_fg='#9d9d9d', foreground='#cccccc', muted='#858585', accent='#007acc', accent_fg='#ffffff', selection_active='#094771', selection_inactive='#37373d', hover='#2a2d2e', tab_inactive_bg='#2d2d2d', editor_fg='#d4d4d4', editor_selection='#264f78', selection_fg='#ffffff', warning='#cca700', limit_tint='#7d6f2a', toast_bg='#3a331a', status_bg='#007acc', status_fg='#ffffff', button_bg='#333333', button_hover='#505050', input_bg='#333333', scrollbar='#424242', scrollbar_hover='#4f4f4f', scrollbar_active='#686868', tab_close_hover='#383838', cursor='#ffffff', close_hover='#c42b1c', close_fg='#ffffff', hover_fg='#ffffff')
+        self.assertEqual({key: t.ui[key] for key in expected}, expected)

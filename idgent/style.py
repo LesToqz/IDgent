@@ -1,5 +1,7 @@
-"""Theme-driven GTK CSS, with one shared provider for all application widgets."""
+'IDgent GTK styling with application-owned design tokens.'
 import dataclasses
+
+from idgent.motion import DURATIONS
 
 import gi
 
@@ -18,199 +20,106 @@ from idgent.settings_dialog import build_css as build_settings_css
 from idgent.search import build_css as build_search_css
 
 
-# Concrete values from docs/reference_app-tokens.json; no file IO at runtime.
 # Spacing/radii are pixels, durations milliseconds, easings GTK CSS strings.
+# IDgent geometry is based on a compact three-pixel spacing rhythm.
 TOKENS = {
-    'spacing': {
-        'size-2-1': 2,
-        'size-2-2': 4,
-        'size-2-3': 6,
-        'size-4-1': 4,
-        'size-4-2': 8,
-        'size-4-3': 12,
-        'size-4-4': 16,
-        'size-4-5': 20,
-        'size-4-6': 24,
-        'size-4-8': 32,
-        'size-4-9': 36,
-        'size-4-10': 40,
-        'size-4-12': 48,
-        'size-4-16': 64,
-        'size-4-18': 72,
-    },
-    'radius': {
-        's': 4,
-        'm': 8,
-        'l': 12,
-        'xl': 24,
-        'input': 5,
-        'button': 5,
-        'checkbox': 4,
-        'clickable-icon': 4,
-        'nav-item': 8,
-        'menu': 8,
-        'menu-item': 4,
-        'modal': 12,
-        'prompt': 12,
-        'popover': 8,
-        'tooltip': 12,
-        'notice': 8,
-        'setting-items-card': 12,
-        'tab-inner': 4,
-        'tab-active-top': '10px 10px 0 0',
-        'status-bar': '8px 0 0 0',
-        'status-bar-item': 4,
-        'toggle': 18,
-        'hotkey-chip': '2em (pill)',
-        'scrollbar': 12,
-        'suggestion-item': 4,
-    },
-    'durations': {
-        'none': 0,
-        'superfast': 70,
-        'fast': 140,
-        'moderate': 300,
-        'slow': 560,
-        'js-tween-default': 100,
-        'tree-expand-collapse': 100,
-        'chevron-rotate': 100,
-        'toggle-thumb-slide': 150,
-        'toggle-thumb-press-grow': 100,
-        'toggle-thumb-press-delay': 50,
-        'toggle-track': 150,
-        'slider-thumb': 100,
-        'input-hover-border': 140,
-        'clickable-icon-opacity': 140,
-        'settings-row-navigable': 150,
-        'resize-handle-color': 200,
-        'drop-overlay': 100,
-        'tab-strip-padding': 75,
-        'tab-close-reflow': 300,
-        'notice-enter': 100,
-        'notice-exit': 120,
-        'notice-autohide': 4000,
-        'notice-hover-grace': 1000,
-        'tooltip-delay': 1000,
-        'tooltip-warm-window': 100,
-        'submenu-open-delay': 250,
-        'flash-highlight': 250,
-        'ribbon-collapsed-bg': 250,
-        'ribbon-collapsed-bg-delay': 95,
-        'workspace-padding': 100,
-        'page-slide-mobile': 150,
-        'sheet-mobile-min': 100,
-        'sheet-mobile-max': 250,
-        'window-geometry-save-debounce': 100,
-        'modal-open-desktop': 0,
-        'modal-close-desktop': 0,
-        'menu-open-desktop': 0,
-        'tooltip-fade': 0,
-        'spinner-rotation': 1000,
-    },
-    'easings': {
-        'smooth': 'cubic-bezier(0.45, 0.05, 0.55, 0.95)',
-        'delay': 'cubic-bezier(0.65, 0.05, 0.36, 1)',
-        'jumpy': 'cubic-bezier(0.68, -0.55, 0.27, 1.55)',
-        'swing': 'cubic-bezier(0, 0.55, 0.45, 1)',
-        'ease-in-out': 'cubic-bezier(0.42, 0, 0.58, 1)',
-        'ease-out': 'cubic-bezier(0, 0, 0.58, 1)',
-        'ease-in': 'cubic-bezier(0.42, 0, 1, 1)',
-        'ease': 'cubic-bezier(0.25, 0.1, 0.25, 1)',
-        'linear': 'linear',
-        'collapse': 'cubic-bezier(0.02, 0.01, 0.47, 1)',
-        'reflow': 'cubic-bezier(0.2, 0, 0, 1)',
-        'slide-out': 'cubic-bezier(0.33, 1, 0.68, 1)',
-        'sheet-dismiss': 'cubic-bezier(0.36, 0.66, 0.04, 1)',
-        'backdrop-fade-in': 'cubic-bezier(0.5, 0, 0.75, 0)',
-        'loading-icon': 'cubic-bezier(0.22, 1, 0.36, 1)',
-    },
+    "spacing": {"tight": 3, "compact": 6, "control": 9,
+                "section": 15, "panel": 21, "canvas": 33},
+    "radius": {"button": 7, "input": 7, "menu": 11,
+               "item": 5, "tooltip": 6, "scrollbar": 4},
+    "geometry": {"button_content": 22, "entry_content": 20,
+                 "border": 1, "focus_ring": 2, "scrollbar_thumb": 6,
+                 "scrollbar_margin": 2, "scrollbar_length": 34,
+                 "separator": 1, "separator_hit_padding": 3},
+    "type": {"control": 14, "menu": 13, "tooltip": 12},
+    "opacity": {"hover": 0.09, "disabled": 0.48,
+                "selection_dark": 0.26, "selection_light": 0.19,
+                "scrollbar": 0.21, "scrollbar_hover": 0.36},
+    "durations": {"input_border": DURATIONS["state"],
+                  "resize_handle": DURATIONS["state"]},
+    "easings": {"state": "cubic-bezier(0.24, 0.08, 0.28, 1)"},
+    "shadows": {"dark": "0 5px 17px alpha(#11191d, 0.38)",
+                "light": "0 5px 17px alpha(#11191d, 0.16)"},
 }
 
 
 def build_css(theme: Theme) -> str:
-    """Render all chrome rules from a complete theme."""
+    """Compose the IDgent controls with each existing component stylesheet."""
     ui = theme.ui
-    radius = TOKENS['radius']
-    duration = TOKENS['durations']
-    easing = TOKENS['easings']['ease-in-out']
-    selection_alpha = .33 if theme.dark else .2
-    if theme.dark:
-        input_shadow = ('inset 0 0.5px 0.5px 0.5px alpha(#ffffff, 0.09), '
-                        '0 2px 4px alpha(#000000, 0.15), 0 1px 1.5px alpha(#000000, 0.1), '
-                        '0 1px 2px alpha(#000000, 0.2)')
-        popup_shadow = ('0 1px 2px alpha(#000000, 0.121), '
-                        '0 3.4px 6.7px alpha(#000000, 0.179), 0 15px 30px alpha(#000000, 0.3)')
-    else:
-        input_shadow = ('inset 0 0 0 1px alpha(#000000, 0.12), '
-                        '0 1px 2px alpha(#000000, 0.065)')
-        popup_shadow = ('0 1px 2px alpha(#000000, 0.028), '
-                        '0 3.4px 6.7px alpha(#000000, 0.042), 0 15px 30px alpha(#000000, 0.07)')
-    return f'''
+    radius, space = TOKENS["radius"], TOKENS["spacing"]
+    geometry, font = TOKENS["geometry"], TOKENS["type"]
+    opacity, duration = TOKENS["opacity"], TOKENS["durations"]
+    easing = TOKENS["easings"]["state"]
+    selection_alpha = opacity["selection_dark" if theme.dark else "selection_light"]
+    popup_shadow = TOKENS["shadows"]["dark" if theme.dark else "light"]
+    return f"""
 window, dialog, messagedialog {{ background-color: {ui['bg']}; color: {ui['foreground']}; }}
 .background {{ background-color: {ui['bg']}; color: {ui['foreground']}; }}
-/* GTK min-height is the content box: 22 + 2*4 padding = 30 pixels. */
 button, combobox button {{ background: {ui['button_bg']}; color: {ui['foreground']};
-    border: 0; border-radius: {radius['button']}px; box-shadow: {input_shadow};
-    text-shadow: none; font-size: 13px; min-height: 22px; padding: 4px 12px; }}
-button:hover, button:active, button:checked {{ background: alpha({ui['overlay']}, 0.067); }}
+    border: 0; border-radius: {radius['button']}px; box-shadow: none;
+    text-shadow: none; font-size: {font['control']}px;
+    min-height: {geometry['button_content']}px; padding: {space['compact']}px {space['control']}px; }}
+button:hover, button:active, button:checked {{ background: alpha({ui['overlay']}, {opacity['hover']}); }}
 button:disabled, entry:disabled, menuitem:disabled {{ color: {ui['faint']}; }}
-combobox:disabled {{ opacity: 0.5; }}
-combobox arrow {{ color: {ui['muted']}; min-width: 13px; min-height: 13px; }}
+combobox:disabled {{ opacity: {opacity['disabled']}; }}
+combobox arrow {{ color: {ui['muted']}; min-width: {space['control']}px; min-height: {space['compact']}px; }}
 button, menuitem, row, notebook > header.top > tabs > tab, treeview.view,
 scrollbar, scrollbar slider, menu, popover, tooltip {{ transition: none; }}
 *:focus {{ outline-color: {ui['border_focus']}; outline-style: solid;
-    outline-width: 2px; outline-offset: -2px; -gtk-outline-radius: {radius['input']}px; }}
-button:focus, combobox button:focus {{ outline-width: 3px; outline-offset: 0; }}
+    outline-width: {geometry['focus_ring']}px; outline-offset: -{geometry['border']}px;
+    -gtk-outline-radius: {radius['input']}px; }}
+button:focus, combobox button:focus {{ outline-width: {geometry['focus_ring']}px; outline-offset: 0; }}
 entry {{ background: {ui['input_bg']}; color: {ui['foreground']}; caret-color: {ui['foreground']};
-    border: 1px solid {ui['border']}; border-radius: {radius['input']}px;
-    box-shadow: none; text-shadow: none; font-size: 13px; min-height: 20px; padding: 4px 8px;
-    transition: border-color {duration['input-hover-border']}ms {easing},
-                box-shadow {duration['input-hover-border']}ms {easing}; }}
+    border: {geometry['border']}px solid {ui['border']}; border-radius: {radius['input']}px;
+    box-shadow: none; text-shadow: none; font-size: {font['control']}px;
+    min-height: {geometry['entry_content']}px; padding: {space['compact']}px {space['control']}px;
+    transition: border-color {duration['input_border']}ms {easing},
+                box-shadow {duration['input_border']}ms {easing}; }}
 entry:hover {{ border-color: {ui['border_hover']}; }}
-entry:focus {{ border-color: {ui['border_focus']}; box-shadow: 0 0 0 2px {ui['border_focus']}; }}
+entry:focus {{ border-color: {ui['border_focus']};
+    box-shadow: 0 0 0 {geometry['focus_ring']}px {ui['border_focus']}; }}
 entry selection, textview text selection {{ background: alpha({ui['accent']}, {selection_alpha});
     color: {ui['foreground']}; }}
 menu, popover {{ background: {ui['sidebar_bg']}; color: {ui['foreground']};
-    border: 1px solid {ui['border_hover']}; border-radius: {radius['menu']}px;
-    padding: 6px; box-shadow: {popup_shadow}; }}
+    border: {geometry['border']}px solid {ui['border_hover']}; border-radius: {radius['menu']}px;
+    padding: {space['compact']}px; box-shadow: {popup_shadow}; }}
 popover {{ background: {ui['bg']}; }}
-menuitem, popover modelbutton {{ padding: 4px 8px; border-radius: {radius['menu-item']}px;
-    font-size: 13px; }}
+menuitem, popover modelbutton {{ padding: {space['compact']}px {space['control']}px;
+    border-radius: {radius['item']}px; font-size: {font['menu']}px; }}
 menuitem:hover, menuitem:selected, popover modelbutton:hover, popover modelbutton:selected,
-row:hover, row:selected {{ background: alpha({ui['overlay']}, 0.067); color: {ui['foreground']}; }}
-menu separator {{ background: {ui['border']}; min-height: 1px; margin: 6px 0; }}
+row:hover, row:selected {{ background: alpha({ui['overlay']}, {opacity['hover']}); color: {ui['foreground']}; }}
+menu separator {{ background: {ui['border']}; min-height: {geometry['border']}px; margin: {space['tight']}px 0; }}
 menuitem.destructive-action {{ color: {ui['danger']}; }}
 {build_explorer_css(ui)}
 {build_editor_css(ui)}
 scrollbar, scrollbar trough {{ background: transparent; border: 0;
     box-shadow: none; padding: 0; margin: 0; min-width: 0; min-height: 0; }}
-scrollbar slider {{ background: alpha({ui['overlay']}, 0.10); border: 0;
+scrollbar slider {{ background: alpha({ui['overlay']}, {opacity['scrollbar']}); border: 0;
     border-radius: {radius['scrollbar']}px; box-shadow: none;
-    min-width: 6px; min-height: 6px; padding: 0; margin: 1px; }}
-scrollbar.vertical slider {{ min-height: 45px; }}
-scrollbar.horizontal slider {{ min-width: 45px; }}
-scrollbar slider:hover, scrollbar slider:active {{ background: alpha({ui['overlay']}, 0.20); }}
+    min-width: {geometry['scrollbar_thumb']}px; min-height: {geometry['scrollbar_thumb']}px;
+    padding: 0; margin: {geometry['scrollbar_margin']}px; }}
+scrollbar.vertical slider {{ min-height: {geometry['scrollbar_length']}px; }}
+scrollbar.horizontal slider {{ min-width: {geometry['scrollbar_length']}px; }}
+scrollbar slider:hover, scrollbar slider:active {{ background: alpha({ui['overlay']}, {opacity['scrollbar_hover']}); }}
 scrollbar button {{ min-width: 0; min-height: 0; padding: 0; border: 0;
     margin: 0; box-shadow: none; background: transparent; -gtk-icon-source: none; }}
 paned > separator {{ background-color: {ui['border']}; background-image: none;
-    -gtk-icon-source: none; min-width: 1px; min-height: 1px;
+    -gtk-icon-source: none; min-width: {geometry['separator']}px; min-height: {geometry['separator']}px;
     border: 0; padding: 0; margin: 0;
-    transition: background-color {duration['resize-handle-color']}ms {easing}; }}
+    transition: background-color {duration['resize_handle']}ms {easing}; }}
 paned > separator:hover, paned > separator:active {{ background-color: {ui['accent']}; }}
-paned.horizontal > separator {{ border-left: 2px solid transparent; border-right: 2px solid transparent;
-    background-clip: padding-box; }}
-paned.vertical > separator {{ border-top: 2px solid transparent; border-bottom: 2px solid transparent;
-    background-clip: padding-box; }}
+paned.horizontal > separator {{ border-left: {geometry['separator_hit_padding']}px solid transparent;
+    border-right: {geometry['separator_hit_padding']}px solid transparent; background-clip: padding-box; }}
+paned.vertical > separator {{ border-top: {geometry['separator_hit_padding']}px solid transparent;
+    border-bottom: {geometry['separator_hit_padding']}px solid transparent; background-clip: padding-box; }}
 {build_terminal_bar_css(ui)}
-
-tooltip, tooltip.background {{ background: alpha(#000000, 0.9); color: #fafafa;
-    border: 0; border-radius: {radius['tooltip']}px; padding: 8px 12px;
-    font-size: 13px; box-shadow: {popup_shadow}; }}
-tooltip label {{ color: #fafafa; }}
-dialog .dialog-action-area, messagedialog .dialog-action-area {{ padding: 8px; }}
+tooltip, tooltip.background {{ background: {ui['panel_bg']}; color: {ui['foreground']};
+    border: 0; border-radius: {radius['tooltip']}px; padding: {space['compact']}px {space['control']}px;
+    font-size: {font['tooltip']}px; box-shadow: {popup_shadow}; }}
+tooltip label {{ color: {ui['foreground']}; }}
+dialog .dialog-action-area, messagedialog .dialog-action-area {{ padding: {space['section']}px; }}
 .idgent-resize-gate {{ background: {ui['panel_bg']}; }}
-''' + (build_titlebar_css(ui) + build_settings_css(ui) + build_search_css(ui)
-       # Prompts and notices override base entry/row/focus rules: keep them last.
+""" + (build_titlebar_css(ui) + build_settings_css(ui) + build_search_css(ui)
        + build_palette_css(ui) + build_overlay_css(ui))
 
 
