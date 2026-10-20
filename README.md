@@ -29,7 +29,7 @@ bash packaging/install.sh --uninstall
 
 ## Layout and editing
 
-IDgent follows the look and feel of the Reference app note app: flat neutral surfaces,
+IDgent uses flat neutral surfaces,
 one accent colour, rounded tabs, instant hover/selection feedback and motion only
 where something moves (sliding toggles, notices, terminal panes).
 
@@ -114,7 +114,7 @@ screenshots and performance measurements in `.ceo/`.
 Current limitations: group drag-reorder, the local **Neighbor links** toggle,
 touch pinch and hover page-preview popovers are not implemented. Search supports
 the index's query subset (text, quoted terms, AND/OR, negation, regex and
-path/file/content/tag fields), rather than every Reference app search operator.
+path/file/content/tag fields).
 
 ## Git graph
 
@@ -311,7 +311,7 @@ shells; new tabs and terminals inherit the theme. The selection is saved in the
 settings file described above. Fresh installs, and missing, invalid or unreadable
 settings, use **IDgent Dark**; a theme you saved before is kept.
 
-- **IDgent Dark** — Reference app-like neutral greys with a purple accent; the default.
+- **IDgent Dark** — neutral greys with a purple accent; the default.
 - **IDgent Light** — the light counterpart: white and soft grey with a purple accent.
 - **Dark+** — charcoal with familiar blue and purple syntax accents.
 - **Light+** — white editor with blue and purple accents.
@@ -377,7 +377,7 @@ GDK_BACKEND=x11 xvfb-run -a python3 -m unittest discover -s tests
 ```
 
 No GtkSourceView, persisted window geometry/layout/session, or Wayland-specific testing.
-GTK 3 CSS limits the Reference app look: no tree indent guides, no concave curves under
+GTK 3 CSS limits IDgent's appearance: no tree indent guides, no concave curves under
 the active tab, and menus/tooltips are separate windows whose rounded corners and
 shadows depend on the compositor. Ctrl+P inside the explorer tree opens the Quick
 Switcher instead of GTK's emacs-style "move up".

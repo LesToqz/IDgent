@@ -21,7 +21,7 @@ GLYPH_OPACITY = 0.85
 def build_titlebar_css(ui: dict[str, str]) -> str:
     """Build the titlebar rules from the same roles as the application theme.
 
-    Reference app-style chrome: a 39 px strip plus a 1 px divider on the secondary
+    IDgent window chrome: a 39 px strip plus a 1 px divider on the secondary
     background, 40 px flat window controls, and clickable-icon hovers (radius 4,
     translucent overlay) for the menus and the settings cog. Hovers are instant;
     only the cog glyph opacity fades (driven by ``motion``, see ``TitleBar``).

@@ -1,4 +1,4 @@
-"""Reusable Reference app-style controls for settings-like screens (GTK3, no cairo).
+"""Reusable IDgent controls for settings-like screens (GTK3, no cairo).
 
 ``build_css(ui)`` styles every widget in this module from hex theme roles.
 ``settings_dialog.build_css`` composes it, so ``style.build_css`` (which already
@@ -95,7 +95,7 @@ button.idgent-swatch:focus {{ outline-width: 2px; outline-offset: 1px;
 
 
 class Toggle(Gtk.ToggleButton):
-    """Reference app's settings switch; set ``active`` or listen to ``toggled``."""
+    """IDgent settings switch; set ``active`` or listen to ``toggled``."""
 
     def __init__(self, active: bool = False, label: str | None = None):
         super().__init__()

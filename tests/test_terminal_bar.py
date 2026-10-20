@@ -244,7 +244,7 @@ class ChromeCssTest(unittest.TestCase):
 
 
 class HeaderChromeTest(ThemedTest):
-    """Pane header and clickable icons styled like Reference app's sidebar tab strips."""
+    """Pane header and clickable icons in the sidebar tab strips."""
 
     def setUp(self):
         super().setUp()
@@ -354,7 +354,7 @@ class HeaderChromeTest(ThemedTest):
 
 
 class NoticeToastTest(ThemedTest):
-    """The limit toast as an Reference app notice: style, motion and 4 s auto-hide."""
+    """The limit toast notice: style, motion and 4 s auto-hide."""
 
     def setUp(self):
         super().setUp()

@@ -21,7 +21,7 @@ prefix matches, exact names and exact case; penalties for extra fragments,
 the gap between the first and last match, a late first match and long
 candidates. Ties keep source order. Ranges are half-open ``(start, end)``.
 
-GTK half: ``Prompt`` (a self-contained Reference app-like prompt box, placed by
+GTK half: ``Prompt`` (a self-contained IDgent prompt box, placed by
 ``idgent.overlay.OverlayHost``), ``QuickSwitcher`` and ``CommandPalette``.
 Component CSS comes from ``build_css(ui)``.
 """
@@ -431,7 +431,7 @@ class _ResultRow(Gtk.ListBoxRow):
 
 
 class Prompt(Gtk.EventBox):
-    """Reference app-style prompt: input row, result list and instructions footer.
+    """IDgent prompt: input row, result list and instructions footer.
 
     ``provider(query) -> list[PromptItem]`` is called on every edit (coalesced
     into one idle per main-loop turn, so the typed character paints first)

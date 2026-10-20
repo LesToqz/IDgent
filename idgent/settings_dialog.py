@@ -1,4 +1,4 @@
-"""Reference app-style settings window (spec 4.15/5.3); the owner applies changes.
+"""IDgent settings window (spec 4.15/5.3); the owner applies changes.
 
 A transient, non-modal ``Gtk.Window``: navigation pane on the left (search,
 "Options" pages), a ``Gtk.Stack`` of scrolled pages on the right with a

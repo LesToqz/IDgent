@@ -5,7 +5,7 @@ Queries remove non-matching files/tags; unresolved targets are unfiltered. No GU
 from __future__ import annotations
 
 from collections import Counter, defaultdict, deque
-from dataclasses import InitVar, asdict, dataclass, field
+from dataclasses import asdict, dataclass, field
 from functools import lru_cache
 import os
 import posixpath as pp
@@ -54,11 +54,6 @@ class GraphOptions:
     groups: list[dict] = field(default_factory=list)
     # Strict UI searches test each file/tag; data clients can retain neighbours.
     strict_filters: bool = False
-    reference_app_filters: InitVar[bool | None] = None  # Compatibility keyword for existing callers.
-
-    def __post_init__(self, legacy_filters):
-        if legacy_filters is not None:
-            self.strict_filters = bool(legacy_filters)
 
 
 @dataclass
