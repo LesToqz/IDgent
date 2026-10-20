@@ -8,14 +8,18 @@ hide the window so it can be reused; Escape first clears a search.
 Signals: ``theme-selected(str)`` and ``font-size-changed(str, int)`` for the
 existing keys (not persisted here; the owner saves them), and
 ``setting-changed(str, object)`` for every other key in
-``settings.NEW_KEYS`` (validated and persisted here before emission).
+``settings.NEW_KEYS`` and the full ``graph`` dictionary (validated and
+persisted here before emission).
 Programmatic setters (``set_theme_id``, ``set_sizes``, ``set_values``,
 ``set_hotkeys``) never emit. ``build_css(ui)`` also contains
 ``widgets.build_css(ui)``; ``style.build_css`` installs both.
 """
 from __future__ import annotations
 
+import copy
 import importlib.metadata
+import os
+import shutil
 from pathlib import Path
 
 import gi
@@ -33,8 +37,11 @@ from idgent.widgets import (CenteredColumn, HotkeyChip, NavList, SearchField, Se
 PAGES = (
     ('appearance', 'Appearance', 'preferences-desktop-appearance-symbolic'),
     ('editor', 'Editor', 'accessories-text-editor-symbolic'),
-    ('files', 'Files', 'folder-symbolic'),
+    ('files', 'File explorer', 'folder-symbolic'),
+    ('notes', 'Notes', 'text-x-generic-symbolic'),
     ('terminal', 'Terminal', 'utilities-terminal-symbolic'),
+    ('graph', 'Graph view', 'view-grid-symbolic'),
+    ('gitgraph', 'Git graph', 'view-list-symbolic'),
     ('hotkeys', 'Hotkeys', 'input-keyboard-symbolic'),
     ('about', 'About', 'help-about-symbolic'),
 )
@@ -84,7 +91,7 @@ FONT_ROWS = {
     'editor_font_size': ('Editor text size',
                          'Default size of file content, in points. Ctrl+0 returns to it.', 'editor'),
     'explorer_font_size': ('Explorer text size', 'Size of file names in the explorer, in points.',
-                           'appearance'),
+                           'files'),
 }
 LICENSE_NOTE = ('IDgent runs on GTK 3, VTE and PyGObject (LGPL-2.1-or-later libraries). '
                 'Icons come from your system icon theme and the interface uses your system '
@@ -181,6 +188,9 @@ class SettingsDialog(Gtk.Window):
         self._updating = True
         self._theme_id = None
         self._values: dict[str, object] = {}
+        self._graph = settings.get_graph()
+        self._saved_graph = copy.deepcopy(self._graph)
+        self._feature_pages = {}
         self._setters = {}
         self._searching = False
         self._narrow = False
@@ -206,7 +216,8 @@ class SettingsDialog(Gtk.Window):
         self.stack.set_hexpand(True)
         root.pack_start(self.stack, True, True, 0)
         builders = dict(appearance=self._build_appearance, editor=self._build_editor,
-                        files=self._build_files, terminal=self._build_terminal,
+                        files=self._build_files, notes=self._build_notes, terminal=self._build_terminal,
+                        graph=self._build_graph, gitgraph=self._build_gitgraph,
                         hotkeys=self._build_hotkeys, about=self._build_about)
         for page_id, title, icon in PAGES:
             self.nav_list.add_page(page_id, title, icon)
@@ -350,14 +361,14 @@ class SettingsDialog(Gtk.Window):
     def _toggle(self, key, name, description, aliases=()):
         toggle = Toggle(label=name)
         toggle.connect('toggled', lambda t: self._changed(key, t.get_active()))
-        return self._row(key, name, description, toggle, toggle.set_active, aliases)
+        return self._row(key, name, description, toggle, toggle.set_active, aliases, reset=True)
 
     def _dropdown(self, key, name, description, options, aliases=()):
         combo = Gtk.ComboBoxText()
         for value, label in options:
             combo.append(value, label)
         combo.connect('changed', lambda c: c.get_active_id() and self._changed(key, c.get_active_id()))
-        return self._row(key, name, description, combo, combo.set_active_id, aliases)
+        return self._row(key, name, description, combo, combo.set_active_id, aliases, reset=True)
 
     def _slider(self, key, name, description, low, high, aliases=(), reset=True):
         scale = Gtk.Scale.new(Gtk.Orientation.HORIZONTAL, Gtk.Adjustment(
@@ -446,7 +457,7 @@ class SettingsDialog(Gtk.Window):
         ui_font = self._font_button('ui_font', 'Interface font',
                                     'Font for menus, sidebars and dialogs. Restore to use the system font.',
                                     self._ui_font, ('typeface family',))
-        self._group(body, 'Font', (ui_font, self._font_size_row('explorer_font_size')))
+        self._group(body, 'Font', (ui_font,))
 
     def _build_editor(self, body):
         editor_font = self._font_button('editor_font', 'Editor font',
@@ -458,12 +469,6 @@ class SettingsDialog(Gtk.Window):
                          ('gutter',)),
             self._toggle('highlight_line', 'Highlight current line',
                          'Tint the line that contains the cursor.', ('active cursor line',)),
-            self._toggle('md_default_preview', 'Markdown: open in preview',
-                         'Open Markdown files in the rendered preview instead of the source.',
-                         ('reading view default view',)),
-            self._toggle('md_readable_width', 'Markdown: readable line length',
-                         'Limit the width of the Markdown preview so lines stay easy to read.',
-                         ('readable width',)),
         ))
         scale, indent = self._slider('indent_width', 'Indent width',
                                      'Number of columns per indentation level.',
@@ -478,7 +483,39 @@ class SettingsDialog(Gtk.Window):
                          ('brackets quotes close',)),
         ))
 
+    def _feature(self, body, key, name, description):
+        page_id = next(p for p, b in self._bodies.items() if b is body)
+        self._feature_pages[page_id] = key
+        self._group(body, None, (self._toggle(key, 'Enable ' + name, description,
+                                             ('feature enabled disable',)),))
+
+    def _sync_features(self):
+        for page_id, feature in self._feature_pages.items():
+            for _, card in self._groups[page_id]:
+                for row in card.rows:
+                    if row.key != feature:
+                        enabled = self._values.get(feature, True)
+                        row.set_sensitive(enabled)
+                        row.set_opacity(1 if enabled else 0.48)
+
+    def _spin(self, key, name, description, step=1, aliases=()):
+        spin = Gtk.SpinButton.new_with_range(*settings.LIMITS[key], step)
+        spin.set_numeric(True)
+        spin.set_width_chars(6)
+        spin.connect('value-changed', lambda s: self._changed(key, s.get_value_as_int()))
+        return self._row(key, name, description, spin, spin.set_value, aliases, reset=True)
+
     def _build_files(self, body):
+        self._feature(body, 'feature_explorer', 'file explorer', 'Browse and manage project files.')
+        self._group(body, None, (
+            self._toggle('explorer_git_colors', 'Git status colours',
+                         'Colour file names by their Git status.', ('version control colors',)),
+            self._toggle('explorer_folders_first', 'Folders first',
+                         'List folders before files.', ('directory sort order',)),
+            self._toggle('explorer_compact', 'Compact rows',
+                         'Use less space between file names.', ('density spacing',)),
+            self._font_size_row('explorer_font_size'),
+        ))
         self._group(body, None, (self._toggle(
             'show_hidden', 'Show hidden files',
             'Show files and folders whose names start with a dot in the explorer.', ('dotfiles',)),))
@@ -500,24 +537,134 @@ class SettingsDialog(Gtk.Window):
         self.rows['ignored_folders'] = ignored
         self._group(body, 'Search', (ignored,))
 
-    def _build_terminal(self, body):
-        spin = Gtk.SpinButton.new_with_range(*settings.LIMITS['terminal_scrollback'], 1000)
-        spin.set_numeric(True)
-        spin.set_digits(0)
-        spin.set_width_chars(6)
-        spin.connect('value-changed', lambda s: self._changed('terminal_scrollback', s.get_value_as_int()))
+    def _build_notes(self, body):
+        self._feature(body, 'feature_notes', 'notes', 'Write and organise project notes.')
         self._group(body, None, (
+            self._toggle('md_live_preview', 'Edit Markdown with live preview',
+                         'Render Markdown while you edit.', ('markdown source reading view',)),
+            self._toggle('md_readable_width', 'Readable line length',
+                         'Keep Markdown lines at a comfortable reading width.', ('markdown readable width',)),
+            self._toggle('notes_slash_commands', 'Slash commands',
+                         'Type / for a command menu in notes.', ('slash insert menu',)),
+            self._toggle('notes_toolbar', 'Insert toolbar',
+                         'Show the formatting and insert toolbar in notes.', ('formatting buttons',)),
+            self._dropdown('notes_sort', 'Sort notes by', 'Order notes in the explorer.',
+                           (('name', 'Name'), ('modified', 'Last modified')), ('order recent',)),
+            self._toggle('notes_open_after_create', 'Open a note after creating it',
+                         'Start editing each newly created note.', ('new note focus',)),
+        ))
+        root = getattr(self.get_transient_for(), 'root', '<project>')
+        path = str(Path(root) / '.IDgent' / 'Notes')
+        row = SettingRow('Notes folder', path, aliases=('notes directory path location',))
+        row.desc_label.set_selectable(True)
+        self.rows['notes_folder'] = row
+        self._group(body, 'Location', (row,))
+
+    def _build_terminal(self, body):
+        self._feature(body, 'feature_terminal', 'terminal', 'Run shells in project terminal docks.')
+        entry = Gtk.Entry()
+        entry.set_width_chars(18)
+        entry.set_placeholder_text('Login shell')
+        hint = Gtk.Label(xalign=0)
+        hint.set_line_wrap(True)
+        hint.get_style_context().add_class('idgent-setting-desc')
+
+        def shell_hint(text):
+            hint.set_text('' if not text else
+                          'Shell will be checked when a terminal opens.' if
+                          shutil.which(text) or (Path(text).is_file() and os.access(text, os.X_OK))
+                          else 'Shell was not found; check its name or executable path.')
+
+        def shell_set(text):
+            entry.set_text(text)
+            shell_hint(text)
+
+        entry.connect('changed', lambda e: (shell_hint(e.get_text()),
+                                            self._changed('terminal_shell', e.get_text())))
+        shell = self._row('terminal_shell', 'Shell', 'Executable name or path. Leave empty to use your login shell.',
+                          entry, shell_set, ('bash zsh command login executable',), reset=True)
+        shell.desc_label.get_parent().pack_start(hint, False, False, 0)
+        self.shell_hint = hint
+        self._group(body, None, (
+            self._spin('terminal_max_panes', 'Maximum terminals per dock',
+                       'Counts every pane of a dock: terminals, graph and Git graph.',
+                       aliases=('limit split panes',)),
+            shell,
             self._font_size_row('terminal_font_size'),
             self._dropdown('terminal_cursor', 'Cursor shape', 'Shape of the cursor in terminals.',
                            (('block', 'Block'), ('ibeam', 'I-beam'), ('underline', 'Underline')),
                            ('caret',)),
             self._toggle('terminal_blink', 'Blinking cursor', 'Blink the cursor in terminals.',
                          ('caret blink',)),
-            self._row('terminal_scrollback', 'Scrollback lines',
-                      'Lines each terminal keeps for scrolling back (1,000 to 100,000).',
-                      spin, spin.set_value, ('history buffer',)),
+            self._spin('terminal_scrollback', 'Scrollback lines',
+                       'Lines each terminal keeps for scrolling back (1,000 to 100,000).',
+                       1000, ('history buffer',)),
+            self._toggle('terminal_copy_on_select', 'Copy on select',
+                         'Copy selected terminal text to the clipboard.', ('selection clipboard',)),
+            self._toggle('terminal_bell', 'Audible bell',
+                         'Play a sound when a terminal rings its bell.', ('sound beep',)),
             self._toggle('terminal_autostart', 'Open bottom terminal at start-up',
                          'Show the bottom terminal dock when IDgent starts.', ('dock startup launch',)),
+        ))
+
+    def _graph_row(self, key, name, description, aliases=()):
+        row_key = 'graph.' + key
+        default = settings.GRAPH_DEFAULTS[key]
+        if isinstance(default, bool):
+            control = Toggle(label=name)
+            setter = control.set_active
+            control.connect('toggled', lambda t: self._graph_changed(key, t.get_active()))
+        else:
+            control = Gtk.SpinButton.new_with_range(*settings.GRAPH_LIMITS[key],
+                                                   settings.GRAPH_STEPS[key])
+            control.set_digits(2)
+            control.set_numeric(True)
+            control.set_width_chars(5)
+            setter = control.set_value
+            control.connect('value-changed', lambda c: self._graph_changed(key, c.get_value()))
+        setter(self._graph[key])
+        row = SettingRow(name, description, control, key=row_key, aliases=aliases,
+                         reset=lambda: self._graph_changed(key, default))
+        self.rows[row_key], self.controls[row_key] = row, control
+        self._setters[row_key] = setter
+        self.reset_buttons[row_key] = row.reset_button
+        row.reset_button.set_sensitive(self._graph[key] != default)
+        return row
+
+    def _build_graph(self, body):
+        self._feature(body, 'feature_graph', 'graph view', 'Explore project files and their references.')
+        self._group(body, None, (
+            self._dropdown('graph_default_type', 'Default graph type', 'Scope of newly opened graphs.',
+                           (('global', 'Global'), ('local', 'Local'), ('note', 'Note')),
+                           ('scope neighbourhood',)),
+            self._graph_row('showTags', 'Show tags', 'Include tag markers.', ('tag markers',)),
+            self._graph_row('showAttachments', 'Show attachments', 'Include referenced assets.',
+                            ('images assets',)),
+            self._graph_row('showOrphans', 'Show orphans', 'Include unlinked files.', ('unlinked files',)),
+            self._graph_row('showArrow', 'Show arrows', 'Show the direction of references.', ('direction',)),
+            self._graph_row('nodeSizeMultiplier', 'Node size', 'Size of file markers.', ('marker size',)),
+            self._graph_row('lineSizeMultiplier', 'Link thickness', 'Width of connections.',
+                            ('connection width',)),
+            self._graph_row('textFadeMultiplier', 'Label fade', 'Detail level of file labels.',
+                            ('label detail text',)),
+            self._graph_row('reduceMotion', 'Reduce graph motion', 'Skip graph animation and easing.',
+                            ('animate on open animation',)),
+        ))
+
+    def _build_gitgraph(self, body):
+        self._feature(body, 'feature_gitgraph', 'Git graph', 'Browse branches and commit history.')
+        self._group(body, None, (
+            self._dropdown('gitgraph_orientation', 'Default orientation', 'Direction of commit history.',
+                           (('horizontal', 'Horizontal'), ('vertical', 'Vertical')), ('layout direction',)),
+            self._spin('gitgraph_max_commits', 'Maximum commits to load',
+                       'Limit the amount of commit history loaded (100 to 10,000).', 100,
+                       ('history limit',)),
+            self._toggle('gitgraph_show_remotes', 'Show remote branches',
+                         'Include remote branch references.', ('remote refs',)),
+            self._toggle('gitgraph_show_tags', 'Show tags', 'Include Git tags.', ('release refs',)),
+            self._dropdown('gitgraph_time_format', 'Time format in tooltips',
+                           'How commit timestamps appear.',
+                           (('relative', 'Relative'), ('absolute', 'Absolute')), ('date timestamp',)),
         ))
 
     def _build_hotkeys(self, body):
@@ -566,7 +713,7 @@ class SettingsDialog(Gtk.Window):
     @property
     def values(self) -> dict:
         """Every settings key as currently shown (a copy)."""
-        return {'theme': self._theme_id, **self.sizes, **self._values}
+        return {'theme': self._theme_id, **self.sizes, **self._values, 'graph': copy.deepcopy(self._graph)}
 
     def set_theme_id(self, theme_id):
         """Select without emission; unknown IDs fall back to the default theme."""
@@ -602,6 +749,15 @@ class SettingsDialog(Gtk.Window):
                     self._values[key] = value
                     self._setters[key](value)
                     self._update_reset(key)
+            if 'graph' in values:
+                self._graph = settings.normalize_graph(values['graph'])
+                for key in settings.GRAPH_DEFAULTS:
+                    row_key = 'graph.' + key
+                    if row_key in self._setters:
+                        self._setters[row_key](self._graph[key])
+                        self.reset_buttons[row_key].set_sensitive(
+                            self._graph[key] != settings.GRAPH_DEFAULTS[key])
+            self._sync_features()
         finally:
             self._updating = previous
 
@@ -670,6 +826,19 @@ class SettingsDialog(Gtk.Window):
 
     # Handlers ---------------------------------------------------------------
 
+    def _graph_changed(self, key, value):
+        if self._updating:
+            return
+        # Read current persisted preferences so edits retain graph-panel changes.
+        pending = {k: v for k, v in self._graph.items() if v != self._saved_graph.get(k)}
+        graph = settings.normalize_graph({**settings.get_graph(), **pending, key: value})
+        if graph == self._graph:
+            return
+        self.set_values({'graph': graph})
+        settings.set_graph(graph)
+        self._saved_graph = copy.deepcopy(graph)
+        self.emit('setting-changed', 'graph', copy.deepcopy(graph))
+
     def _changed(self, key, value):
         if self._updating:
             return
@@ -685,6 +854,7 @@ class SettingsDialog(Gtk.Window):
             finally:
                 self._updating = previous
             self._update_reset(key)
+            self._sync_features()
             settings.set_value(key, value)
             self.emit('setting-changed', key, value)
 
@@ -750,7 +920,7 @@ class SettingsDialog(Gtk.Window):
         for page_id in page_ids:
             for group, card in self._groups[page_id]:
                 if group.get_visible():
-                    rows += card.visible_rows()
+                    rows += [r for r in card.visible_rows() if r.is_sensitive()]
         return rows
 
     def focus_content(self) -> bool:

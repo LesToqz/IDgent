@@ -152,11 +152,8 @@ class SettingsWindowKeysTest(unittest.TestCase):
         self.path = Path(self.root.name) / 'idgent' / 'settings.json'
 
     def test_defaults_cover_spec_keys(self):
-        self.assertEqual(settings.NEW_KEYS, (
-            'accent', 'reduce_motion', 'ui_font', 'editor_font', 'line_numbers', 'highlight_line',
-            'md_default_preview', 'md_readable_width', 'indent_tabs', 'indent_width', 'auto_pair',
-            'show_hidden', 'confirm_delete', 'delete_mode', 'terminal_cursor', 'terminal_blink',
-            'terminal_scrollback', 'terminal_autostart'))
+        self.assertEqual(set(settings.NEW_KEYS), set(settings.NEW_DEFAULTS))
+        self.assertNotIn('md_default_preview', settings.DEFAULTS)
         values = settings.get_values()
         self.assertEqual(values, settings.DEFAULTS)
         self.assertIsNone(values['accent'])
@@ -213,6 +210,47 @@ class SettingsWindowKeysTest(unittest.TestCase):
         self.assertTrue(settings.set_value('auto_pair', False))
         self.assertTrue(settings.load()['keep'])
 
+    def test_contract_keys_validation_roundtrip_and_reset(self):
+        expected = {
+            'feature_explorer': True, 'feature_terminal': True, 'feature_graph': True,
+            'feature_gitgraph': True, 'feature_notes': True, 'explorer_git_colors': True,
+            'explorer_folders_first': True, 'explorer_compact': False,
+            'terminal_max_panes': 6, 'terminal_shell': '', 'terminal_copy_on_select': False,
+            'terminal_bell': False, 'graph_default_type': 'global',
+            'gitgraph_orientation': 'horizontal', 'gitgraph_max_commits': 1500,
+            'gitgraph_show_remotes': True, 'gitgraph_show_tags': True,
+            'gitgraph_time_format': 'relative', 'md_live_preview': True,
+            'md_readable_width': True, 'notes_slash_commands': True, 'notes_toolbar': True,
+            'notes_sort': 'name', 'notes_open_after_create': True,
+        }
+        settings.save({'md_default_preview': False, 'future': 42})
+        for key, default in expected.items():
+            with self.subTest(key=key):
+                self.assertEqual(settings.get_value(key), default)
+                self.assertIs(type(settings.get_value(key)), type(default))
+                for invalid in (None, [], {}, 1 if isinstance(default, bool) else False):
+                    self.assertEqual(settings.normalize(key, invalid), default)
+                if isinstance(default, bool):
+                    value = not default
+                elif key in settings.CHOICES:
+                    value = settings.CHOICES[key][-1]
+                    self.assertEqual(settings.normalize(key, 'invalid'), default)
+                elif key in settings.LIMITS:
+                    low, high = settings.LIMITS[key]
+                    self.assertEqual(settings.normalize(key, -999), low)
+                    self.assertEqual(settings.normalize(key, 999999), high)
+                    self.assertEqual(settings.normalize(key, float('nan')), default)
+                    value = high
+                else:
+                    value = '/bin/bash'
+                self.assertTrue(settings.set_value(key, value))
+                self.assertEqual(settings.get_values()[key], value)
+                self.assertTrue(settings.reset_value(key))
+                self.assertEqual(settings.get_value(key), default)
+        self.assertNotIn('md_default_preview', settings.get_values())
+        self.assertFalse(settings.load()['md_default_preview'])
+        self.assertEqual(settings.load()['future'], 42)
+
     def test_corrupt_json_behaves_as_defaults(self):
         self.path.parent.mkdir(parents=True)
         self.path.write_text('{not json')
@@ -259,7 +297,9 @@ class GraphSettingsTest(unittest.TestCase):
         self.assertEqual(result['linkStrength'], 0.35)
         self.assertEqual(result['centerStrength'], settings.GRAPH_DEFAULTS['centerStrength'])
         self.assertEqual(result['colorGroups'], [{'query': 'tag:a', 'color': '#abcdef'}])
+        self.assertNotIn('unknown', result)
         self.assertNotIn('unknown', settings.load()['graph'])
+        self.assertNotIn('unknown', json.loads(settings.settings_path().read_text())['graph'])
         self.assertEqual(settings.load()['keep'], 7)
         self.assertNotIn('graph', settings.DEFAULTS)
         self.assertNotIn('graph', settings.get_values())
