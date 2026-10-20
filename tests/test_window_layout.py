@@ -17,7 +17,7 @@ import gi
 
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
-from gi.repository import Gdk, Gio, GLib, GObject, Gtk
+from gi.repository import Gdk, Gio, GLib, Gtk
 
 from idgent import settings, style
 from idgent.themes import THEMES, DEFAULT_THEME_ID
@@ -343,9 +343,9 @@ class WindowLayoutTests(unittest.TestCase):
         return self.window.sidebar.translate_coordinates(self.window, 0, 0)[1]
 
     def handle_width(self, paned: Gtk.Paned) -> int:
-        value = GObject.Value(int)
-        paned.style_get_property("handle-size", value)
-        return max(value.get_int(), 5)
+        # GTK's deprecated handle-size property excludes the CSS hit borders.
+        geometry = style.TOKENS['geometry']
+        return geometry['separator'] + 2 * geometry['separator_hit_padding']
 
     def test_bottom_divider_collapses_editor_and_restores(self) -> None:
         window = self.window
