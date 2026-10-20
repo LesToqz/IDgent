@@ -3,3 +3,6 @@
 __pycache__/
 *.pyc
 .ceo/
+
+# local CEO session log (not published)
+CLAUDE-CEO.md
