@@ -248,6 +248,12 @@ class HeaderChromeTest(ThemedTest):
 
     def setUp(self):
         super().setUp()
+        pointer = Gdk.Display.get_default().get_default_seat().get_pointer()
+        screen, pointer_x, pointer_y = pointer.get_position()
+        # Pixel probes need an unhovered header, regardless of earlier tests.
+        # Restore the pointer after destroying this fixture's window.
+        self.addCleanup(pointer.warp, screen, pointer_x, pointer_y)
+        pointer.warp(screen, screen.get_width() - 1, screen.get_height() - 1)
         self.window = Gtk.Window()
         self.window.set_default_size(400, 100)
         self.addCleanup(self.window.destroy)

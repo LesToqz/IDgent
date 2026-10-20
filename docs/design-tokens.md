@@ -48,6 +48,9 @@ The terminal already reserves an 8-pixel lane when scrollback is empty. Its
 vertical slider uses 1-pixel side margins so showing scrollback preserves the
 terminal's text width. The 34-pixel minimum length keeps the thumb discoverable.
 The separator's transparent hit padding enlarges its target without a thick line.
+Its allocated thickness is 7 pixels: `separator + 2 * separator_hit_padding`.
+Layout code must measure this CSS allocation rather than GTK's deprecated
+`handle-size` style property, which can report a different thickness.
 
 ## Compositing and shadows
 
@@ -93,10 +96,17 @@ Existing callers can still resolve these duration aliases:
 | --- | --- |
 | none | instant |
 | superfast | feedback |
-| fast, collapse, toggle, notice_out, notice_exit, resize_handle | state |
-| moderate, notice_in, notice_enter, reflow | travel |
+| fast, collapse, toggle, notice_out, notice_exit, resize_handle, clickable_icon_opacity | state |
+| moderate, notice_in, notice_enter, reflow, tab_close_reflow | travel |
 | slow | settle |
+| notice_hover_grace | pause |
 | notice_autohide | notice_hold |
+
+The component keys are public caller contracts. Tab-close layout movement uses
+`travel` (224 ms); clickable-icon opacity uses `state` (128 ms). These keys
+resolve to IDgent's durations and respect the same reduced-motion preferences.
+After leaving a hovered notice, `notice_hover_grace` allows a deliberate
+`pause` (640 ms) before dismissal, capped by the notice's own timeout.
 
 Each curve is a CSS cubic Bézier `(x1, y1, x2, y2)`:
 
@@ -155,6 +165,8 @@ Titlebar and status surfaces use the sidebar. Active and editor selections mix
 the accent at 0.26 in dark themes and 0.19 in light themes. Inactive selection,
 hover and tab-close hover mix their overlay at 0.09. The terminal cursor uses
 the foreground color.
+Editor gutter labels use `faint` for ordinary lines and `muted` for the active
+line: IDgent Dark supplies `#81989f` and `#a3b5b8`, respectively.
 
 For other catalogue themes, extended hover borders and accent hover mix their
 base with foreground at 0.18; focus borders use 0.42. Git status colors start

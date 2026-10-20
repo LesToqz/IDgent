@@ -225,7 +225,10 @@ class NavAndColumnTest(WidgetTest):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         box.pack_start(field, False, False, 0)
         self.show(box)
-        self.assertEqual(field.get_allocated_height(), 30)
+        geometry = style.TOKENS['geometry']
+        height = (geometry['entry_content'] + 2 * style.TOKENS['spacing']['compact']
+                  + 2 * geometry['border'])
+        self.assertEqual(field.get_allocated_height(), height)
 
 
 class CssTest(unittest.TestCase):

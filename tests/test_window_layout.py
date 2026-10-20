@@ -343,6 +343,7 @@ class WindowLayoutTests(unittest.TestCase):
         return self.window.sidebar.translate_coordinates(self.window, 0, 0)[1]
 
     def handle_width(self, paned: Gtk.Paned) -> int:
+        # Measure the CSS allocation, including the transparent hit borders.
         handle = paned.get_handle_window()
         return (handle.get_width() if paned.get_orientation() == Gtk.Orientation.HORIZONTAL
                 else handle.get_height())

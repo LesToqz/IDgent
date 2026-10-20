@@ -475,8 +475,10 @@ class ExplorerTests(unittest.TestCase):
             self.assertEqual(tuple(round(c * 255) for c in (color.red, color.green, color.blue)),
                              tuple(int(expected[i:i + 2], 16) for i in (1, 3, 5)))
             padding = context.get_padding(state)
-            self.assertEqual((padding.top, padding.right, padding.bottom, padding.left), (4, 8, 4, 8))
-            self.assertEqual(context.get_property('border-radius', state), 4)
+            space = style.TOKENS['spacing']
+            self.assertEqual((padding.top, padding.right, padding.bottom, padding.left),
+                             (space['compact'], space['control'], space['compact'], space['control']))
+            self.assertEqual(context.get_property('border-radius', state), style.TOKENS['radius']['item'])
 
 
 if __name__ == '__main__':
