@@ -81,7 +81,7 @@ class ViewChrome:
         self.buffer.connect('mark-set', self._mark_set)
         view.connect('button-press-event', self._press)
         view.connect('size-allocate', self.update_labels)
-        view.connect('map', self.update_labels)
+        view.connect('map', self._style_updated)
         view.connect('style-updated', self._style_updated)
         view.connect('destroy', self._destroy)
         self.adjustment = None

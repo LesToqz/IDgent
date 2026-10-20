@@ -180,7 +180,7 @@ class ViewTabTest(unittest.TestCase):
         self.assertEqual(before, self.panel.font_size)
         self.panel.set_markdown_mode('preview')
         self.assertIsNone(self.panel.markdown_mode())
-        self.assertEqual(file.md_mode, 'source')
+        self.assertEqual(file.md_mode, 'preview')
         self.panel.search_entry.set_text('one')
         self.panel._find()
         self.assertEqual(self.panel.selected_text(), '')

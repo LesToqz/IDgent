@@ -510,7 +510,7 @@ class BufferIntegrationTest(EditorHarness):
         new.rename(back)
         self.panel.on_path_renamed(str(new), str(back))
         settle(tab.highlighter)
-        self.assertEqual(self.panel.status.get_text().split('  |  ')[-1], 'Markdown')
+        self.assertEqual(self.panel.status.get_text().split('  |  ')[-1], 'Markdown (Live)')
         plain = self.root / 'notes.log'
         back.rename(plain)
         self.panel.on_path_renamed(str(back), str(plain))
@@ -671,6 +671,8 @@ class BufferIntegrationTest(EditorHarness):
     def test_markdown_and_json_files(self):
         source = '# Title\n\nText with `code`.\n'
         tab = self.open('r.md', source)
+        self.panel.set_markdown_mode('source')
+        settle(tab.highlighter)
         self.assertEqual(tag_at(tab.buffer, 2), 'hl-heading')
         self.assertEqual(tag_at(tab.buffer, source.index('`code`')), 'hl-string')
         tab = self.open('d.json', '{"k": 1}')

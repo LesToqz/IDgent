@@ -13,7 +13,7 @@ gi.require_version('Gtk', '3.0')
 gi.require_version('Gdk', '3.0')
 from gi.repository import Gdk, GLib, GObject, Gtk, Pango
 
-from idgent import gutter, highlight, mdview, motion
+from idgent import gutter, highlight, livemd, motion
 
 MAX_FILE_SIZE = 5 * 1024 * 1024
 COMMENT_EXTENSIONS = {'.py', '.sh', '.toml', '.yaml', '.yml', '.conf'}
@@ -223,22 +223,18 @@ class _EditorTab(_TabHeader):
         self.chrome.set_line_numbers(panel.line_numbers)
         self.chrome.set_highlight_line(panel.highlight_line)
         self.md_mode = 'source'
-        self.md_toggle = self.md_preview_view = self.md_renderer = None
-        self._md_timeout = self._md_restore_idle = 0
+        self.md_renderer = None
+        self._md_restore_idle = 0
         self._md_closed = False
-        self._md_updating = False
-        self._source_scroll = self._source_cursor = 0
+        self.md_large = len(text.encode('utf-8')) > livemd.MAX_BYTES
         self.set_font_size(panel.font_size)
         self.view.connect('scroll-event', panel._scroll)
         self.view.connect('style-updated', lambda *_: self._set_tab_stops())
         self.detect_language()
         self.source_scroll = Gtk.ScrolledWindow()
         self.source_scroll.add(self.view)
-        self.md_stack = Gtk.Stack()
-        self.md_stack.set_homogeneous(False)
-        self.md_stack.add_named(self.source_scroll, 'source')
         self.page = Gtk.Overlay()
-        self.page.add(self.md_stack)
+        self.page.add(self.source_scroll)
         self.page.connect('destroy', self._destroy_markdown)
         self._sync_markdown()
         self._build_header(lambda: panel._close_tab(self), 'Close file')
@@ -268,128 +264,73 @@ class _EditorTab(_TabHeader):
 
     def _sync_markdown(self) -> None:
         enabled = Path(self.path).suffix.lower() in ('.md', '.markdown')
-        if enabled == (self.md_toggle is not None):
+        if enabled == (self.md_renderer is not None):
             return
         if not enabled:
             self.set_markdown_mode('source')
-            self._cancel_markdown()
             self.md_renderer.destroy()
-            self.md_scroll.destroy()
-            self.md_toggle.destroy()
-            self.md_toggle = self.md_preview_view = self.md_renderer = None
+            self.md_renderer = None
+            self.detect_language()
             return
-        self.md_renderer = mdview.MarkdownView(self.panel.open_file, lambda: self.path)
-        self.md_preview_view = self.md_renderer.view
-        self.md_preview_view.connect('key-press-event', self.panel._key_press, self)
-        self.md_preview_view.connect('scroll-event', self.panel._scroll)
-        self.md_scroll = Gtk.ScrolledWindow()
-        self.md_scroll.add(self.md_preview_view)
+        self.md_renderer = livemd.LiveMarkdown(self.view, self.panel.open_file, lambda: self.path)
         self.md_renderer.set_readable_width(self.panel.md_readable_width)
-        self.md_stack.add_named(self.md_scroll, 'preview')
-        self.md_toggle = Gtk.Box(spacing=2)
-        self.md_toggle.get_style_context().add_class('md-toggle')
-        self.md_toggle.set_halign(Gtk.Align.END)
-        self.md_toggle.set_valign(Gtk.Align.START)
-        self.md_toggle.set_margin_top(8)
-        self.md_toggle.set_margin_end(22)
-        self.md_buttons = {}
-        for mode, tooltip in (('preview', 'Preview Markdown'), ('source', 'Show source')):
-            button = Gtk.ToggleButton()
-            button.set_can_focus(False)
-            button.set_tooltip_text(tooltip)
-            button.set_size_request(28, 24)
-            button.add(mdview.mode_icon(mode))
-            button.connect('clicked', lambda _, choice=mode: self.set_markdown_mode(choice) if not self._md_updating else None)
-            self.md_toggle.pack_start(button, False, False, 0)
-            self.md_buttons[mode] = button
-        self.page.add_overlay(self.md_toggle)
-        # Only the pill receives events; the rest of the overlay is the stack.
-        self.page.set_overlay_pass_through(self.md_toggle, False)
         self.style_markdown()
-        self.md_buttons['source'].set_active(True)
-        self.md_stack.set_visible_child_name('source')
-        self.page.show_all()
-        if self.panel.md_default_preview:
+        if self.panel.md_live_preview and not self.md_large:
             self.set_markdown_mode('preview')
 
     def style_markdown(self) -> None:
-        if not self.md_renderer:
-            return
-        panel, colors = self.panel, self.panel.chrome
-        self.md_renderer.set_style(panel.syntax_style, colors, panel.font_size)
-
-    def _cancel_markdown(self) -> None:
-        for name in ('_md_timeout', '_md_restore_idle'):
-            if getattr(self, name):
-                GLib.source_remove(getattr(self, name))
-                setattr(self, name, 0)
         if self.md_renderer:
-            self.md_renderer.cancel()
+            self.md_renderer.set_style(self.panel.syntax_style, self.panel.chrome, self.panel.font_size)
 
     def _destroy_markdown(self, *_: object) -> None:
         self._md_closed = True
-        self._cancel_markdown()
+        if self._md_restore_idle:
+            GLib.source_remove(self._md_restore_idle)
+            self._md_restore_idle = 0
         if self.md_renderer:
             self.md_renderer.destroy()
 
-    def _render_markdown(self, fraction=None) -> bool:
-        self._md_timeout = 0
-        if self._md_closed or self.md_mode != 'preview':
-            return False
-        adjustment = self.md_scroll.get_vadjustment()
-        offset = adjustment.get_value()
+    def set_markdown_mode(self, mode: str) -> None:
+        if not self.md_renderer or mode == self.md_mode:
+            return
+        if mode == 'preview' and len(_text(self.buffer).encode('utf-8')) > livemd.MAX_BYTES:
+            self.md_large = True
+            self.panel._update_status()
+            return
+        adjustment = self.source_scroll.get_vadjustment()
+        offset, cursor = adjustment.get_value(), self.cursor()
+        self.md_mode = mode
+        live = mode == 'preview'
+        self.highlighter.set_lexer(None if live else highlight.lexer_for(self.path))
+        self.chrome.set_line_numbers(self.panel.line_numbers and not live)
+        self.chrome.set_highlight_line(self.panel.highlight_line and not live)
+        self.md_renderer.set_enabled(live)
+        self.buffer.place_cursor(self.buffer.get_iter_at_offset(cursor))
+        adjustment.set_value(offset)
+        if self._md_restore_idle:
+            GLib.source_remove(self._md_restore_idle)
         def restore():
             self._md_restore_idle = 0
-            if not self._md_closed and self.md_mode == 'preview':
-                value = offset if fraction is None else fraction * max(0, adjustment.get_upper() - adjustment.get_page_size())
-                adjustment.set_value(value)
+            if not self._md_closed:
+                adjustment.set_value(offset)
             return False
-        def done():
-            if self._md_restore_idle:
-                GLib.source_remove(self._md_restore_idle)
-            self._md_restore_idle = GLib.idle_add(restore, priority=GLib.PRIORITY_LOW)
-        self.md_renderer.render(_text(self.buffer), done)
-        return False
-
-    def set_markdown_mode(self, mode: str) -> None:
-        if not self.md_toggle:
-            return
-        if mode == self.md_mode:
-            self._md_updating = True
-            self.md_buttons[mode].set_active(True)
-            self._md_updating = False
-            return
-        self._cancel_markdown()
-        if mode == 'preview':
-            adjustment = self.source_scroll.get_vadjustment()
-            self._source_scroll, self._source_cursor = adjustment.get_value(), self.cursor()
-            fraction = adjustment.get_value() / max(1, adjustment.get_upper() - adjustment.get_page_size())
-            self.md_mode = mode
-            self.md_stack.set_visible_child_name(mode)
-            self.panel.search_bar.set_search_mode(False)
-            self._render_markdown(fraction)
-            self.md_preview_view.grab_focus()
-        else:
-            self.md_mode = mode
-            self.md_stack.set_visible_child_name(mode)
-            self.buffer.place_cursor(self.buffer.get_iter_at_offset(min(self._source_cursor, self.buffer.get_char_count())))
-            self.source_scroll.get_vadjustment().set_value(self._source_scroll)
-            self.view.grab_focus()
-        self._md_updating = True
-        for choice, button in self.md_buttons.items():
-            button.set_active(choice == mode)
-        self._md_updating = False
+        self._md_restore_idle = GLib.idle_add(restore, priority=GLib.PRIORITY_LOW)
+        self.view.grab_focus()
         self.panel._update_status()
 
     @property
     def language(self) -> str:
-        return highlight.language_name(self.highlighter.lexer) + (' (Preview)' if self.md_mode == 'preview' else '')
+        if Path(self.path).suffix.lower() in ('.md', '.markdown'):
+            mode = 'Live' if self.md_mode == 'preview' else 'Source'
+            return 'Markdown (' + mode + ')' + (' — live preview disabled above 1 MiB' if self.md_large else '')
+        return highlight.language_name(self.highlighter.lexer)
 
     def detect_language(self) -> None:
         start = self.buffer.get_start_iter()
         end = start.copy()
         end.forward_to_line_end()
-        self.highlighter.set_lexer(highlight.lexer_for(self.path, self.buffer.get_text(start, end, False)[:200]))
+        self.highlighter.set_lexer(None if self.md_mode == 'preview' else
+                                   highlight.lexer_for(self.path, self.buffer.get_text(start, end, False)[:200]))
 
     def set_path(self, path: str) -> None:
         self.path = path
@@ -416,9 +357,6 @@ class _EditorTab(_TabHeader):
         return self.buffer.get_iter_at_mark(self.buffer.get_insert()).get_offset()
 
     def _changed(self, *_: object) -> None:
-        if self.md_mode == 'preview' and not self._md_closed:
-            self._cancel_markdown()
-            self._md_timeout = GLib.timeout_add(250, self._render_markdown)
         if not self.restoring:
             if not self.action_depth:
                 self._record()
@@ -461,7 +399,8 @@ class EditorPanel(Gtk.Box):
         self.font_size = self.default_font_size = DEFAULT_FONT_SIZE
         self.line_numbers = self.highlight_line = True
         self.indent_tabs, self.indent_width = False, 4
-        self.auto_pair = self.md_default_preview = self.md_readable_width = False
+        self.auto_pair = False
+        self.md_live_preview = self.md_readable_width = True
         self._announced_path = ''
         self.tabs: list[_EditorTab] = []
         self._view_tabs: dict[str, _ViewTab] = {}
@@ -494,6 +433,9 @@ class EditorPanel(Gtk.Box):
         self.search_bar.connect_entry(self.search_entry)
         self.pack_start(self.search_bar, False, False, 0)
         self.status = _StatusBar()
+        language_item = self.status.items[-1].get_parent().get_parent()
+        language_item.set_tooltip_text('Markdown: Toggle source mode (Ctrl+Shift+M)')
+        language_item.connect('button-press-event', self._language_press)
         self.overlay.add_overlay(self.status)
         # Reserve an entire bottom row, including at maximum zoom and with find open.
         self.status.connect('size-allocate', lambda _, rect: self.stack.set_margin_bottom(rect.height))
@@ -607,13 +549,13 @@ class EditorPanel(Gtk.Box):
         """Show/hide line numbers in existing and future source views."""
         self.line_numbers = bool(enabled)
         for tab in self.tabs:
-            tab.chrome.set_line_numbers(self.line_numbers)
+            tab.chrome.set_line_numbers(self.line_numbers and tab.md_mode != 'preview')
 
     def set_highlight_line(self, enabled: bool) -> None:
         """Enable/disable the current-line background without changing selection."""
         self.highlight_line = bool(enabled)
         for tab in self.tabs:
-            tab.chrome.set_highlight_line(self.highlight_line)
+            tab.chrome.set_highlight_line(self.highlight_line and tab.md_mode != 'preview')
 
     def set_indent(self, tabs: bool, width: int) -> None:
         """Configure Tab/Shift+Tab insertion and displayed tab stops (default: four spaces)."""
@@ -628,9 +570,9 @@ class EditorPanel(Gtk.Box):
         """Pair brackets and quotes on typing (disabled by default)."""
         self.auto_pair = bool(enabled)
 
-    def set_md_default_preview(self, enabled: bool) -> None:
+    def set_md_live_preview(self, enabled: bool) -> None:
         """Choose the initial mode of subsequently opened Markdown tabs."""
-        self.md_default_preview = bool(enabled)
+        self.md_live_preview = bool(enabled)
 
     def set_md_readable_width(self, enabled: bool) -> None:
         """Cap preview text at 700 logical pixels, centred in the viewport."""
@@ -683,7 +625,7 @@ class EditorPanel(Gtk.Box):
     def markdown_mode(self, path=None):
         """Return source/preview, or None for a non-Markdown/missing tab."""
         tab = self._markdown_tab(path)
-        return tab.md_mode if tab and tab.md_toggle else None
+        return tab.md_mode if tab and tab.md_renderer else None
 
     def zoom(self, step: int) -> None:
         if self.current_view_key() is not None:
@@ -723,9 +665,9 @@ class EditorPanel(Gtk.Box):
         return _text(tab.buffer) if tab and not tab.deleted else None
 
     def selected_text(self) -> str:
-        """Text selected in the active source view ('' in preview or without a selection)."""
+        """Markdown selections retain their exact source text."""
         tab = self._current()
-        if not tab or tab.md_mode == 'preview':
+        if not tab:
             return ''
         bounds = tab.buffer.get_selection_bounds()
         return tab.buffer.get_text(*bounds, True) if bounds else ''
@@ -734,7 +676,7 @@ class EditorPanel(Gtk.Box):
         """Give keyboard focus to the active tab; False when no tab is open."""
         tab = self._current()
         if tab:
-            (tab.md_preview_view if tab.md_mode == 'preview' else tab.view).grab_focus()
+            tab.view.grab_focus()
             return True
         page = self.view_tab_widget(self.current_view_key())
         if page is None:
@@ -756,7 +698,7 @@ class EditorPanel(Gtk.Box):
         tab = next((tab for tab in self.tabs if tab.path == path), None)
         if tab is None:
             return
-        if tab.md_toggle and tab.md_mode == 'preview':
+        if tab.md_renderer and tab.md_mode == 'preview':
             tab.set_markdown_mode('source')
         buffer = tab.buffer
         start = buffer.get_iter_at_line(max(0, min(line, buffer.get_line_count() - 1)))
@@ -776,7 +718,7 @@ class EditorPanel(Gtk.Box):
         def centre() -> bool:
             if mark.get_deleted():
                 return False
-            if tab in self.tabs and tab.md_mode == 'source' and tab.view.get_buffer() is buffer:
+            if tab in self.tabs and tab.view.get_buffer() is buffer:
                 tab.view.scroll_to_mark(mark, 0, True, 0, .5)
             buffer.delete_mark(mark)
             return False
@@ -788,7 +730,7 @@ class EditorPanel(Gtk.Box):
         for tab in self.tabs:
             if tab.path == path:
                 self.notebook.set_current_page(self.notebook.page_num(tab.page))
-                (tab.md_preview_view if tab.md_mode == 'preview' else tab.view).grab_focus()
+                tab.view.grab_focus()
                 self._announce_current()
                 return
         try:
@@ -894,6 +836,13 @@ class EditorPanel(Gtk.Box):
         self._announce_current()
         return True
 
+    def _language_press(self, _widget, event):
+        tab = self._current()
+        if event.button == 1 and tab and tab.md_renderer:
+            tab.set_markdown_mode('source' if tab.md_mode == 'preview' else 'preview')
+            return True
+        return False
+
     def _update_status(self) -> None:
         if not hasattr(self, 'status'):
             return
@@ -945,19 +894,14 @@ class EditorPanel(Gtk.Box):
         ctrl = bool(event.state & Gdk.ModifierType.CONTROL_MASK)
         shift = bool(event.state & Gdk.ModifierType.SHIFT_MASK)
         if ctrl:
-            if shift and key in (Gdk.KEY_v, Gdk.KEY_V) and tab.md_toggle:
+            if shift and key in (Gdk.KEY_m, Gdk.KEY_M) and tab.md_renderer:
                 tab.set_markdown_mode('preview' if tab.md_mode == 'source' else 'source')
             elif key in (Gdk.KEY_z, Gdk.KEY_Z):
-                if tab.md_mode == 'preview':
-                    return True
                 tab.undo(shift)
             elif key in (Gdk.KEY_f, Gdk.KEY_F) and not shift:
-                tab.set_markdown_mode('source')
                 self.search_bar.set_search_mode(True)
                 self.search_entry.grab_focus()
             elif key == Gdk.KEY_slash:
-                if tab.md_mode == 'preview':
-                    return True
                 self._edit(tab, 'comment')
             elif key in (Gdk.KEY_plus, Gdk.KEY_equal, Gdk.KEY_KP_Add):
                 self.zoom(1)
@@ -968,8 +912,8 @@ class EditorPanel(Gtk.Box):
             else:
                 return False
             return True
-        if tab.md_mode == 'preview':
-            return False
+        if tab.md_renderer and tab.md_renderer.edit_key(event, self.indent_tabs, self.indent_width):
+            return True
         if self.auto_pair and not event.state & (Gdk.ModifierType.MOD1_MASK | Gdk.ModifierType.SUPER_MASK):
             char = chr(Gdk.keyval_to_unicode(key))
             pairs = {**gutter.PAIRS, '"': '"', "'": "'"}
@@ -1059,4 +1003,4 @@ tab:hover .idgent-tab-close, tab:checked .idgent-tab-close,
     border-left: 1px solid {ui['border']}; border-radius: 8px 0 0 0; }}
 .idgent-status-item {{ padding: 3px 4px; border-radius: 4px; }}
 .idgent-status-item:hover {{ background: alpha({ui['overlay']}, .067); color: {ui['foreground']}; }}
-''' + gutter.build_css(ui) + mdview.build_css(ui)
+''' + gutter.build_css(ui)

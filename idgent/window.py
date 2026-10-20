@@ -244,7 +244,7 @@ class MainWindow(Gtk.ApplicationWindow):
             ("Git graph: Jump to HEAD", self.focus_git_head, ()),
             ("Git graph: Close commit tabs", self.close_commit_tabs, ()),
             ("Theme: Next theme", self.next_theme, ("Ctrl+Alt+T",)),
-            ("Editor: Toggle Markdown preview", self.toggle_markdown_view, ("Ctrl+Shift+V",)),
+            ("Markdown: Toggle source mode", self.toggle_markdown_view, ("Ctrl+Shift+M",)),
             ("Editor: Zoom in", lambda: self._editor_zoom(1), ("Ctrl+=",)),
             ("Editor: Zoom out", lambda: self._editor_zoom(-1), ("Ctrl+-",)),
             ("Editor: Reset zoom",
@@ -311,12 +311,12 @@ class MainWindow(Gtk.ApplicationWindow):
     def apply_note_command(self, command_id: str, tab=None):
         """Insert a note command's Markdown into a Markdown tab (default: the active one)."""
         tab = tab or self._editor_tab(self.editor.current_path())
-        if tab is None or tab.md_toggle is None:
+        if tab is None or tab.md_renderer is None:
             self.notify("Open a note or Markdown file to use note commands.")
             return None
-        if tab.md_mode == "preview":
-            tab.set_markdown_mode("source")
         edit = notes.apply_to_buffer(command_id, tab.buffer)
+        if command_id == "table" and tab.md_mode == "preview":
+            tab.buffer.place_cursor(tab.buffer.get_iter_at_offset(edit.start + len(edit.text)))
         tab.view.scroll_to_mark(tab.buffer.get_insert(), 0, False, 0, 0)
         tab.view.grab_focus()
         return edit
@@ -330,18 +330,18 @@ class MainWindow(Gtk.ApplicationWindow):
                 toolbar = tab._note_toolbar = notes.NoteToolbar()
                 toolbar.connect("command", lambda _, command_id, tab=tab:
                                 self.apply_note_command(command_id, tab))
-                # Keep the editor's Markdown pill above the toolbar, at its right.
+                # Reserve the toolbar height above the editable document.
                 toolbar.connect("size-allocate", lambda _, rect, tab=tab:
-                                tab.md_stack.set_margin_top(rect.height))
+                                tab.source_scroll.set_margin_top(rect.height))
                 tab.page.add_overlay(toolbar)
                 tab.page.reorder_overlay(toolbar, 0)
                 tab.page.set_overlay_pass_through(toolbar, False)
                 toolbar.show_all()
-                tab.md_stack.set_margin_top(toolbar.get_preferred_height().natural_height)
+                tab.source_scroll.set_margin_top(toolbar.get_preferred_height().natural_height)
             elif not wanted and toolbar is not None:
                 toolbar.destroy()
                 tab._note_toolbar = None
-                tab.md_stack.set_margin_top(0)
+                tab.source_scroll.set_margin_top(0)
 
     def _current_file_changed(self, _editor: EditorPanel, path: str) -> None:
         self._sync_note_toolbars()
@@ -829,8 +829,8 @@ class MainWindow(Gtk.ApplicationWindow):
             self.editor.set_indent(values["indent_tabs"], values["indent_width"])
         elif key == "auto_pair":
             self.editor.set_auto_pair(value)
-        elif key == "md_default_preview":
-            self.editor.set_md_default_preview(value)
+        elif key == "md_live_preview":
+            self.editor.set_md_live_preview(value)
         elif key == "md_readable_width":
             self.editor.set_md_readable_width(value)
         elif key == "show_hidden":

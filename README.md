@@ -255,27 +255,9 @@ Ctrl+0 returns to and what new sessions start with.
 **Reduce motion** (or `IDGENT_REDUCE_MOTION=1`, or GTK's *enable animations* turned
 off) makes toggles, notices and terminal pane changes instant.
 
-## Markdown preview
+## Markdown live preview
 
-Files ending in `.md` or `.markdown` (only those) get a small pill at the top right
-of the tab with two buttons: the eye shows the **rendered preview**, `</>` shows the
-**source**. **Ctrl+Shift+V** toggles between them (editor focus). The preview is
-read-only and always renders the current buffer, unsaved edits included; switching
-back to the source restores your cursor and scroll position. Ctrl+F switches to the source before opening find. Tabs for
-other file types never show the pill.
-
-The renderer is a small, dependency-free subset, not full CommonMark:
-
-- Supported: ATX (`#`) and underlined headings, paragraphs, **bold**, *italic*,
-  `~~strikethrough~~`, inline code, fenced and indented code blocks (highlighted by
-  language when Pygments is installed), block quotes, bullet, numbered and task
-  lists (nesting by indentation), tables (drawn as a monospace grid; column padding
-  is capped at 120 characters, so longer cells overflow their column), horizontal rules, inline links and
-  `<https://…>` autolinks.
-- Links: `http(s)` and `mailto` links open in the system handler; relative links to
-  existing files open them in a tab. Other schemes and absolute paths are ignored.
-- Not supported: HTML (shown as text), images (shown as `[image: alt]`, never
-  loaded), reference-style links, footnotes, and CommonMark's finer emphasis rules.
+Files ending in `.md` or `.markdown` open in one editable live preview: type directly into the document, with Markdown markers revealed on the caret's line. Headings, lists, clickable tasks, quotes, local images, links, highlighted code with Copy buttons, and pipe tables render around your edits; tables reveal their source when entered. Save, undo, find, and line/column positions use the exact Markdown source. Click the status language label, use **Ctrl+Shift+M**, or choose **Markdown: Toggle source mode** in the command palette for plain source with line numbers. Readable width centres a 700 px column. Files larger than 1 MiB open in source mode.
 
 The bottom terminal dock starts open with side-by-side panes; the right dock
 starts hidden and stacks panes vertically. Both can be open together. Drag the
