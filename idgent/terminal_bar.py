@@ -93,7 +93,7 @@ class _IconButton(Gtk.Button):
         return False
 
     def set_hover(self, target: float) -> motion.Tween:
-        """Fade the glyph towards hovered (1) or resting (0) over 140 ms."""
+        """Fade the glyph towards hovered (1) or resting (0) using IDgent state timing."""
         start = self._hover
 
         def update(t):
@@ -103,7 +103,7 @@ class _IconButton(Gtk.Button):
             if child is not None:
                 child.set_opacity(self.glyph_opacity)
 
-        return motion.animate(self, "clickable_icon_opacity", update, easing="ease_in_out",
+        return motion.animate(self, "state", update, easing="ease_in_out",
                               key=_GLYPH_KEY)
 
     def set_icon(self, icon_name: str, glyph: str) -> None:
@@ -285,10 +285,10 @@ class AddButton(_IconButton):
 
 
 class LimitToast(Gtk.Label):
-    """Reference app-style notice that hides by itself; meant to live in a Gtk.Overlay.
+    """IDgent notice that hides by itself; meant to live in a Gtk.Overlay.
 
     It slides in over ENTER_MS, stays SHOW_MS and fades out over FADE_MS
-    (spec 4.9 / 3.2); with reduced motion it appears and disappears at once.
+    using IDgent motion tokens; reduced motion makes both changes immediate.
     """
 
     SHOW_MS = motion.DURATIONS["notice_autohide"]
@@ -391,10 +391,10 @@ def build_css(ui: dict[str, str]) -> str:
 .idgent-terminal-add.limit:hover {{ color: {ui['warning']}; }}
 .idgent-pane-chooser {{ background: {ui['sidebar_bg']}; color: {ui['foreground']};
     border: 1px solid {ui['border_hover']}; border-radius: {radius['menu']}px;
-    padding: {spacing['size-4-1']}px; }}
+    padding: {spacing['compact']}px; }}
 .idgent-pane-chooser list {{ background: transparent; padding: 0; }}
 .idgent-pane-chooser row {{ min-height: 28px; padding: 0 8px; border: 0;
-    border-radius: {radius['menu-item']}px; color: {ui['foreground']}; }}
+    border-radius: {radius['item']}px; color: {ui['foreground']}; }}
 .idgent-pane-chooser row:hover {{ background: {hover}; }}
 .idgent-pane-chooser row:selected {{ background: {ui['hover']}; color: {ui['hover_fg']}; }}
 .idgent-terminal-toast {{ background: alpha(#000000, 0.9); color: {notice_fg}; font-size: 13px;

@@ -1,63 +1,4 @@
-"""Small GTK3 motion primitives; call widget APIs on the GTK main thread.
-
-Public API (all durations/delays are milliseconds, all distances are pixels):
-
-* ``DURATIONS`` maps names to measured millisecond timings. ``EASINGS``
-  maps names to callables. Token names use underscores rather than the JSON's
-  hyphens. ``duration_ms(value)`` resolves a name or finite
-  numeric duration. Unknown names raise KeyError; invalid numbers ValueError.
-* ``cubic_bezier(x1, y1, x2, y2)`` returns a CSS timing function: input is
-  clamped to [0, 1], x controls must be in [0, 1], y may overshoot.
-* ``set_reduce_motion(flag)`` sets the application preference (default False).
-  ``animations_enabled()`` checks it, gtk-enable-animations and the environment
-  override IDGENT_REDUCE_MOTION=1 on each call. No settings/widgets are created
-  on import; easing, duration lookup and colour interpolation need no display.
-* ``animate(widget, duration, update, *, easing="smooth", on_done=None,
-  key=None, delay=0)`` returns a ``Tween`` with read-only ``finished`` and
-  idempotent ``cancel()``. Easing accepts a name or callable. ``update(progress)``
-  receives eased progress, including overshoot, initially 0 and finally 1.
-  A nonpositive duration or disabled motion instead calls update(1) and
-  on_done() synchronously, ignoring delay. Starting the same (widget, key)
-  cancels its predecessor. Cancelled handles are finished, leave the current
-  value intact and never call on_done. Destroy/unrealize/unmap cancels quietly.
-  Initially hidden widgets use a 16ms GLib fallback until mapped; visible
-  widgets use only their frame clock. Callback exceptions cancel and propagate
-  (GTK reports asynchronous exceptions through Python's exception hook).
-* ``fade(widget, show, duration="fast", easing="smooth", on_done=None,
-  hide_when_done=True)`` returns a Tween to opacity 1 or 0. A fresh hidden
-  entrance starts at 0 and shows the widget; interruptions use current opacity.
-  A completed exit hides the widget unless hide_when_done=False.
-* ``slide_in(widget, offset=12, duration="js_tween_default", easing="ease_in_out",
-  on_done=None)`` returns a Tween for an opacity/margin-top entrance. A fresh
-  hidden widget starts transparent; a fresh slide starts offset from its
-  original margin. Repeated slides continue current opacity and margin, and
-  restore the original margin on completion. GTK margins/opacity are clamped
-  to their legal ranges. Fade and slide share an opacity key; fade also
-  settles an interrupted slide back to its original margin.
-* ``animate_size_request(widget, axis, to, duration="moderate",
-  easing="smooth", on_done=None, *, restore=True)`` returns a Tween for
-  axis "width" or "height", to a nonnegative pixel minimum. Starts from
-  the current explicit request (or allocation for -1). By default restores
-  the original request, including -1 (natural size), before on_done. Pass
-  restore=False to retain the target. Replacements preserve the original
-  request; axes animate independently. This changes minimum size, not clipping.
-* ``lerp_color(a, b, t)`` interpolates #RGB, #RGBA, #RRGGBB, #RRGGBBAA,
-  rgb() or rgba() strings (also percentage channels), returning rgba().
-  Interpolation is straight RGBA in sRGB; channels are clamped after blending,
-  so t may overshoot. Invalid colours/nonfinite numbers raise ValueError.
-* ``StateFader(widget, update, duration="fast", easing="smooth", *,
-  initial=0.0)`` calls update(initial), connects enter/leave to targets 1/0,
-  and exposes ``value``, ``set(target, on_done=None) -> Tween``, ``cancel()``
-  and ``disconnect()``. Targets and emitted values are clamped to [0, 1].
-  set() supports programmatic active state, reversing from the current value.
-  disconnect() cancels and removes handlers; destroy disconnects automatically.
-
-Helpers reserve private keys, so unrelated explicit animate keys coexist.
-Cancelled helpers retain their in-progress values; subsequent calls resume
-them. Reduced motion always settles helper state before calling on_done.
-Desktop menus, prompts and tooltips should appear instantly: use show()/hide()
-or duration="none". Generic fades remain 140 ms; slides default to 100 ms.
-"""
+'IDgent animation helpers and independently selected motion tokens.'
 from __future__ import annotations
 
 import math
@@ -71,76 +12,48 @@ gi.require_version("Gdk", "3.0")
 from gi.repository import Gdk, GLib, Gtk
 
 
-# Measured tokens from docs/reference_app-tokens.json (no runtime JSON dependency).
 # Includes delays/holds as well as tween lengths; callers choose the right use.
+# IDgent motion: immediate feedback, short state changes, unhurried entrances.
 DURATIONS = {
-    "none": 0,
-    "superfast": 70,
-    "fast": 140,
-    "moderate": 300,
-    "slow": 560,
-    "js_tween_default": 100,
-    "tree_expand_collapse": 100,
-    "chevron_rotate": 100,
-    "toggle_thumb_slide": 150,
-    "toggle_thumb_press_grow": 100,
-    "toggle_thumb_press_delay": 50,
-    "toggle_track": 150,
-    "slider_thumb": 100,
-    "input_hover_border": 140,
-    "clickable_icon_opacity": 140,
-    "settings_row_navigable": 150,
-    "resize_handle_color": 200,
-    "drop_overlay": 100,
-    "tab_strip_padding": 75,
-    "tab_close_reflow": 300,
-    "notice_enter": 100,
-    "notice_exit": 120,
-    "notice_autohide": 4000,
-    "notice_hover_grace": 1000,
-    "tooltip_delay": 1000,
-    "tooltip_warm_window": 100,
-    "submenu_open_delay": 250,
-    "flash_highlight": 250,
-    "ribbon_collapsed_bg": 250,
-    "ribbon_collapsed_bg_delay": 95,
-    "workspace_padding": 100,
-    "page_slide_mobile": 150,
-    "sheet_mobile_min": 100,
-    "sheet_mobile_max": 250,
-    "window_geometry_save_debounce": 100,
-    "modal_open_desktop": 0,
-    "modal_close_desktop": 0,
-    "menu_open_desktop": 0,
-    "tooltip_fade": 0,
-    "spinner_rotation": 1000,
+    "instant": 0, "feedback": 96, "state": 128, "travel": 224,
+    "settle": 352, "pause": 640, "notice_hold": 3840,
 }
-# Short semantic names used by the motion alignment spec (WP-2).
+# Established shorthand remains available to callers of the animation helpers.
 DURATIONS.update({
-    "collapse": DURATIONS["tree_expand_collapse"],
-    "toggle": DURATIONS["toggle_thumb_slide"],
-    "notice_in": DURATIONS["notice_enter"],
-    "notice_out": DURATIONS["notice_exit"],
-    "reflow": DURATIONS["tab_close_reflow"],
-    "resize_handle": DURATIONS["resize_handle_color"],
+    "none": DURATIONS["instant"], "superfast": DURATIONS["feedback"],
+    "fast": DURATIONS["state"], "moderate": DURATIONS["travel"],
+    "slow": DURATIONS["settle"], "collapse": DURATIONS["state"],
+    "toggle": DURATIONS["state"], "notice_in": DURATIONS["travel"],
+    "notice_out": DURATIONS["state"], "reflow": DURATIONS["travel"],
+    "resize_handle": DURATIONS["state"],
+    "notice_autohide": DURATIONS["notice_hold"],
+    "notice_enter": DURATIONS["travel"],
+    "notice_exit": DURATIONS["state"],
 })
+# Curves chosen for IDgent. Default motion stays within the endpoints.
 _EASING_POINTS = {
-    "linear": (0, 0, 1, 1),
-    "smooth": (0.45, 0.05, 0.55, 0.95),
-    "delay": (0.65, 0.05, 0.36, 1),
-    "jumpy": (0.68, -0.55, 0.27, 1.55),
-    "swing": (0, 0.55, 0.45, 1),
-    "ease": (0.25, 0.1, 0.25, 1),
-    "ease_in": (0.42, 0, 1, 1),
-    "ease_out": (0, 0, 0.58, 1),
-    "ease_in_out": (0.42, 0, 0.58, 1),
-    "collapse": (0.02, 0.01, 0.47, 1),
-    "reflow": (0.2, 0, 0, 1),
-    "slide_out": (0.33, 1, 0.68, 1),
-    "sheet_dismiss": (0.36, 0.66, 0.04, 1),
-    "backdrop_fade_in": (0.5, 0, 0.75, 0),
-    "loading_icon": (0.22, 1, 0.36, 1),
+    "linear": (0.0, 0.0, 1.0, 1.0),
+    "smooth": (0.24, 0.08, 0.28, 1.0),
+    "arrive": (0.18, 0.66, 0.26, 1.0),
+    "depart": (0.48, 0.0, 0.82, 0.42),
+    "balanced": (0.38, 0.0, 0.62, 1.0),
+    "jumpy": (0.32, -0.18, 0.42, 1.16),
 }
+# Compatibility names describe how a caller uses the IDgent curves.
+_EASING_POINTS.update({
+    "ease": _EASING_POINTS["smooth"],
+    "ease_in": _EASING_POINTS["depart"],
+    "ease_out": _EASING_POINTS["arrive"],
+    "ease_in_out": _EASING_POINTS["balanced"],
+    "delay": _EASING_POINTS["depart"],
+    "swing": _EASING_POINTS["balanced"],
+    "collapse": _EASING_POINTS["depart"],
+    "reflow": _EASING_POINTS["smooth"],
+    "slide_out": _EASING_POINTS["depart"],
+    "sheet_dismiss": _EASING_POINTS["depart"],
+    "backdrop_fade_in": _EASING_POINTS["arrive"],
+    "loading_icon": _EASING_POINTS["balanced"],
+})
 _EASING_POINTS["sheet"] = _EASING_POINTS["sheet_dismiss"]
 _EASING_POINTS["backdrop"] = _EASING_POINTS["backdrop_fade_in"]
 
@@ -399,7 +312,7 @@ def fade(widget, show, duration="fast", easing="smooth", on_done=None, hide_when
     return animate(widget, duration, update, easing=easing, on_done=done, key=_OPACITY_KEY)
 
 
-def slide_in(widget, offset=12, duration="js_tween_default", easing="ease_in_out", on_done=None):
+def slide_in(widget, offset=12, duration="travel", easing="ease_in_out", on_done=None):
     """Show an opacity/margin entrance, preserving its baseline on interruption."""
     offset = _finite(offset)
     original = _slide_origin(widget)

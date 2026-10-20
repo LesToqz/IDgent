@@ -1,12 +1,4 @@
-"""Display-independent theme catalogue.
-
-Syntax entries use the same immutable tuple protocol as highlight.SyntaxStyle.
-Keeping that small data representation here avoids importing GTK through highlight.
-Published palettes: draculatheme.com/spec, nordtheme.com/docs/colors-and-palettes,
-ethanschoonover.com/solarized, github.com/atom/one-dark-syntax,
-github.com/microsoft/vscode/tree/main/extensions/theme-defaults,
-github.com/primer/github-vscode-theme. Contrast-adjusted shades retain palette hues.
-"""
+'Theme catalogue, including the independently designed IDgent mineral palettes.'
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -131,17 +123,18 @@ def _mix_color(background, foreground, amount):
 
 
 def _extend_ui(ui, dark):
-    """Add design-system roles without changing any legacy component colours."""
-    ui.update(surface_alt=ui['panel_bg'],
-              border_hover=_mix_color(ui['border'], ui['foreground'], .15),
-              border_focus=_mix_color(ui['border'], ui['foreground'], .35),
-              faint=ui['muted'], accent_text=_legible(ui['accent'], ui['bg'], 3),
-              accent_hover=_mix_color(ui['accent'], ui['foreground'], .2),
-              overlay='#ffffff' if dark else '#000000', danger=ui['close_hover'])
-    selected = _mix_color(ui['sidebar_bg'], ui['overlay'], .067)
-    colors = ('#73c991', '#e2c08d', '#e4676b') if dark else ('#2e7d32', '#895503', '#ad0707')
-    for role, color in zip(('git_new', 'git_modified', 'git_conflict'), colors):
-        ui[role] = _legible(_legible(color, ui['sidebar_bg'], 4.5), selected, 4.5)
+    ui.update(
+        surface_alt=ui["panel_bg"],
+        border_hover=_mix_color(ui["border"], ui["foreground"], 0.18),
+        border_focus=_mix_color(ui["border"], ui["foreground"], 0.42),
+        faint=ui["muted"], accent_text=_legible(ui["accent"], ui["bg"], 3),
+        accent_hover=_mix_color(ui["accent"], ui["foreground"], 0.18),
+        overlay="#ffffff" if dark else "#000000", danger=ui["close_hover"],
+    )
+    selected = _mix_color(ui["sidebar_bg"], ui["overlay"], 0.09)
+    colors = ("#9dca9a", "#dbca91", "#ec9294") if dark else ("#3e7050", "#75622a", "#9b424c")
+    for role, color in zip(("git_new", "git_modified", "git_conflict"), colors):
+        ui[role] = _legible(_legible(color, ui["sidebar_bg"], 4.5), selected, 4.5)
 
 
 _extend_ui(_DARK_UI, True)
@@ -192,48 +185,56 @@ def _theme(slug, name, dark, bg, sidebar, panel, fg, muted, accent, border,
 
 
 def _idgent_theme(dark):
-    """Measured UI neutrals with original, subdued syntax and ANSI palettes."""
+    """IDgent's mineral palette: blue-grey surfaces and a quiet green accent."""
     if dark:
-        theme = _theme('idgent-dark', 'IDgent Dark', True,
-                       '#1c1c1c', '#282828', '#232323', '#dadada', '#b3b3b3',
-                       '#8a5cf5', '#333333',
-                       ('#85827e', '#df898d', '#d4a477', '#c8ba84',
-                        '#9dbb95', '#8cbdba', '#93afd3', '#b29adb'),
-                       selection='#403152',
-                       ansi=('#29272d', '#ce7b81', '#91ad89', '#beae79',
-                             '#849fc4', '#a68acb', '#80adaa', '#c7c4cb',
-                             '#77727f', '#e69b9f', '#b1caa9', '#d9cb9e',
-                             '#a8c0e0', '#c5ace7', '#a1cfcb', '#eeebf2'))
-        theme.ui.update(border_hover='#3f3f3f', border_focus='#555555', faint='#666666',
-                        accent_text='#a68af9', accent_hover='#a68af9', danger='#fb464c',
-                        input_bg='#2e2e2e', button_bg='#333333', button_hover='#3f3f3f',
-                        warning='#e9973f', accent_fg='#000000')
+        theme = _theme(
+            "idgent-dark", "IDgent Dark", True,
+            "#182126", "#202c32", "#26343b", "#e3eceb", "#a3b5b8",
+            "#72b9ad", "#3b5059",
+            ("#91a7aa", "#ec9294", "#dcb183", "#dbca91",
+             "#9dca9a", "#87c8cd", "#91bce3", "#c4a6db"),
+            selection="#344c52",
+            ansi=("#182126", "#ec9294", "#9dca9a", "#dbca91",
+                  "#91bce3", "#c4a6db", "#87c8cd", "#cbd9d8",
+                  "#728b92", "#f4b0ac", "#b8deb0", "#eddfab",
+                  "#b1d4ee", "#dec0ea", "#abe0df", "#e3eceb"),
+        )
+        theme.ui.update(
+            border_hover="#59737d", border_focus="#72b9ad", faint="#81989f",
+            accent_text="#91d0c4", accent_hover="#8acabd", danger="#ec9294",
+            input_bg="#1c282e", button_bg="#30434b", button_hover="#3b5059",
+            warning="#dbca91",
+        )
     else:
-        theme = _theme('idgent-light', 'IDgent Light', False,
-                       '#ffffff', '#f6f6f6', '#fafafa', '#222222', '#5c5c5c',
-                       '#9873f7', '#e4e4e4',
-                       ('#77736d', '#a34e59', '#956534', '#81702d',
-                        '#55734b', '#377b78', '#4b6e9b', '#7956aa'),
-                       selection='#eae3fd',
-                       ansi=('#302c36', '#a34855', '#4d7247', '#826b28',
-                             '#486c9c', '#7852aa', '#347974', '#b9b5bf',
-                             '#706a79', '#b55865', '#61845a', '#917a37',
-                             '#5d7eae', '#8a64bb', '#488a85', '#f0edf5'))
-        theme.ui.update(border_hover='#dadada', border_focus='#bdbdbd', faint='#ababab',
-                        accent_text='#8a5cf5', accent_hover='#a68af9', danger='#e93147',
-                        input_bg='#ffffff', button_bg='#ffffff', button_hover='#fafafa',
-                        warning='#ec7500')
+        theme = _theme(
+            "idgent-light", "IDgent Light", False,
+            "#f4f7f5", "#e9efec", "#dfe8e3", "#20352e", "#526a60",
+            "#356e60", "#b3c4bb",
+            ("#60766c", "#9b424c", "#865b32", "#75622a",
+             "#3e7050", "#316c75", "#3d6293", "#77548c"),
+            selection="#c8dcd2",
+            ansi=("#20352e", "#9b424c", "#3e7050", "#75622a",
+                  "#3d6293", "#77548c", "#316c75", "#dfe8e3",
+                  "#60766c", "#b55761", "#54865f", "#917c3d",
+                  "#567db0", "#936da6", "#4b8690", "#f4f7f5"),
+        )
+        theme.ui.update(
+            border_hover="#8aab9b", border_focus="#356e60", faint="#6a8175",
+            accent_text="#356e60", accent_hover="#417c6c", danger="#9b424c",
+            input_bg="#fcfdfb", button_bg="#d5e2da", button_hover="#c8dcd2",
+            warning="#75622a",
+        )
     ui = theme.ui
-    # Keep all UI roles opaque for legacy components. Shared base rules use
-    # alpha() so overlays also work on surfaces other than the primary one.
-    ui.update(titlebar_bg=ui['sidebar_bg'], titlebar_fg=ui['foreground'], title_fg=ui['muted'],
-              status_bg=ui['sidebar_bg'], status_fg=ui['muted'],
-              selection_active=_mix_color(ui['sidebar_bg'], '#8a5cf5', .15),
-              selection_inactive=_mix_color(ui['sidebar_bg'], ui['overlay'], .067),
-              hover=_mix_color(ui['sidebar_bg'], ui['overlay'], .067),
-              tab_close_hover=_mix_color(ui['bg'], ui['overlay'], .067),
-              editor_selection=_mix_color(ui['bg'], ui['accent'], .33 if dark else .2),
-              close_hover=ui['danger'], toast_bg=ui['surface_alt'])
+    ui.update(
+        titlebar_bg=ui['sidebar_bg'], titlebar_fg=ui['foreground'], title_fg=ui['muted'],
+        status_bg=ui['sidebar_bg'], status_fg=ui['muted'],
+        selection_active=_mix_color(ui['sidebar_bg'], ui['accent'], 0.26 if dark else 0.19),
+        selection_inactive=_mix_color(ui['sidebar_bg'], ui['overlay'], 0.09),
+        hover=_mix_color(ui['sidebar_bg'], ui['overlay'], 0.09),
+        tab_close_hover=_mix_color(ui['bg'], ui['overlay'], 0.09),
+        editor_selection=_mix_color(ui['bg'], ui['accent'], 0.26 if dark else 0.19),
+        close_hover=ui['danger'], toast_bg=ui['surface_alt'],
+    )
     return theme
 
 
